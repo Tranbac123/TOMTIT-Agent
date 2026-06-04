@@ -1,0 +1,164 @@
+# Python
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+.tox/
+.nox/
+.cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Build / package artifacts
+build/
+dist/
+*.egg-info/
+.eggs/
+pip-wheel-metadata/
+site/
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+!.env.template
+.envrc
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+secrets/
+secrets.*
+credentials.json
+token.json
+
+# Logs
+logs/
+*.log
+*.out
+*.err
+
+# Local databases
+*.db
+*.sqlite
+*.sqlite3
+*.duckdb
+memory.db
+
+# Agent runtime state
+.agent/runtime/
+.agent/tmp/
+.agent/cache/
+.agent/sessions/
+.agent/checkpoints/
+
+# Agent local memory - generated/private data
+.agent/memory/records.jsonl
+.agent/memory/index.json
+.agent/memory/archive/
+.agent/memory/generated/
+.agent/memory/*.backup
+.agent/memory/*.bak
+
+# Keep memory folder structure if needed
+!.agent/memory/.gitkeep
+!.agent/memory/README.md
+
+# Keep static agent instructions/configs
+!.agent/
+!.agent/instructions/
+!.agent/instructions/*.md
+!.agent/registry/
+!.agent/registry/*.md
+!.agent/prompts/
+!.agent/prompts/*.md
+
+# Data / uploads / exports
+data/
+uploads/
+downloads/
+exports/
+tmp/
+temp/
+
+# Vector / embedding stores
+.vectorstore/
+.chroma/
+chromadb/
+faiss_index/
+*.faiss
+*.pkl
+*.pickle
+*.parquet
+*.feather
+
+# Jupyter
+.ipynb_checkpoints/
+# *.ipynb
+
+# Node / frontend
+node_modules/
+.next/
+.nuxt/
+dist/
+build/
+coverage/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Docker
+docker-compose.override.yml
+*.pid
+
+# OS / editor
+.DS_Store
+.AppleDouble
+.LSOverride
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Cursor / local AI editor files
+.cursor/
+.cursorignore.local
+
+# Test / local reports
+reports/
+test-results/
+playwright-report/
+locust-report/
+bandit-report.json
+safety-report.json
+
+# OpenTelemetry / profiling / traces
+traces/
+profiles/
+*.prof
+*.trace
+
+# Misc
+*.bak
+*.backup
+*.tmp
+*.old
