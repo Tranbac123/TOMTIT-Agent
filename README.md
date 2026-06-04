@@ -1,6 +1,6 @@
 # TOM TIT
 
-# A State-First AI Agent
+# A State-First Runtime AI Agent
 
 A minimal, extensible AI Agent runtime built around explicit state, validated tool execution, and memory-aware workflows.
 
