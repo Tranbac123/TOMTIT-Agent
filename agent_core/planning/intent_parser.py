@@ -11,6 +11,10 @@ _MATH_EXPR = re.compile(r'[\d(][0-9()\s+\-*/. ]*')
 
 
 class RuleBasedIntentParser:
+    """Dispatch theo tiền tố động từ đầu câu (Tính/Đọc ghi chú/Lưu|Ghi/Tìm). Câu không mở
+    đầu bằng các tiền tố này → UNKNOWN. Đây là giới hạn có chủ đích của rule-based MVP;
+    LLM/Hybrid parser là post-MVP (CLAUDE.md §7)."""
+
     def parse(self, goal: str) -> ParsedIntent:
         text = goal.strip()
 
