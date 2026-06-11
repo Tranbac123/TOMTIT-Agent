@@ -6,7 +6,8 @@ from agent_core.memory.memory_agent import MemoryAgent
 from agent_core.memory.memory_records import MemoryQuery, MemoryRecord
 from agent_core.planning.hybrid_planner import HybridPlanner
 from agent_core.planning.plan_validator import validate_plan
-from agent_core.planning.rule_based_planner import GoalExtractor, RuleBasedIntentClassifier, RuleBasedPlanner, normalize_vi
+from agent_core.planning.extractors import GoalExtractor, normalize_vi
+from agent_core.planning.rule_based_planner import RuleBasedPlanner
 from agent_core.runtime.runtime_agent import RuntimeAgent, build_test_agent
 from agent_core.state.agent_state import AgentState, Step
 from agent_core.state.enums import (
@@ -26,7 +27,6 @@ from agent_core.tools.base import RetryPolicy, ToolFn, ToolSpec
 from agent_core.tools.builtin_tools import (
     FakeWebSearchClient,
     WebSearchClient,
-    build_tool_registry,
     make_web_search_tool,
     safe_eval,
     tool_calculate,
@@ -42,6 +42,7 @@ from agent_core.tools.builtin_tools import (
     tool_write_note,
 )
 from agent_core.tools.executor import ToolExecutor
+from agent_core.tools.registry import build_tool_registry
 from agent_core.tools.schemas import (
     CalculateOutput,
     DeleteFileOutput,
