@@ -10,6 +10,10 @@ class MessageRole(StrEnum):
     TOOL = "tool"
 
 
+# NOTE [P0 union]: enum này hợp nhất 2 khái niệm cũ — nguồn thông tin (web/memory/tool)
+#  và người phát ngôn (user/agent/system). Union để P0-recovery không vỡ consumer.
+#  Nợ thiết kế: cân nhắc tách InformationSource vs Speaker ở giai đoạn sau nếu cần
+#  type-safety chặt hơn. KHÔNG tách trong P0.
 class SourceType(StrEnum):
     WEB = "web"
     MEMORY = "memory"
