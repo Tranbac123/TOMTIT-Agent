@@ -4,21 +4,12 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
-from enum import Enum
 
 from agent_core.memory.base import MemoryStoreProtocol
 from agent_core.memory.in_memory_store import InMemoryStore
-from agent_core.state.enums import AgentStatus, RiskLevel, StepStatus, ToolName
+from agent_core.state.enums import AgentStatus, RiskLevel, SourceType, StepStatus, ToolName
 from agent_core.state.observation import Observation
 from agent_core.tools.schemas import Source, ToolResult
-
-
-class SourceType(str, Enum):
-    USER = "user"
-    AGENT = "agent"
-    TOOL = "tool"
-    SYSTEM = "system"
-    MEMORY = "memory"
 
 
 @dataclass
