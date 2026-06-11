@@ -230,12 +230,30 @@ assert A is B
 
 **Acceptance:** `pytest -q` → 0 error, 0 failed. Dán raw output vào report.
 
-> 🚦 **GATE LỚN:** Đến đây repo phải chạy được `python main.py` và `pytest` xanh.
-> TranBac + architect duyệt xong mới sang STEP 6. STEP 6+ mỗi cái một PR riêng.
+> 🚦 **GATE LỚN — HẾT PHẠM VI PHASE 0:** Đến đây repo phải chạy được `python main.py`
+> và `pytest` xanh. TranBac + architect duyệt xong → PHASE 0 hoàn tất.
 
 ---
 
-## STEP 6 — Persist memory (bỏ per-state `InMemoryStore`)
+# ⛔⛔ ĐÓNG BĂNG — STEP 6–9 DƯỚI ĐÂY ĐÃ LỖI THỜI, KHÔNG ĐƯỢC LÀM ⛔⛔
+
+> **Claude Code đọc kỹ:** mục tiêu dự án đã đổi từ "hardening Agent" sang "MVP
+> integration Agent ↔ Memory" (xem `MVP_MASTER_PLAN.md`). Các STEP 6–9 viết bên dưới
+> được giữ lại **chỉ để tham khảo lịch sử**. Chúng KHÔNG còn là việc-phải-làm.
+>
+> - **STEP 6 (persist `InMemoryStore`) — SAI HƯỚNG, CẤM LÀM.** Memory giờ truy cập qua
+>   `MemoryClientProtocol`, `InMemoryStore` chỉ là backing store của `LocalMemoryClient`.
+>   Việc đúng nằm ở **`SPEC_memory_client.md`** (PHASE 3), KHÔNG phải STEP 6 này.
+> - **STEP 7 (event log), STEP 8 (retry/timeout) — HOÃN post-MVP.**
+> - **STEP 9 (dọn file rỗng) — hygiene, làm khi tiện, không chặn gì.**
+>
+> **Sau khi PHASE 0 (STEP 1–5) qua gate: DỪNG. Chờ architect ra spec PHASE 2/3.**
+> KHÔNG tự đọc tiếp STEP 6 và thực thi. Nếu thấy mình đang định làm STEP 6 → đó là
+> tín hiệu dừng và hỏi (CLAUDE.md §9).
+
+---
+
+## STEP 6 — [LỖI THỜI — tham khảo] Persist memory (bỏ per-state `InMemoryStore`)
 
 **Lỗi (fact):** `AgentState.memory: MemoryStoreProtocol = field(default_factory=InMemoryStore)`
 → **mỗi `AgentState` tự tạo store riêng**. Hai turn cùng session = hai memory khác
@@ -379,3 +397,18 @@ Trước khi cho Claude Code sang step kế:
 Nếu mọi ô tick → duyệt merge `main` → ra lệnh STEP kế. Nếu không → trả về, không sang bước sau.
 
 ---
+
+## 5. Lệnh khởi động cho Claude Code (dán nguyên văn để bắt đầu STEP 1)
+
+```
+Đọc CLAUDE.md, BUILD_SPEC.md, MVP_MASTER_PLAN.md trước khi làm gì.
+Tuân thủ CLAUDE.md §9 (thứ tự ưu tiên khi mâu thuẫn) và BUILD_SPEC.md §0 (luật vận hành) tuyệt đối.
+Bắt đầu STEP 1 và CHỈ STEP 1.
+Trước khi viết tay, thử khôi phục agent_core/planning/intent_parser.py từ git history:
+  git log --oneline -- agent_core/planning/intent_parser.py
+  git show <commit-trước-khi-hỏng>:agent_core/planning/intent_parser.py | head -40
+Nếu history còn class RuleBasedIntentParser → checkout bản đó (ưu tiên).
+Nếu mất → dùng bản fallback architect cung cấp, đối chiếu tests/test_planning_p0.py (KHÔNG sửa test cho khớp code).
+Tạo branch step-1-restore-intent-parser, commit, rồi nộp report theo mẫu §0.
+Dừng và chờ review. KHÔNG làm STEP 2.
+```
