@@ -41,11 +41,16 @@ rõ hoặc thiếu slot. Không đoán khi reference không resolve được.
 **Luồng runtime mục tiêu** (đầy đủ ở `MVP_MASTER_PLAN.md §4`):
 
 ```
-UserMessage → TurnClassifier → MemoryClient.retrieve_context_pack(goal, state)
+UserMessage → TurnClassifier → MemoryClient.retrieve_context_pack(goal, *explicit state-derived params*)
 → IntentParser → SlotValidator → IntentPlanner → PlanValidator → ToolExecutor
 → Observation/EventLog → FinalComposer → MemoryClient.write_memory_candidates(...)
 → AgentState.complete()
 ```
+
+> **LUẬT [chốt]:** `MemoryClientProtocol` **KHÔNG nhận full `AgentState`**. Runtime tự
+> rút `user_id`/`session_id`/`task_id`/`token_budget` từ state và truyền explicit params.
+> Đây là source-of-truth, khớp `SPEC_memory_client.md §2`. (Mọi flow ghi `(goal, state)`
+> là cũ/sai.)
 
 ---
 
@@ -136,6 +141,9 @@ grep -rn "class SourceType"   agent_core/        # phải = 1 (ở enums.py)
   giữa run.** Remote chết giữa chừng → pause/fail an toàn, KHÔNG nhảy sang local.
 - Cờ `memory_degraded` **chỉ leo lên, không tụt xuống** trong một run. `FinalComposer`
   phải disclose khi degraded có thể ảnh hưởng context/recall/an toàn hành động.
+- `LocalMemoryClient` được coi là **degraded chỉ trong ngữ cảnh MVP-local** (backend
+  fallback/demo, có thể không phản ánh state durable remote). Backend local durable
+  tương lai có thể non-degraded — ngoài phạm vi MVP.
 - Token counting **dùng chung cách đếm** với Memory, nếu không token budget vô nghĩa.
 - Contract `ContextPack` + luật chi tiết: **`SPEC_memory_client.md`** và
   `MVP_MASTER_PLAN.md §3`. **Cấm đổi contract một phía** — đổi là đổi cả hai repo + version bump.

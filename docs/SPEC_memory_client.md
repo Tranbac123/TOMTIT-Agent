@@ -1,4 +1,4 @@
-# SPEC — MemoryClient layer (PHASE 3 mở rộng)
+# SPEC — MemoryClient layer (P1-contract → P4-local-demo, then P6-remote-client)
 
 > **Quyết định kiến trúc:** Memory **không** là một store cố định trong `AgentState`.
 > Nó là một **`MemoryClientProtocol` duy nhất** với **hai backend hoán đổi được**:
@@ -14,17 +14,37 @@
 
 ## SCOPE FENCE (Claude Code đọc trước — chống over-build)
 
-**[MVP-must] build ngay:** một `MemoryClientProtocol`; `LocalMemoryClient` + `RemoteMemoryClient`;
-factory binding-at-task-start; `/handshake` với 4 field lõi (health/ready/backend_version/schema_version/capabilities);
-4 rule degraded tối thiểu (§4b); cờ `memory_degraded` đơn điệu; PolicyEngine chặn side-effect khi degraded (§4d);
-disclosure deterministic; per-item provenance field (set giá trị, chưa ranking).
+> Ba tầng. Critical path local (P0→P4) **chỉ cần [MVP-local must]**. KHÔNG build
+> [Remote integration must] trước khi P4-local-demo chạy — nó không block local E2E.
 
-**[deferred] định nghĩa field/contract nhưng KHÔNG wire logic:** `latency_ms` auto-degraded;
-`auth/permission`; `backend_health_snapshot`; `backend_bound_at`; `state_backend` remote;
-`MemoryPolicy` engine; bảng task-classification chi tiết; confidence-based ranking.
+**[MVP-local must] — build cho P1→P4, đủ để demo local:**
 
-**❌ KHÔNG làm trong spec này:** handshake protocol nhiều endpoint; policy engine phức tạp;
-nhiều state backend; tự đổi backend giữa run; để FinalComposer/model tự quyết disclosure.
+- `contracts.py` (`ContextPack` + `ContextItem` + `MemoryCandidate` + `WriteResponse`)
+- `MemoryClientProtocol` (KHÔNG nhận full `AgentState` — §2)
+- `LocalMemoryClient` bọc `InMemoryStore`
+- `ContextPack.degraded` + `AgentState.memory_degraded` (đơn điệu — §5)
+- runtime: retrieve trước plan, write sau finish (write best-effort — §5b)
+- `FinalComposer` disclosure **deterministic** (policy set cờ, model viết chữ — §7b)
+- `ApproxTokenCounter` dùng chung (§6)
+- PolicyEngine chặn side-effect khi `memory_degraded` (fail-closed — §4d)
+- per-item `provenance` field: **set giá trị, CHƯA ranking**
+
+**[Remote integration must] — build cho P6, SAU local demo:**
+
+- `RemoteMemoryClient` (httpx sync)
+- `/handshake` + schema-mismatch fail bind (§4a)
+- factory binding-at-task-start: mode `local`/`remote`/`auto` (§4)
+- remote fail fast (mode=remote); auto fallback local; **no mid-run switch**
+
+**[deferred] — định nghĩa field default an toàn, KHÔNG wire logic:**
+
+- `latency_ms` auto-degraded; `auth/permission`; `backend_health_snapshot`;
+  `backend_bound_at`; `state_backend` remote; `MemoryPolicy` engine;
+  bảng task-classification chi tiết; confidence-based ranking
+
+**❌ KHÔNG bao giờ (trong MVP):** handshake nhiều endpoint; policy engine phức tạp;
+nhiều state backend; tự đổi backend giữa run; để model tự quyết disclosure;
+`degraded_allowed(task)` tại bind-time (§4b — task policy nằm ở ToolExecutor, KHÔNG ở BackendSelector).
 
 ---
 
@@ -35,8 +55,8 @@ Cái bẫy của "giữ cả hai": nếu local trả `list[MemoryRecord]` còn r
 gấp đôi → đúng bệnh "hành động sai không debug được" mà TOMTIT sinh ra để chữa.
 
 **Ràng buộc bất biến:** cả hai backend trả **cùng một kiểu `ContextPack`**. Runtime
-gọi `client.retrieve_context_pack(goal, state)` và xử lý kết quả y hệt nhau bất kể
-nguồn. Đó mới là "giữ cả hai" đúng cách.
+gọi `client.retrieve_context_pack(goal, *explicit params*)` và xử lý kết quả y hệt nhau
+bất kể nguồn. Đó mới là "giữ cả hai" đúng cách.
 
 Phân biệt ba lớp (đừng trộn):
 
@@ -51,6 +71,11 @@ Fallback local nằm ở **lớp client**, không phải lớp store.
 ---
 
 ## 2. `MemoryClientProtocol` — hợp đồng runtime gọi
+
+> **LUẬT [chốt]:** `MemoryClientProtocol` **KHÔNG** nhận full `AgentState`. Chỉ explicit
+> params. Runtime tự rút `user_id`/`session_id`/`task_id` từ state và truyền vào. Lý do:
+> giảm coupling, dễ test, remote client không kéo theo cả runtime state. (Master plan
+> từng gợi ý `retrieve_context_pack(goal, state)` — bản đó SAI, bỏ.)
 
 ```python
 # agent_core/memory/client.py
@@ -101,13 +126,22 @@ class MemoryClientProtocol(Protocol):
 ### `LocalMemoryClient` — bọc store sẵn có
 
 - Nhận một `MemoryStoreProtocol` (`InMemoryStore` hoặc `FileStore`).
-- `retrieve_context_pack`: gọi `store.search(MemoryQuery(...))`, rồi **tự ráp `ContextPack`**:
-  - rank theo score sẵn có (hoặc recency nếu chưa có score),
-  - cắt theo `token_budget` dùng **cùng TokenCounter với Memory** (xem §6),
+- **TRƯỚC khi implement: inspect `MemoryStoreProtocol` hiện tại.** KHÔNG đổi
+  `MemoryStoreProtocol` ở step này trừ khi bắt buộc. Map return shape hiện có vào
+  `ContextPack` bằng adapter **nhỏ nhất có thể**. Nếu store thiếu `MemoryQuery`/`score`:
+  default `score=0.0` và **giữ insertion order**. KHÔNG tự chế API mới cho store.
+- `retrieve_context_pack`: gọi search của store hiện có, rồi **tự ráp `ContextPack`**:
+  - rank theo score sẵn có (hoặc insertion order nếu chưa có score),
+  - cắt theo `token_budget` dùng **cùng TokenCounter** (xem §6),
   - set `truncated` đúng,
   - mỗi item: `provenance="fallback"`, `source="local_memory"`, `confidence="limited"` (§4c).
 - `write_memory_candidates`: map candidate → `MemoryRecord` → `store.write(...)`.
 - **Luôn** set `degraded=True`, `memory_source="local"` trên `ContextPack` (§5).
+
+> **Phạm vi của "luôn degraded":** đúng **chỉ cho MVP-local**, vì `LocalMemoryClient` ở
+> đây là backend fallback/demo, có thể KHÔNG phản ánh state durable remote của TOMTIT-Memory.
+> Backend local durable trong tương lai (vd `FileStore` làm backend chính) **có thể
+> non-degraded** — nhưng đó là [out of scope] cho MVP này.
 
 ---
 
@@ -137,65 +171,59 @@ GET /handshake →
 }
 ```
 
-**Luật handshake [MVP-must]:**
+**Luật handshake [MVP] — CHỈ kiểm baseline memory-client, KHÔNG kiểm task:**
+
+Tại bind-time chưa có plan → KHÔNG biết task cần capability gì. Handshake chỉ validate
+baseline:
 
 - `schema_version` ≠ Agent's `SCHEMA_VERSION` → **fail bind** (không chạy với contract lệch).
 - `ready != true` hoặc `health_status != "ok"` → coi như unhealthy.
-- Task cần capability mà backend không liệt kê → **fail bind** (đừng bind xong mới lỗi giữa run).
+- `capabilities` **không** chứa `"memory"` → coi như unhealthy (backend không phục vụ memory được).
 
-**[deferred]:** `auth/permission` (bind xong mới lỗi quyền) và `latency budget`
-(remote quá chậm → auto coi là degraded). Định nghĩa field `latency_ms` + chỗ cho
-`auth` trong `HandshakeResult` ngay bây giờ, nhưng **chưa** dùng để quyết định trong MVP.
+**KHÔNG kiểm task/tool-specific capability ở đây.** Audit / capability theo từng tool
+là việc của ToolExecutor (khi đã có plan) hoặc của remote integration phase — KHÔNG
+phải MVP-local bind.
 
-### 4b. auto KHÔNG phải lúc nào cũng fallback — task degraded-policy
+**[deferred]:** `auth/permission` và `latency budget`. Định nghĩa field `latency_ms` +
+chỗ cho `auth` trong `HandshakeResult` ngay bây giờ, nhưng **chưa** dùng để quyết định.
 
-> Đây là chỗ spec trước của tôi **sai**: cho `auto` fallback local bất kể task. Hệ quả:
-> task gửi email, remote audit chết, auto tụt local và vẫn gửi — **không audit trail**.
-> Vi phạm safety gate. Sửa: **degraded-eligibility là thuộc tính của task.**
+### 4b. Binding KHÔNG xét task — task policy nằm ở ToolExecutor
 
-```
-local                              local có thể trộn với remote item nếu task cho phép?  KHÔNG (xem §4c invariant)
-remote   → handshake lành → bind remote; handshake hỏng → FAIL FAST, no fallback
-auto     → handshake lành → bind remote
-          handshake hỏng → XÉT task policy:
-              degraded_allowed(task) == True  → bind local, degraded=True, fallback_reason="remote_unavailable"
-              degraded_allowed(task) == False → pause/fail safely (KHÔNG chạy tiếp rồi báo nhẹ)
-```
+> Spec trước của tôi **sai hai lần**: (1) bản đầu cho `auto` fallback bất kể task;
+> (2) bản sửa lại đặt `degraded_allowed(task)` ở **bind-time** — nhưng lúc bind **chưa
+> có plan**, nên chưa biết task có side-effect. Giữ logic đó mời Claude Code viết một
+> pre-planner/task-classifier = scope creep. **Sửa dứt: binding mù về task; an toàn
+> enforce hoàn toàn tại ToolExecutor.**
 
-**`degraded_allowed(task)` — rule TỐI THIỂU [MVP-must], KHÔNG policy engine:**
-
-Quyết định MVP: **không** build policy engine. Chỉ bốn rule:
-
-1. Task **read-only / answer-only** (không side-effect, không cần audit đầy đủ):
-   `auto` được fallback local, đánh dấu `degraded`.
-2. Task **có side-effect HOẶC phụ thuộc memory/audit để an toàn**: degraded **không**
-   tự chạy tiếp → pause/fail an toàn, hoặc yêu cầu **user approval rõ ràng**.
-3. `remote` mode fail → **fail fast**, không fallback.
-4. Degraded chỉ **leo lên** trong một run, không tự hạ.
+**Binding rule [MVP] — chỉ nhìn backend health, KHÔNG nhìn task:**
 
 ```
-degraded_allowed = (not task.has_side_effect) and (not task.requires_full_audit)
-# Không chắc → coi là KHÔNG cho phép (fail-closed).
+mode == local   → bind LocalMemoryClient,  memory_degraded = True
+mode == remote  → handshake lành → bind RemoteMemoryClient, degraded = False
+                  handshake hỏng → FAIL FAST (raise). Không fallback.
+mode == auto    → handshake lành → bind RemoteMemoryClient, degraded = False
+                  handshake hỏng → bind LocalMemoryClient, memory_degraded = True,
+                                    fallback_reason = "remote_unavailable", log WARNING
 ```
 
-| Loại task                                                               | auto fallback local?                    |
-| ----------------------------------------------------------------------- | --------------------------------------- |
-| Read-only / answer-only (tính toán, checklist, tóm tắt, hỏi context cũ) | ✅ Có (hỏi context cũ thì **disclose**) |
-| Side-effect (gửi email, đặt lịch, xoá/sửa file) hoặc cần audit đầy đủ   | ❌ Không — pause/fail/approval          |
+Không có `degraded_allowed(task)` ở đây. Binding luôn thành công (trừ mode=remote fail fast).
 
-> **[deferred]** Bảng phân loại chi tiết hơn (vd "sửa file dựa trên memory cũ → hỏi
-> user") và một `MemoryPolicy` engine riêng: định nghĩa **sau** khi runtime loop chạy.
-> MVP chỉ cần nhị phân read-only-vs-không, fail-closed. Đừng mở rộng sớm.
+**An toàn task nằm ở ToolExecutor (§4d), KHÔNG ở BackendSelector:**
 
-**Nguồn `task.has_side_effect`:** suy ra từ plan — nếu plan chứa step gọi tool có
-`mutates_state=True` / `requires_approval=True` / `risk_level >= MEDIUM` → `has_side_effect=True`.
-Đây là **deterministic**, đọc từ `ToolSpec` đã có, không cần model đoán.
+Khi `memory_degraded=True`, một step side-effect sắp chạy → PolicyEngine **chặn tại
+cổng execute**. Đây là chỗ duy nhất gọi `tool.fn`, và là chỗ duy nhất _đã có plan +
+biết tool cụ thể_. Read-only task chạy degraded bình thường; side-effect task degraded
+bị chặn/approval — **không cần biết trước plan, không cần task classifier.**
 
-> ⚠️ **Vấn đề thứ tự:** muốn biết `has_side_effect` cần có plan; nhưng retrieve memory
-> xảy ra **trước** plan. Giải: ở MVP, **bind backend trước, kiểm side-effect tại
-> ToolExecutor**. Nếu đang degraded VÀ một step side-effect sắp chạy → PolicyEngine
-> chặn (xem §4d). Như vậy không cần biết trước plan; an toàn được thực thi tại cổng
-> execute — đúng chỗ duy nhất gọi `tool.fn`.
+Bốn luật bất biến (giữ nguyên):
+
+1. Read-only / answer-only chạy degraded OK (hỏi context cũ → disclose).
+2. Side-effect khi degraded → chặn/approval tại ToolExecutor.
+3. mode=remote fail → fail fast.
+4. Degraded chỉ leo lên trong một run.
+
+> **[deferred]** Phân loại task tinh hơn ("sửa file dựa memory cũ → hỏi user") + `MemoryPolicy`
+> engine: sau khi runtime chạy. MVP chỉ nhị phân read-only-vs-không, enforce tại executor.
 
 ### 4c. Provenance — `degraded` cấp pack chưa đủ
 
@@ -204,17 +232,30 @@ remote memory, file context, user-provided. Một cờ `degraded` cấp pack che
 nào_ đáng tin. Mỗi `ContextItem` mang provenance:
 
 ```python
+from typing import Literal
+from agent_core.state.enums import MemoryType   # enum ĐÃ CÓ ở enums.py
+
+MemorySource = Literal["remote_memory", "local_memory", "file", "user", "prompt"]
+Provenance   = Literal["remote", "fallback", "user", "file", "prompt"]
+Confidence   = Literal["normal", "limited", "unknown"]
+Freshness    = Literal["fresh", "stale", "unknown"]
+
 class ContextItem(BaseModel):
     content: str
-    type: str
+    type: MemoryType                       # enum, KHÔNG string tự do
     score: float = 0.0
     tokens: int = 0
-    source: str = "remote_memory"      # remote_memory | local_memory | file | user | prompt
-    provenance: str = "remote"          # remote | fallback | user | file
-    confidence: str = "normal"          # normal | limited | unknown
-    freshness: str = "unknown"          # fresh | stale | unknown
+    source: MemorySource = "remote_memory"
+    provenance: Provenance = "remote"
+    confidence: Confidence = "normal"
+    freshness: Freshness = "unknown"
     metadata: dict = Field(default_factory=dict)
 ```
+
+> **Lưu ý cho P1-contract:** `MemoryType` enum **đã tồn tại** ở `agent_core/state/enums.py`
+> (`NOTE/FACT/PREFERENCE/DECISION/...`). Nếu khi implement thấy nó thiếu/khác → **normalize
+> nó trong P1-contract TRƯỚC khi viết `LocalMemoryClient`**, không để `type: str` lọt vào.
+> Dùng `Literal` (không Enum riêng) cho 4 field còn lại để khóa giá trị mà không phình.
 
 **Invariant [MVP-must]:** trong **một run**, không trộn item `provenance="remote"` với
 `provenance="fallback"`. Backend đã bind một lần (§4 luật cứng) nên pack đồng nhất
@@ -222,17 +263,47 @@ nguồn. `source="user"`/`"file"`/`"prompt"` thì được phép xuất hiện c
 phải memory backend). Provenance per-item phục vụ debug + cho FinalComposer/policy biết
 item nào "limited".
 
-### 4d. PolicyEngine chặn side-effect khi degraded [MVP-must]
+### 4d. PolicyEngine chặn side-effect khi degraded [MVP-local must]
 
-`agent_core/safety/policy.py` — thêm rule deterministic:
+`agent_core/safety/policy.py` — rule deterministic, **fail-closed** (không chỉ một field):
 
+```python
+is_side_effect = (
+    getattr(tool, "effect_type", None) != "read"   # effect_type khác "read"
+    or tool.mutates_state
+    or tool.requires_approval
+    or tool.risk_level >= RiskLevel.MEDIUM
+    or getattr(tool, "effect_type", None) is None   # thiếu/unknown → coi là side-effect
+)
+
+if state.memory_degraded and is_side_effect:
+    DENY  reason="degraded memory mode: side-effect tool blocked (fail-closed)"
 ```
-if state.memory_degraded and tool.requires_full_audit:   # hoặc mutates_state + cần audit
-    DENY  reason="degraded memory mode: side-effect/audit tool blocked"
-```
 
-Đây là nơi điểm 2 của bạn được **thực thi**, tại cổng execute, deterministic, không
-giao cho model. Khớp `CLAUDE.md §1`: code kiểm soát hành vi.
+**Nguyên tắc fail-closed:** read-only chạy degraded OK; **mọi thứ không chắc read-only
+→ coi là side-effect → chặn.** Nới lỏng thì dễ; gỡ một action đã lỡ chạy degraded thì
+không. Đây là nơi luật an toàn được **thực thi**, tại cổng execute, deterministic, không
+giao cho model. Khớp `CLAUDE.md §1`.
+
+> Note: `effect_type` có thể chưa tồn tại trên `ToolSpec` hiện tại. Dùng `getattr(...,
+None)` để fail-closed khi thiếu. Thêm field `effect_type` vào `ToolSpec` là [deferred] —
+> MVP chỉ cần `mutates_state`/`requires_approval`/`risk_level` đã có là đủ chặn.
+
+**Phân biệt side-effect TOOL vs memory-write (quan trọng — tránh hiểu nhầm):**
+
+Side-effect policy ở trên áp dụng cho **tool user-visible / external** chạy qua
+`ToolExecutor`: email, calendar, file write/delete, external API/DB mutation.
+
+`MemoryClient.write_memory_candidates(...)` **KHÔNG** phải tool và **KHÔNG** đi qua
+`ToolExecutor`. Nó là **persistence nội bộ best-effort sau khi task xong** (§5b), nên
+**không bị chặn** bởi degraded side-effect policy — nhưng phải đánh dấu non-durable/local
+khi degraded.
+
+> ⚠️ **Trường hợp `write_note`:** nếu `write_note` tồn tại như một **built-in tool**
+> user-visible (user yêu cầu "ghi vào note") → nó đi qua `ToolExecutor` → degraded thì
+> **block/approval** như mọi side-effect. Khác với memory-candidate-write tự động sau
+> finish (không qua executor). **Chốt khi implement:** một thao tác note do user yêu cầu
+> là tool; một memory-candidate do agent tự rút ra sau run là internal write. Không trộn.
 
 ---
 
@@ -273,28 +344,103 @@ class AgentState:
 
 ---
 
-## 6. TokenCounter — điểm dễ lệch nhất
+## 5b. Write-after-finish — failure policy [MVP-local must]
 
-`LocalMemoryClient` cắt `ContextPack` theo `token_budget`. Nếu nó đếm token khác với
-TOMTIT-Memory, thì cùng một budget cho ra lượng context khác nhau giữa hai backend →
-hành vi agent đổi tùy backend → không reproduce được.
+Flow: retrieve trước plan, **write memory candidates sau khi task xong**. Hai câu hỏi:
+(a) write fail thì task coi như xong hay fail? (b) làm sao disclose write-fail mà không
+phải sửa câu trả lời đã chốt?
 
-**Luật:** cả hai client dùng **cùng một `TokenCounter`**. TOMTIT-Memory đã có
-`TokenCounter` protocol — Agent phải import/tái dùng đúng cách đếm đó, hoặc hai bên
-cùng trỏ về một implementation chuẩn. Đây là chỗ tôi đánh dấu kiểm kỹ nhất ở gate.
+**Policy MVP — write best-effort, KHÔNG chặn user, nhưng `complete()` là event CUỐI:**
+
+Thứ tự đúng (sửa theo review — tránh "complete trước rồi phải sửa answer"):
+
+```
+1. draft = FinalComposer.compose(state)          # compose nháp, CHƯA complete
+2. write memory (best-effort, CÓ TIMEOUT NGẮN):
+       try: resp = memory_client.write_memory_candidates(...)   # timeout ~2s
+       except (Error | Timeout): state.memory_write_failed = True
+                                 state.errors.append(...); log WARNING
+3. nếu memory_write_failed AND user kỳ vọng persistence:
+       disclosure_reasons.append("memory_write_failed")
+       draft = draft + disclosure_summary(disclosure_reasons)
+4. AgentState.complete(draft)                    # complete là event CUỐI, answer đã final
+```
+
+**Luật:**
+
+1. Write **không bao giờ chặn câu trả lời quá ~2s** (timeout ngắn). Write treo/chậm →
+   coi như fail best-effort, không giữ user chờ. (Đây là rủi ro của "write trước
+   complete" — timeout giải nó.)
+2. Write fail/timeout → `state.memory_write_failed=True` + `state.errors` + WARNING.
+   **Không** set `status=FAILED`. Task vẫn COMPLETED.
+3. **Disclose chỉ khi user kỳ vọng persistence** (plan chứa step write-note/lưu-memory
+   do user yêu cầu). Deterministic, qua `disclosure_reasons` (§7b), KHÔNG để model tự quyết.
+4. `complete()` gọi **sau cùng**, với answer đã gồm disclosure nếu cần → không phải sửa
+   state đã complete.
+5. Local fallback write vào `InMemoryStore` → **không durable qua process restart**. Ở
+   degraded, đây là expected; disclosure degraded (§5) đã bao hàm.
+
+> **Trade-off đã cân nhắc:** "write trước complete" cho phép disclose đúng (review 4.3),
+> nhưng mở rủi ro write chặn answer. Timeout ngắn đóng rủi ro đó. Nếu sau này cần đảm
+> bảo durable trước khi báo thành công (write phải thành công) → [deferred], không phải MVP.
 
 ---
 
-## 7. Tác động lên `AgentState.memory`
+## 6. TokenCounter — CHỐT implementation cho MVP
 
-- `AgentState.memory: MemoryStoreProtocol` hiện tại: **giữ lại** như backing store cho
-  `LocalMemoryClient`, NHƯNG bỏ `default_factory=InMemoryStore` (lỗi cũ: mỗi state một
-  store riêng). Store được inject từ ngoài, dùng chung.
-- Runtime **không** gọi `state.memory` trực tiếp để lấy context nữa. Nó gọi
-  `memory_client.retrieve_context_pack(...)`. `state.memory` chỉ còn là chi tiết backing
-  của local client.
-- Cân nhắc (ghi chú, không bắt buộc MVP): về sau có thể bỏ hẳn `memory` khỏi `AgentState`
-  và để client tự giữ store. Chưa làm trong MVP để giảm số call site phải đổi.
+`LocalMemoryClient` cắt `ContextPack` theo `token_budget`. Đếm token khác với
+TOMTIT-Memory → cùng budget ra lượng context khác nhau → hành vi agent đổi tùy backend
+→ không reproduce. Đây là blocker, nên **chốt luôn** chứ không chỉ cảnh báo.
+
+**CHỐT cho MVP — `ApproxTokenCounter` (deterministic, zero dependency):**
+
+```python
+# agent_core/memory/token_counter.py
+from __future__ import annotations
+from typing import Protocol, runtime_checkable
+
+@runtime_checkable
+class TokenCounter(Protocol):
+    def count(self, text: str) -> int: ...
+
+class ApproxTokenCounter:
+    """MVP token counter. Word-based, deterministic. KHÔNG chính xác như tokenizer LLM
+    — chỉ cần cùng-một-cách-đếm hai bên để budget reproduce được. Thay bằng tokenizer
+    thật là [deferred], qua đúng interface này nên không vỡ call site."""
+    def count(self, text: str) -> int:
+        return max(1, len(text.split()))
+```
+
+**Luật:**
+
+- Cả `LocalMemoryClient` và (sau này) TOMTIT-Memory HTTP server dùng **cùng** logic này.
+- **KHÔNG** dùng `tiktoken`/tokenizer LLM ở MVP (tránh thêm dependency).
+- Đây là **xấp xỉ tạm** — ghi rõ trong code. `token_budget=1500` ≈ 1500 _từ_, không phải
+  1500 token model. Chấp nhận cho MVP vì mục tiêu là _reproduce_, không phải _chính xác_.
+- Thay tokenizer thật: [deferred], qua interface `TokenCounter` → không vỡ gì.
+
+---
+
+## 7. `AgentState.memory` — store thuộc về `LocalMemoryClient`, KHÔNG về `AgentState`
+
+> Reviewer đúng: giữ `AgentState.memory: MemoryStoreProtocol` lâu sẽ kéo `AgentState`
+> thành memory god-object — và mâu thuẫn `CLAUDE.md §7` ("không nhồi durable memory vào
+> AgentState"). Tên field cũng nguy hiểm: code sau dễ quay lại gọi `state.memory.search(...)`.
+
+**Mô hình đúng [MVP-local must]:**
+
+- **`LocalMemoryClient` sở hữu store.** Store inject vào client, KHÔNG vào `AgentState`.
+- Wiring: `RuntimeAgent(memory_client: MemoryClientProtocol)`. **KHÔNG** `AgentState(memory=...)`.
+- Runtime gọi `memory_client.retrieve_context_pack(...)` / `.write_memory_candidates(...)`.
+  Runtime **không bao giờ** chạm store trực tiếp.
+
+**Field `AgentState.memory` cũ [P1 — không làm trong P0-recovery]:**
+
+- Bỏ `default_factory=InMemoryStore` (lỗi mỗi-state-một-store) — nhưng đây **chạm public
+  contract của `AgentState`**, nên KHÔNG làm trong P0-recovery. Lên lịch ở một step P1 riêng.
+- Cho tới khi bỏ được: đánh dấu field **deprecated/internal**, **cấm runtime mới gọi
+  `state.memory.*` trực tiếp**. Mọi truy cập memory đi qua `memory_client`.
+- Mục tiêu cuối: gỡ hẳn `memory` khỏi `AgentState`. Hoãn để giảm số call site vỡ một lần.
 
 ---
 
@@ -303,56 +449,64 @@ cùng trỏ về một implementation chuẩn. Đây là chỗ tôi đánh dấu
 Bạn đề xuất một nhóm field cho binding + provenance. Tất cả đúng về thiết kế. Phân
 tầng để build đúng liều:
 
-| Field                                          | Nơi           | Tầng                                  | Ghi chú                                                                         |
-| ---------------------------------------------- | ------------- | ------------------------------------- | ------------------------------------------------------------------------------- |
-| `memory_degraded: bool`                        | `AgentState`  | **MVP-must**                          | cờ đơn điệu, §5                                                                 |
-| `degraded: bool`                               | `ContextPack` | **MVP-must**                          | local client luôn True                                                          |
-| `memory_source: "remote"\|"local"`             | `ContextPack` | **MVP-must**                          | nguồn pack                                                                      |
-| `provenance / source / confidence / freshness` | `ContextItem` | **MVP-must (field), logic tối thiểu** | local set "fallback/limited"; chưa cần ranking theo confidence                  |
-| `fallback_reason: str\|None`                   | `AgentState`  | **MVP-must**                          | "remote_unavailable" khi auto tụt local                                         |
-| `backend_mode_requested: local\|remote\|auto`  | `AgentState`  | **MVP-must**                          | từ config                                                                       |
-| `memory_backend_selected: local\|remote\|none` | `AgentState`  | **MVP-must**                          | chốt lúc bind                                                                   |
-| `can_use_side_effect_tools: bool`              | `AgentState`  | **MVP-must**                          | False khi degraded; PolicyEngine đọc (§4d)                                      |
-| `disclosure_required: bool`                    | `AgentState`  | **MVP-must**                          | policy set, FinalComposer đọc (deterministic, không để model tự quyết)          |
-| `backend_bound_at: timestamp`                  | `AgentState`  | **deferred**                          | định nghĩa, chưa cần logic                                                      |
-| `backend_health_snapshot: {...}`               | `AgentState`  | **deferred**                          | lưu `HandshakeResult` để debug; chưa wire                                       |
-| `state_backend_selected`                       | `AgentState`  | **deferred**                          | MVP chưa có state backend **remote**; chỉ memory. Định nghĩa field, để "local". |
+| Field                                          | Nơi           | Tầng                                  | Ghi chú                                                                                  |
+| ---------------------------------------------- | ------------- | ------------------------------------- | ---------------------------------------------------------------------------------------- |
+| `memory_degraded: bool`                        | `AgentState`  | **MVP-must**                          | cờ đơn điệu, §5                                                                          |
+| `degraded: bool`                               | `ContextPack` | **MVP-must**                          | local client luôn True                                                                   |
+| `memory_source: "remote"\|"local"`             | `ContextPack` | **MVP-must**                          | nguồn pack                                                                               |
+| `provenance / source / confidence / freshness` | `ContextItem` | **MVP-must (field), logic tối thiểu** | local set "fallback/limited"; chưa ranking theo confidence (`Literal`, §4c)              |
+| `fallback_reason: str\|None`                   | `AgentState`  | **MVP-must**                          | "remote_unavailable" khi auto tụt local                                                  |
+| `backend_mode_requested: local\|remote\|auto`  | `AgentState`  | **MVP-must**                          | từ config                                                                                |
+| `memory_backend_selected: local\|remote\|none` | `AgentState`  | **MVP-must**                          | chốt lúc bind                                                                            |
+| `memory_write_failed: bool`                    | `AgentState`  | **MVP-must**                          | §5b; write best-effort fail → True                                                       |
+| `disclosure_reasons: list[str]`                | `AgentState`  | **MVP-must**                          | policy append lý do; FinalComposer disclose nếu list không rỗng                          |
+| ~~`can_use_side_effect_tools`~~                | —             | **BỎ**                                | derived state → dễ stale. PolicyEngine tính trực tiếp tại execute (§4d), KHÔNG lưu field |
+| ~~`disclosure_required: bool`~~                | —             | **thay bằng `disclosure_reasons`**    | bool không cho biết disclose VÌ SAO; dùng list reasons                                   |
+| `backend_bound_at: timestamp`                  | `AgentState`  | **deferred**                          | định nghĩa, chưa cần logic                                                               |
+| `backend_health_snapshot: {...}`               | `AgentState`  | **deferred**                          | lưu `HandshakeResult` để debug; chưa wire                                                |
+| `state_backend_selected`                       | `AgentState`  | **deferred**                          | MVP chưa có state backend **remote**; chỉ memory. Định nghĩa field, để "local".          |
 
 > **Nguyên tắc:** field [deferred] được **định nghĩa với default an toàn** ngay bây giờ
 > (để contract không phải đổi sau), nhưng **không wire logic** cho tới khi luồng E2E
 > local chạy. Tránh đúng cái bẫy over-abstraction trong planning phase.
+>
+> **`disclosure_reasons` — giá trị hợp lệ [Literal]:** `"memory_degraded"`,
+> `"memory_write_failed"`, `"context_recall_limited"`, `"side_effect_blocked"`,
+> `"remote_unavailable"`. Khóa giá trị, không string tự do.
 
 ### Disclosure là deterministic, KHÔNG để model quyết (điểm 4)
 
-```
-# policy layer (deterministic) — chạy TRƯỚC FinalComposer
+```python
+# policy layer (deterministic) — chạy TRƯỚC khi compose final
 if state.memory_degraded and task_touches_memory:
-    state.disclosure_required = True
+    state.disclosure_reasons.append("memory_degraded")
+if state.memory_write_failed and user_expected_persistence:
+    state.disclosure_reasons.append("memory_write_failed")
 if state.memory_degraded and step.has_side_effect:
-    → PolicyEngine DENY hoặc require approval (§4d)
+    → PolicyEngine DENY hoặc require approval (§4d)   # KHÔNG cần lưu can_use_side_effect_tools
 
-# FinalComposer: chỉ VIẾT câu disclose khi state.disclosure_required == True.
-# Model viết chữ; policy quyết có disclose hay không.
+# FinalComposer: chỉ VIẾT câu disclose khi disclosure_reasons KHÔNG rỗng.
+# Model viết chữ theo reasons; policy quyết CÓ disclose hay không + VÌ SAO.
 ```
 
 Khớp `CLAUDE.md §1`: LLM hiểu ngôn ngữ, code kiểm soát hành vi.
 
-| Test                               | Assert                                                                                                                         |
-| ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
-| protocol conformance               | `RemoteMemoryClient` và `LocalMemoryClient` đều `isinstance(..., MemoryClientProtocol)`                                        |
-| local retrieve                     | seed store → `retrieve_context_pack` trả `ContextPack(degraded=True, memory_source="local")`, items đúng                       |
-| local budget cut                   | budget nhỏ → `truncated=True`, `tokens_used <= token_budget`                                                                   |
-| remote ok                          | mock `/retrieve` → `ContextPack(degraded=False)`                                                                               |
-| remote fail at start (mode=remote) | health-check fail → factory **raise**, KHÔNG trả local                                                                         |
-| auto fallback                      | health fail + mode=auto → trả `LocalMemoryClient`, log warning                                                                 |
-| degraded monotonic                 | inject degraded pack rồi non-degraded pack → `state.memory_degraded` vẫn True                                                  |
-| **no mid-run switch**              | remote chết giữa run → `state.status == FAILED`, KHÔNG có item local nào lẫn vào observations                                  |
-| composer disclosure                | `memory_degraded=True` → final answer chứa câu disclose                                                                        |
-| disclosure deterministic           | `disclosure_required` do policy set, KHÔNG do model; `disclosure_required=False` → composer không tự thêm disclose dù degraded |
-| side-effect blocked when degraded  | degraded + step `mutates_state/requires_approval` → PolicyEngine DENY, `tool.fn` KHÔNG chạy                                    |
-| handshake schema mismatch          | `/handshake` trả `schema_version` lệch → factory **raise**, không bind                                                         |
-| degraded_allowed fail-closed       | task không rõ side-effect + remote down + auto → KHÔNG tự chạy degraded                                                        |
-| same token count                   | cùng input → local `tokens_used` khớp cách đếm của Memory (dùng chung TokenCounter)                                            |
+| Test                               | Assert                                                                                                         |
+| ---------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| protocol conformance               | `RemoteMemoryClient` và `LocalMemoryClient` đều `isinstance(..., MemoryClientProtocol)`                        |
+| local retrieve                     | seed store → `retrieve_context_pack` trả `ContextPack(degraded=True, memory_source="local")`, items đúng       |
+| local budget cut                   | budget nhỏ → `truncated=True`, `tokens_used <= token_budget`                                                   |
+| remote ok                          | mock `/retrieve` → `ContextPack(degraded=False)`                                                               |
+| remote fail at start (mode=remote) | health-check fail → factory **raise**, KHÔNG trả local                                                         |
+| auto fallback                      | health fail + mode=auto → trả `LocalMemoryClient`, log warning                                                 |
+| degraded monotonic                 | inject degraded pack rồi non-degraded pack → `state.memory_degraded` vẫn True                                  |
+| **no mid-run switch**              | remote chết giữa run → `state.status == FAILED`, KHÔNG có item local nào lẫn vào observations                  |
+| composer disclosure                | `memory_degraded=True` → final answer chứa câu disclose                                                        |
+| disclosure deterministic           | `disclosure_reasons` do policy append, KHÔNG do model; list rỗng → composer không tự thêm disclose dù degraded |
+| side-effect blocked when degraded  | degraded + step `mutates_state/requires_approval` → PolicyEngine DENY, `tool.fn` KHÔNG chạy                    |
+| handshake schema mismatch          | `/handshake` trả `schema_version` lệch → factory **raise**, không bind                                         |
+| auto always falls back             | remote down + mode=auto → bind LocalMemoryClient, `memory_degraded=True` (KHÔNG xét task ở bind-time)          |
+| same token count                   | cùng input → local `tokens_used` khớp cách đếm của Memory (dùng chung TokenCounter)                            |
 
 ---
 
