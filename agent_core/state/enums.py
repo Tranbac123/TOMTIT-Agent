@@ -15,6 +15,8 @@ class SourceType(StrEnum):
     MEMORY = "memory"
     TOOL = "tool"
     USER = "user"
+    AGENT = "agent"
+    SYSTEM = "system"
 
 
 class MemoryType(StrEnum):
