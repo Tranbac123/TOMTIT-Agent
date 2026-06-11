@@ -33,6 +33,7 @@ class WriteNoteOutput:
     name: str
     saved: bool
     message: str
+    memory_id: str | None = None
 
 
 @dataclass
@@ -51,11 +52,16 @@ class MemoryWriteOutput:
     id: str
     type: str
     content: str
+    tags: list[str] = field(default_factory=list)
+    importance: float | None = None
+    confidence: float | None = None
 
 
 @dataclass
 class SearchMemoryOutput:
     records: list[dict[str, Any]]
+    query: str = ""
+    count: int | None = None
 
 
 @dataclass

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from agent_core.memory.in_memory_store import InMemoryMemoryStore
-from agent_core.memory.in_memory_store import InMemoryMemoryStore as MemoryStore
+from agent_core.memory.in_memory_store import InMemoryStore
+from agent_core.memory.in_memory_store import InMemoryStore as MemoryStore
 from agent_core.memory.memory_agent import MemoryAgent
 from agent_core.memory.memory_records import MemoryQuery, MemoryRecord
 from agent_core.planning.hybrid_planner import HybridPlanner

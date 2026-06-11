@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from dataclasses import is_dataclass
-from typing import Any
-import re
+from dataclasses import asdict, is_dataclass
 
 from agent_core.tools.schemas import (
+    ListNotesOutput,
+    MemoryWriteOutput,
+    SearchMemoryOutput,
     CalculateOutput,
     FinishOutput,
     ReadNoteOutput,
@@ -12,6 +13,9 @@ from agent_core.tools.schemas import (
     ToolResult,
     WebSearchOutput,
 )
+
+from typing import Any
+import re
 
 
 def stringify_output(output: Any) -> str:
@@ -29,6 +33,14 @@ def stringify_output(output: Any) -> str:
         return output.answer
     if isinstance(output, FinishOutput):
         return output.answer
+    if isinstance(output, ListNotesOutput):
+        return "\n".join(output.names)
+    if isinstance(output, MemoryWriteOutput):
+        return output.content
+    if isinstance(output, SearchMemoryOutput):
+        return "\n".join(str(record) for record in output.records)
+    if is_dataclass(output):
+        return str(asdict(output))
     return str(output)
 
 

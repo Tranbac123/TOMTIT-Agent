@@ -45,10 +45,13 @@ The current MVP supports:
 Example supported commands:
 
 ```text
-Tính (15 + 5) * 3 rồi lưu vào ghi chú budget
+Tính (15 + 5) * 3 rồi lưu vào ghi chú
 Tính (15 + 5) * 3 nhưng không lưu ghi chú
 Đọc ghi chú project rồi tóm tắt
 Tìm thông tin về Ducati Monster 795
+List thông tin cá nhân của tôi mà bạn biết ra đây
+Hãy list những task mà tôi đang làm chưa xong
+Lịch trình của tôi hôm nay có gì?
 ```
 
 ## Architecture
