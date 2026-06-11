@@ -39,3 +39,17 @@ def test_main_constructs():
 
     agent = RuntimeAgent(planner=RuleBasedPlanner(), tools=build_tool_registry())
     assert agent is not None
+
+
+def test_intentplanner_defined_once():
+    import ast
+    import pathlib
+
+    count = 0
+    for f in pathlib.Path("agent_core").rglob("*.py"):
+        tree = ast.parse(f.read_text(encoding="utf-8"))
+        count += sum(
+            isinstance(n, ast.ClassDef) and n.name == "IntentPlanner"
+            for n in ast.walk(tree)
+        )
+    assert count == 1, f"IntentPlanner defined {count} times, expected 1"
