@@ -32,6 +32,10 @@ class ContextItem(BaseModel):
     metadata: dict = Field(default_factory=dict)
 
 
+# NOTE: chỉ ContextItem dùng strict=True (ép MemoryType tại biên — điểm typo rủi ro nhất).
+# ContextPack/MemoryCandidate/WriteResponse cố ý để lax: phần lớn primitive, coercion
+# Pydantic v2 vô hại. KHÔNG thêm strict vào các model này nếu chưa kiểm caller — strict
+# toàn cục có thể làm vỡ caller truyền cross-type hợp lệ.
 class ContextPack(BaseModel):
     """Kết quả retrieve, token-budgeted. Local lẫn remote backend trả CÙNG kiểu này."""
     schema_version: str = SCHEMA_VERSION
