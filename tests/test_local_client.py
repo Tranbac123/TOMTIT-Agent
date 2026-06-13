@@ -17,12 +17,15 @@ def test_retrieve_always_degraded():
     store = InMemoryStore()
     store.write(MemoryRecord(content="hello world", type=MemoryType.FACT))
     client = LocalMemoryClient(store)
+    # goal="" — test degraded flag/source, not relevance
     pack = client.retrieve_context_pack("")
     assert pack.degraded is True
     assert pack.memory_source == "local"
 
 
 def test_retrieve_maps_record_fields():
+    # Tests field mapping (importance→score, type, provenance, source, metadata).
+    # goal="" — isolates mapping from relevance filtering.
     store = InMemoryStore()
     rec = MemoryRecord(content="some fact", type=MemoryType.FACT, importance=0.8)
     store.write(rec)
@@ -39,6 +42,7 @@ def test_retrieve_maps_record_fields():
 
 def test_retrieve_empty_store():
     client = LocalMemoryClient(InMemoryStore())
+    # goal="" — tests empty-store behavior, not relevance
     pack = client.retrieve_context_pack("")
     assert pack.items == []
     assert pack.total_items == 0
@@ -47,6 +51,7 @@ def test_retrieve_empty_store():
 
 
 def test_token_budget_truncates():
+    # Tests token-budget truncation. goal="" — isolates budget logic from relevance.
     store = InMemoryStore()
     # 3 records, content "a" = 1 token each; budget=2 fits 2, third triggers break
     for i in range(3):
@@ -59,8 +64,9 @@ def test_token_budget_truncates():
 
 
 def test_preserves_store_order():
+    # Tests that client preserves store's importance-DESC order without re-ranking.
+    # goal="" — isolates order behavior from relevance filtering.
     store = InMemoryStore()
-    # Write in arbitrary order; store sorts by importance DESC
     for importance in [0.3, 0.9, 0.6]:
         store.write(MemoryRecord(content=f"record {importance}", importance=importance, type=MemoryType.FACT))
 
@@ -70,6 +76,21 @@ def test_preserves_store_order():
     pack = client.retrieve_context_pack("", token_budget=9999)
 
     assert [item.metadata["memory_id"] for item in pack.items] == [r.id for r in store_order]
+
+
+def test_retrieve_ignores_goal_in_local():
+    # LOCAL CLIENT KHÔNG lọc theo goal — thiết kế có chủ đích cho MVP-local.
+    # InMemoryStore chỉ có substring match; goal nguyên câu gần như không bao giờ match.
+    # LocalMemoryClient trả top-k theo importance bất kể goal là gì.
+    # Relevance-matching theo goal là việc của RemoteMemoryClient/Memory service (P6).
+    store = InMemoryStore()
+    rec = MemoryRecord(content="Dự án dùng FTS5 thay vector", type=MemoryType.DECISION)
+    store.write(rec)
+    client = LocalMemoryClient(store)
+    # Goal hoàn toàn không liên quan đến content record — vẫn phải trả về record đó
+    pack = client.retrieve_context_pack("Tính (15+5)*3 rồi lưu vào ghi chú budget")
+    assert len(pack.items) == 1
+    assert pack.items[0].metadata["memory_id"] == rec.id
 
 
 def test_write_candidates_returns_ids():

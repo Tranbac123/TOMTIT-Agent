@@ -40,8 +40,13 @@ class LocalMemoryClient:
         max_items: int = 20,
     ) -> ContextPack:
         # Tầng cắt 1 — store: số lượng (limit) + đã sort sẵn.
+        # MVP-local: KHÔNG lọc theo goal. InMemoryStore chỉ có substring match — match nguyên
+        # câu goal gần như luôn rỗng. LocalMemoryClient là fallback/demo (luôn degraded): trả
+        # top-k theo importance (store đã sort), KHÔNG làm relevance-matching. Relevance-matching
+        # khớp goal là việc của RemoteMemoryClient/Memory service (P6), KHÔNG phải local.
+        # (param `goal` vẫn giữ trong signature — contract MemoryClientProtocol; remote dùng nó.)
         query = MemoryQuery(
-            text=goal,
+            text="",
             user_id=user_id,
             session_id=session_id,
             limit=max_items,
