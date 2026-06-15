@@ -165,6 +165,34 @@ def test_executor_rejects_unknown_args():
     assert state.last_result is result
 
 
+def test_executor_blocks_critical_risk_tool():
+    """CRITICAL risk must be denied — fn must never execute (spy call_count = 0)."""
+    call_count = 0
+
+    def spy_fn(**_):
+        nonlocal call_count
+        call_count += 1
+        from agent_core.tools.schemas import ToolResult, ToolResultKind
+        return ToolResult(success=True, output=None, tool_name="calculate", kind=ToolResultKind.TEXT)
+
+    state = AgentState(goal="x")
+    tools = dict(build_tool_registry())
+    tools[ToolName.CALCULATE] = replace(
+        tools[ToolName.CALCULATE],
+        fn=spy_fn,
+        risk_level=RiskLevel.CRITICAL,
+    )
+
+    executor = make_executor(tools)
+    step = make_step(ToolName.CALCULATE, {"expression": "1+1"})
+
+    result = executor.execute(step, state)
+
+    assert not result.success
+    assert result.metadata["error_type"] == "PolicyDenied"
+    assert call_count == 0  # fn must NOT have run
+
+
 def test_executor_rejects_missing_required_args():
     state = AgentState(goal="x")
     tools = build_tool_registry()

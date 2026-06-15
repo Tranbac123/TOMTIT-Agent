@@ -38,7 +38,7 @@ class PolicyEngine:
         args: dict[str, Any],
         state: Any,
     ) -> PolicyDecision:
-        if tool.risk_level == RiskLevel.HIGH:
+        if tool.risk_level in (RiskLevel.HIGH, RiskLevel.CRITICAL):
             return PolicyDecision.deny(
                 reason=f"Tool '{tool.name.value}' is high risk and blocked by MVP policy.",
                 metadata={
