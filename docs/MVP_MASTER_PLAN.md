@@ -3,18 +3,33 @@
 > **Definition of Done — HAI TẦNG (đọc kỹ, đây là điểm từng mâu thuẫn):**
 >
 > **MVP-local DoD (đích chính, đạt trước):** TOMTIT-Agent chạy end-to-end với
-> `LocalMemoryClient` — retrieve `ContextPack` **trước plan**, write memory candidates
-> **sau finish**, final answer disclose degraded khi cần. Chứng minh bằng script demo.
+> `LocalMemoryClient` — retrieve `ContextPack` **trước plan**; **post-finish write path
+> được wire và test khi candidates tồn tại** (auto candidate-extraction CHƯA thuộc MVP →
+> normal run có thể không sinh candidate); final answer disclose degraded khi cần. Note do
+> user yêu cầu vẫn persist qua `write_note` tool + shared store. Chứng minh bằng script demo.
 > **KHÔNG cần TOMTIT-Memory HTTP server.** Đây là cột mốc "MVP chạy được".
+>
+> **BẮT BUỘC ở P4 (chống plumbing chết):** ít nhất MỘT E2E test chứng minh một **consumer
+> thật đọc `ContextPack` và làm THAY ĐỔI output/decision** (planner/composer dùng pack →
+> đổi plan hoặc answer). P3 chỉ transport pack vào state; nếu P4 không có consumer thật,
+> memory wiring chỉ là plumbing chết và MVP-memory CHƯA chứng minh giá trị.
 >
 > **MVP-remote DoD (integration milestone kế tiếp):** ghép `RemoteMemoryClient` qua
 > HTTP với TOMTIT-Memory, `degraded=False`, **runtime không đổi một dòng**. Đây là
 > bước tích hợp sau, KHÔNG phải điều kiện chặn của "MVP chạy được".
 >
-> **Trạng thái xuất phát (đã xác nhận):**
+> **CURRENT STATUS (cập nhật 2026-06):**
 >
-> - TOMTIT-Agent: **chưa import được** (4 lỗi P0).
-> - TOMTIT-Memory: **có code, chưa có HTTP server chạy được**.
+> - P0-recovery: **CLOSED** (55 passed + main.py 3 luồng)
+> - P1-contract: **CLOSED** (60 passed)
+> - P2-local-client: **CLOSED** (69 passed)
+> - P3-runtime-wiring: **READY FOR EXECUTION** (spec `SPEC_P3_runtime_wiring.md`)
+> - P4-local-demo: **NOT STARTED**
+>
+> **Historical starting state (đã qua — giữ để tham khảo):**
+>
+> - TOMTIT-Agent: chưa import được (4 lỗi P0) — _đã sửa ở P0-recovery_.
+> - TOMTIT-Memory: có code, chưa có HTTP server chạy được.
 >
 > **Nguyên tắc tốc độ:** nhanh = làm đúng thứ tự, KHÔNG bỏ bước. MVP chạy được trước
 > bằng `LocalMemoryClient`; remote HTTP là integration milestone kế tiếp.
@@ -30,7 +45,7 @@ Thứ tự tuyến tính, một-phase-một-gate. **Tên có nghĩa, không số
 | **P0-recovery**       | Sửa 4 lỗi P0 → Agent import được, pytest xanh                         | Agent  | `BUILD_SPEC.md` STEP 1–5                          |
 | **P1-contract**       | Chốt `ContextPack` + `MemoryClientProtocol` (một nguồn sự thật)       | Agent  | `SPEC_memory_client.md` §2 + §7b                  |
 | **P2-local-client**   | `LocalMemoryClient` bọc `InMemoryStore` + test                        | Agent  | `SPEC_memory_client.md` [MVP-local must]          |
-| **P3-runtime-wiring** | retrieve trước plan → inject → write sau finish + degraded disclosure | Agent  | `SPEC_memory_client.md` §5                        |
+| **P3-runtime-wiring** | retrieve trước plan → inject → write sau finish + degraded disclosure | Agent  | `SPEC_P3_runtime_wiring.md`                       |
 | **P4-local-demo**     | E2E local: 1 luồng với `LocalMemoryClient`, demo được                 | Agent  | cần viết                                          |
 | —                     | **🎯 MVP-local DoD đạt ở đây — dừng được, đi nói chuyện user**        | —      | —                                                 |
 | **P5-remote-memory**  | Memory HTTP server (`/retrieve`, `/write`, `/handshake`)              | Memory | cần viết                                          |
@@ -146,7 +161,6 @@ runtime sẵn có — KHÔNG viết lại runtime.
 
 ## 6. Next step (một việc)
 
-Cho Claude Code chạy **P0-recovery = `BUILD_SPEC.md` STEP 1**, đúng lệnh khởi động ở
-`BUILD_SPEC.md §5`. Song song, bạn review `§3` (draft `ContextPack`) và trả lời 3
-ba điểm đã chốt ở `§3`. Khi P0-recovery qua gate STEP 5, architect viết spec P1-contract
-→ P2-local-client. Spec P5-remote-memory (HTTP server) đến sau, cần code TOMTIT-Memory để khớp.
+**Execute `SPEC_P3_runtime_wiring.md`** trên branch `p3-runtime-wiring`. Dừng sau P3 report,
+chờ gate review. P0/P1/P2 đã CLOSED. Sau P3 qua gate → P4-local-demo (architect viết spec,
+gồm test chứng minh consumer thật đọc `ContextPack`). P5-remote-memory đến sau P4.
