@@ -11,6 +11,7 @@ REQUIRED_SLOTS: dict[IntentName, tuple[str, ...]] = {
     IntentName.WRITE_NOTE: ("note_name", "content"),
     IntentName.WEB_SEARCH: ("query",),
     IntentName.WEB_SEARCH_THEN_SAVE_NOTE: ("query", "note_name"),
+    IntentName.PROJECT_CONTEXT_QUERY: ("query",),  # P4: parser always sets query=text; guard for manual construction
 }
 
 

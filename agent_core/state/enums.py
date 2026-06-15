@@ -76,6 +76,7 @@ class ToolName(StrEnum):
     SUMMARIZE = "summarize"
     WEB_SEARCH = "web_search"
     FINISH = "finish"
+    ANSWER_FROM_CONTEXT = "answer_from_context"  # P4: reads state.context_pack
 
 
 class ToolResultKind(StrEnum):

@@ -69,6 +69,7 @@ class AgentState:
     memory_degraded: bool = False              # monotonic — only rises, never resets in one run (§5)
     memory_write_failed: bool = False          # §5b: write best-effort fail
     disclosure_reasons: list[str] = field(default_factory=list)  # §7b: policy appends, composer reads
+    context_consumed: bool = False             # P4: tool_answer_from_context sets True when exactly 1 item used
 
     max_steps: int = 5
 

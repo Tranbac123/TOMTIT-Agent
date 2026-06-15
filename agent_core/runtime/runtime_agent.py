@@ -29,7 +29,9 @@ _MEMORY_ACTIONS = frozenset({
 # All plan actions that touch memory (read OR write) — used for degraded disclosure.
 # context_pack.items is NOT a reliable signal: LocalMemoryClient returns the full store
 # regardless of goal, so any seeded store would trigger disclosure for pure-calculate tasks.
-_MEMORY_PLAN_ACTIONS = _MEMORY_ACTIONS | frozenset({ToolName.READ_NOTE})
+# P4: ANSWER_FROM_CONTEXT reads state.context_pack (which came from memory retrieval) →
+# degraded MUST disclose even when context_consumed=False (empty/multi-item branch).
+_MEMORY_PLAN_ACTIONS = _MEMORY_ACTIONS | frozenset({ToolName.READ_NOTE, ToolName.ANSWER_FROM_CONTEXT})
 
 _DISCLOSURE_TEXT: dict[str, str] = {
     "memory_degraded": (

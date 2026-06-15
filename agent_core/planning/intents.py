@@ -13,6 +13,7 @@ class IntentName(str, Enum):
     WRITE_NOTE = "write_note"
     WEB_SEARCH = "web_search"
     WEB_SEARCH_THEN_SAVE_NOTE = "web_search_then_save_note"
+    PROJECT_CONTEXT_QUERY = "project_context_query"  # P4: reads ContextPack
     UNKNOWN = "unknown"
 
 
