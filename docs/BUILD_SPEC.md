@@ -1,5 +1,10 @@
 # BUILD_SPEC — TOMTIT-Agent (P0 Recovery — STEP 1–5)
 
+> **STATUS: CLOSED / HISTORICAL — P0 only. DO NOT EXECUTE.**
+> P0-recovery đã đóng (merged main, 55 passed). Phase hiện tại định nghĩa bởi
+> `MVP_MASTER_PLAN.md` (CURRENT STATUS) + spec phase đang chạy (vd `SPEC_P3_runtime_wiring.md`).
+> File này giữ để tham khảo lịch sử cách P0 được sửa. **KHÔNG chạy lại STEP 1–5.**
+>
 > **Đối tượng đọc:** Claude Code (executor) và TranBac (architect / merge gate).
 > **Phạm vi:** CHỈ đưa repo từ trạng thái **không import được** trở lại xanh (4 lỗi P0).
 > **Không** thêm feature, **không** memory persist, **không** event log, **không** LLM
@@ -281,21 +286,17 @@ Nếu mọi ô tick → duyệt merge `main` → ra lệnh STEP kế. Nếu khô
 
 ---
 
-## 5. Lệnh khởi động cho Claude Code (dán nguyên văn để bắt đầu STEP 1)
+## 5. Lệnh khởi động cho Claude Code — ⛔ ĐÃ VÔ HIỆU (P0 đóng)
+
+> **KHÔNG dùng lệnh dưới đây.** P0-recovery đã hoàn tất và merged. Lệnh khởi động cho phase
+> hiện tại nằm ở spec phase đang chạy (vd `SPEC_P3_runtime_wiring.md`), KHÔNG ở đây. Đoạn dưới
+> giữ làm lịch sử cách P0 STEP 1 từng được khởi động.
 
 ```
-Chỉ dùng các file hiện tại ở repo root: CLAUDE.md, BUILD_SPEC.md, MVP_MASTER_PLAN.md,
-SPEC_memory_client.md. BỎ QUA mọi bản upload/chat cũ cùng tên file.
-KHÔNG mở hoặc thực thi ARCHIVE_BUILD_SPEC_OLD.md trừ khi được yêu cầu rõ để tham khảo lịch sử.
-
-Đọc CLAUDE.md, BUILD_SPEC.md, MVP_MASTER_PLAN.md trước khi làm gì.
-Tuân thủ CLAUDE.md §9 (thứ tự ưu tiên khi mâu thuẫn) và BUILD_SPEC.md §0 (luật vận hành) tuyệt đối.
+[HISTORICAL — KHÔNG THỰC THI]
 Bắt đầu STEP 1 và CHỈ STEP 1.
 Trước khi viết tay, thử khôi phục agent_core/planning/intent_parser.py từ git history:
   git log --oneline -- agent_core/planning/intent_parser.py
-  git show <commit-trước-khi-hỏng>:agent_core/planning/intent_parser.py | head -40
-Nếu history còn class RuleBasedIntentParser → checkout bản đó (ưu tiên).
-Nếu mất → dùng bản fallback architect cung cấp, đối chiếu tests/test_planning_p0.py (KHÔNG sửa test cho khớp code).
-Tạo branch step-1-restore-intent-parser, commit, rồi nộp report theo mẫu §0.
-Dừng và chờ review. KHÔNG làm STEP 2.
+Tạo branch step-1-restore-intent-parser, commit, nộp report §0.
+Dừng và chờ review.
 ```

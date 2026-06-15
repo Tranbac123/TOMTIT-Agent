@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from agent_core.memory.contracts import ContextPack
 from uuid import uuid4
 
 from agent_core.memory.base import MemoryStoreProtocol
@@ -51,12 +54,21 @@ class AgentState:
     last_result: ToolResult | None = None
     slots: dict[str, Any] = field(default_factory=dict)
 
+    # deprecated-but-shared (QĐ-2 §7 SPEC_memory_client): built-in tools read/write here;
+    # composition root passes the SAME reference into LocalMemoryClient → no split-brain.
+    # Do NOT add new code using this field. Migration to MemoryClientProtocol-only: post-P4.
     memory: MemoryStoreProtocol = field(default_factory=InMemoryStore)
 
     history: list[str] = field(default_factory=list)
     observations: list[Observation] = field(default_factory=list)
     sources: list[Source] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
+
+    # Memory client state — P3 wiring (SPEC_P3, SPEC_memory_client §5, §7b)
+    context_pack: "ContextPack | None" = None  # first-class: affects planning/degraded/disclosure/replay (QĐ-3)
+    memory_degraded: bool = False              # monotonic — only rises, never resets in one run (§5)
+    memory_write_failed: bool = False          # §5b: write best-effort fail
+    disclosure_reasons: list[str] = field(default_factory=list)  # §7b: policy appends, composer reads
 
     max_steps: int = 5
 
