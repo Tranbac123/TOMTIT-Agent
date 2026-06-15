@@ -13,7 +13,7 @@
 | P1-contract | Pydantic contracts + MemoryClientProtocol | **CLOSED** | 60 passed | merged to main | — |
 | P2-local-client | LocalMemoryClient + fix text="" | **CLOSED** | 69 passed | merged to main | — |
 | **P3-runtime-wiring** | Wire memory client vào runtime loop | **CLOSED** | **89 passed** | merged to main | 2026-06-15 |
-| P4-local-demo | E2E local demo — consumer thật đọc ContextPack | **NOT STARTED** | — | — | — |
+| **P4-local-demo** | E2E local demo — consumer thật đọc ContextPack | **CLOSED** | **101 passed** (merge) / **102 passed** (post-safety-fix) | merged to main | 2026-06-15 |
 | P5-remote-memory | TOMTIT-Memory HTTP server | NOT STARTED | — | — | — |
 | P6-remote-client | RemoteMemoryClient + factory | NOT STARTED | — | — | — |
 
@@ -39,6 +39,35 @@
 
 ---
 
+## P4-local-demo — ghi chú close
+
+**101 passed** lúc merge (commit `2cdf005`). **102 passed** sau safety fix TD-4 (commit `3171f16`).
+Branch `p4-local-demo` merged to `main` 2026-06-15. Gate: APPROVED by TranBac.
+
+**Những gì P4 thêm:**
+- `ToolName.ANSWER_FROM_CONTEXT` (member thứ 13) — đọc `state.context_pack`, không chạm `state.memory`
+- `IntentName.PROJECT_CONTEXT_QUERY` — intent mới, parser + slot_validator + planner đầy đủ
+- `tool_answer_from_context()` — 3 nhánh deterministic (0 / 1 / >1 items), `context_consumed=True` chỉ khi đúng 1 item
+- Registry completeness guard: `set(registry.keys()) == set(ToolName)` — fails at build time
+- `AgentState.context_consumed: bool = False` — P4 signal
+- `_MEMORY_PLAN_ACTIONS` mở rộng: thêm `ANSWER_FROM_CONTEXT`
+- `tests/test_p4_local_demo.py`: 12 tests (test 12 = FailOnReadStore DoD — `call_count == 0` trên 5/5 read methods)
+- `main.py` scenario 4: seed DECISION → project-context query → FTS5 in answer
+
+**DoD đạt:** Consumer thật đọc `ContextPack`, output thay đổi theo context (test 8 counterfactual).
+**DoD chưa đạt:** Durable recall / save-then-recall / persistence qua restart / relevance retrieval.
+**Trạng thái:** Feature development DỪNG để user validation. P5/P6 là lựa chọn sau validation.
+
+---
+
+## Safety fix post-P4 — TD-4
+
+**102 passed** (commit `3171f16`). `PolicyEngine` `== RiskLevel.HIGH` → `in (RiskLevel.HIGH, RiskLevel.CRITICAL)`.
+`CRITICAL` tool không bị deny trước fix — `fn` có thể chạy. Fix: 1-line patch + spy test (`call_count == 0`).
+
+---
+
 ## Next step
 
-**P4-local-demo** — architect viết spec. Bắt buộc có ít nhất 1 E2E test chứng minh consumer thật đọc `context_pack` và thay đổi plan hoặc answer. P3 chỉ transport pack vào state — nếu P4 không có consumer thật, P3 là plumbing chết.
+Feature development DỪNG. Đem `python3.11 main.py` scenario 4 đi validate với user thật.
+P5/P6 chỉ bắt đầu sau khi có kết quả validation. Xem `VALIDATION_PLAN.md`.
