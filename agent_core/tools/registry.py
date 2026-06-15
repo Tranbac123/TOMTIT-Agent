@@ -9,6 +9,7 @@ from agent_core.tools.builtin_tools import (
     FakeWebSearchClient,
     WebSearchClient,
     make_web_search_tool,
+    tool_answer_from_context,
     tool_calculate,
     tool_finish,
     tool_list_notes,
@@ -178,6 +179,14 @@ def build_tool_registry(
             required_args={"answer"},
             allowed_args={"answer"},
         ),
+        ToolName.ANSWER_FROM_CONTEXT: spec(
+            name=ToolName.ANSWER_FROM_CONTEXT,
+            fn=tool_answer_from_context,
+            description="Answer a project-context question by reading the ContextPack (read-only, does not touch store).",
+            required_args={"query"},
+            allowed_args={"query"},
+            mutates_state=False,
+        ),
     }
 
     for tool_name, tool_spec in registry.items():
@@ -186,5 +195,15 @@ def build_tool_registry(
                 f"Registry key {tool_name.value} does not match ToolSpec.name "
                 f"{tool_spec.name.value}."
             )
+
+    # Guard: every ToolName member must be registered. Catches future enum additions that
+    # forget a registry entry — fails at build time, not silently at runtime.
+    registered = set(registry.keys())
+    declared = set(ToolName)
+    if registered != declared:
+        raise ValueError(
+            f"Registry mismatch — missing: {declared - registered}, "
+            f"extra: {registered - declared}"
+        )
 
     return registry

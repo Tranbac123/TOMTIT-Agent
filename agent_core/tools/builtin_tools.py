@@ -10,6 +10,7 @@ from agent_core.state.enums import MemoryType, ToolName, ToolResultKind
 from agent_core.tools.arg_resolver import stringify_output
 from agent_core.tools.base import ToolFn
 from agent_core.tools.schemas import (
+    AnswerFromContextOutput,
     CalculateOutput,
     FinishOutput,
     ListNotesOutput,
@@ -388,6 +389,62 @@ def tool_finish(state: AgentState, answer: Any) -> ToolResult:
         metadata={
             "answer_length": len(final_answer),
             "terminal": True,
+        },
+    )
+
+
+# MemoryType values that represent project-level context.
+# Relevance-matching is NOT done (LocalMemoryClient ignores goal) — filter by type only.
+_PROJECT_CONTEXT_TYPES = (MemoryType.DECISION, MemoryType.PROJECT_CONTEXT)
+
+
+def tool_answer_from_context(state: AgentState, query: str) -> ToolResult:
+    """Read project context from state.context_pack (NOT state.memory). Read-only."""
+    tool_name = ToolName.ANSWER_FROM_CONTEXT.value
+    pack = state.context_pack
+    items = [i for i in pack.items if i.type in _PROJECT_CONTEXT_TYPES] if pack else []
+
+    # 0 matching items — not enough context. context_consumed stays False.
+    if len(items) == 0:
+        return ToolResult(
+            success=True,
+            output=AnswerFromContextOutput(
+                answer="Tôi không có đủ project context để trả lời câu hỏi này.",
+                used_item_count=0,
+            ),
+            tool_name=tool_name,
+            kind=ToolResultKind.TEXT,
+            metadata={"reason": "no_context", "matched": 0},
+        )
+
+    # >1 matching items — no relevance ranking available, cannot choose. context_consumed stays False.
+    if len(items) > 1:
+        return ToolResult(
+            success=True,
+            output=AnswerFromContextOutput(
+                answer="Project context chưa đủ rõ (có nhiều mục liên quan).",
+                used_item_count=0,
+            ),
+            tool_name=tool_name,
+            kind=ToolResultKind.TEXT,
+            metadata={"reason": "ambiguous_context", "matched": len(items)},
+        )
+
+    # Exactly 1 item — use its content. Set context_consumed=True (real consumer signal).
+    item = items[0]
+    state.context_consumed = True
+    return ToolResult(
+        success=True,
+        output=AnswerFromContextOutput(
+            answer=f"Theo project context đã lưu: {item.content}",
+            used_item_count=1,
+        ),
+        tool_name=tool_name,
+        kind=ToolResultKind.TEXT,
+        metadata={
+            "reason": "used_context",
+            "matched": 1,
+            "memory_id": item.metadata.get("memory_id"),
         },
     )
 

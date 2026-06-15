@@ -78,6 +78,12 @@ class FinishOutput:
 
 
 @dataclass
+class AnswerFromContextOutput:
+    answer: str
+    used_item_count: int = 0  # 0 or 1 — trace: how many ContextItems were actually used
+
+
+@dataclass
 class DeleteFileOutput:
     deleted_files: list[str]
     skipped_files: list[str]

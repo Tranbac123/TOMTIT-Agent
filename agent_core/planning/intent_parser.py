@@ -8,6 +8,12 @@ from agent_core.planning.intents import IntentName, ParsedIntent
 _SAVE_SUFFIX = re.compile(r'\s+rồi\s+lưu\s+vào\s+ghi\s+chú(?:\s+(\S+))?', re.IGNORECASE)
 _SUMMARIZE_SUFFIX = re.compile(r'\s+rồi\s+tóm\s+tắt', re.IGNORECASE)
 _MATH_EXPR = re.compile(r'[\d(][0-9()\s+\-*/. ]*')
+# P4: project-context cue — narrow AND with ^Dự án to avoid false positives.
+_PROJECT_QUERY_CUE = re.compile(
+    r'(đã\s+chốt|đã\s+quyết\s+định|quyết\s+định\s+nào|dùng\s+gì|'
+    r'dùng\s+cơ\s+chế\s+nào|context|ngữ\s+cảnh)',
+    re.IGNORECASE,
+)
 
 
 class RuleBasedIntentParser:
@@ -29,6 +35,11 @@ class RuleBasedIntentParser:
 
         if re.match(r'^Tìm\b', text, re.IGNORECASE):
             return self._parse_web_search(text)
+
+        # P4: project-context query — hẹp: ^Dự án AND cue hỏi-quyết-định.
+        # Chèn sau ^Tìm (không đụng) và trước fallthrough _unknown.
+        if re.match(r'^Dự\s+án\b', text, re.IGNORECASE) and _PROJECT_QUERY_CUE.search(text):
+            return self._parse_project_context_query(text)
 
         return self._unknown(text)
 
@@ -148,6 +159,17 @@ class RuleBasedIntentParser:
             raw_text=text,
             query=query,
             missing_slots=tuple(missing),
+        )
+
+    def _parse_project_context_query(self, text: str) -> ParsedIntent:
+        # query = nguyên câu (LocalMemoryClient bỏ qua goal — query chỉ để trace/log).
+        # Không có slot bắt buộc trong parser (query luôn = text, không rỗng).
+        return ParsedIntent(
+            intent=IntentName.PROJECT_CONTEXT_QUERY,
+            confidence=0.8,
+            source="rule",
+            raw_text=text,
+            query=text,
         )
 
     def _unknown(self, text: str) -> ParsedIntent:
