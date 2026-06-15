@@ -353,10 +353,15 @@ candidates", chưa tự sinh candidate (auto-extraction = post-MVP, CLAUDE.md §
 
 ### 4b. `_task_touches_memory` / `_user_expected_persistence` — RULE CHỐT (KHÔNG để Claude Code đoán)
 
-> **Lỗi logic đã sửa:** rule cũ "pack có items → touches memory" BỎ SÓT case nguy hiểm nhất:
-> user hỏi quyết định cũ → plan là `READ_NOTE`/`SEARCH_MEMORY` → local trả pack **rỗng** →
-> `memory_degraded=True` nhưng pack không items → **không disclose** → agent im lặng đúng lúc
-> recall thất bại. Phải disclose dựa **memory action trong plan**, KHÔNG chỉ dựa pack có items.
+> **Bug đã sửa (false disclosure):** rule trước có nhánh `or bool(context_pack.items)`. Nhưng
+> `LocalMemoryClient` **luôn trả items** (top-k theo importance, bỏ qua goal — P2). Hệ quả:
+> task "Tính 2+2" sau khi store có dữ liệu → pack có items → `touches_memory=True` → disclose
+> "memory rút gọn" SAI, dù task tính toán KHÔNG dùng memory và KHÔNG consumer nào đọc pack.
+> Đây là **false disclosure xảy ra gần như mọi task** sau khi store có data.
+>
+> **Sửa: P3 chỉ dựa PLAN.** Bỏ nhánh `context_pack.items`. Case recall-fail vẫn được giải vì
+> `READ_NOTE`/`SEARCH_MEMORY` là memory action **trong plan** → task đọc-note recall rỗng vẫn
+> `touches_memory=True` qua nhánh plan. KHÔNG cần nhánh items.
 
 Rule deterministic (chốt — Claude Code implement đúng, KHÔNG đổi):
 
@@ -370,48 +375,57 @@ _PERSIST_ACTIONS = {
 }
 
 def _task_touches_memory(state) -> bool:
-    return (
-        any(step.action in _MEMORY_ACTIONS for step in state.plan)
-        or bool(state.context_pack and state.context_pack.items)   # vẫn giữ: dùng context cũng tính
-    )
+    # P3: CHỈ dựa plan. KHÔNG suy ra "đã dùng context" từ pack có items
+    # (LocalMemoryClient luôn trả items → false disclosure).
+    return any(step.action in _MEMORY_ACTIONS for step in state.plan)
 
 def _user_expected_persistence(state) -> bool:
     return any(step.action in _PERSIST_ACTIONS for step in state.plan)
 ```
 
-> **Điểm mấu chốt:** `_task_touches_memory` dựa **mọi memory action trong plan** — nên một
-> task `READ_NOTE` mà recall rỗng (pack không items) VẪN `touches_memory=True` → degraded vẫn
-> disclose "memory rút gọn, có thể thiếu". Đây là case reviewer chỉ ra, đã đóng.
+> **P4 — khi có consumer thật:** thêm tín hiệu rõ ràng (KHÔNG suy từ pack có items):
+>
+> ```python
+> context_consumed: bool = False   # consumer set True khi THỰC SỰ đọc context item
+> # rồi: return any(... in _MEMORY_ACTIONS ...) or state.context_consumed
+> ```
+>
+> Field này KHÔNG thêm ở P3 (chưa consumer) — thêm ở P4 khi consumer đánh dấu. Đây là cách
+> đúng để biết "task có dùng context" thay vì đoán từ "pack có items".
 
-> **Lưu ý:** kiểm `ToolName` thật có đủ các member này không khi implement; nếu thiếu member
-> nào (vd `SEARCH_MEMORY` chưa tồn tại) → dùng tập con có thật + báo out-of-scope, KHÔNG tự thêm ToolName.
+> **Điểm mấu chốt:** task `READ_NOTE` recall rỗng VẪN disclose (qua nhánh plan); task `CALCULATE`
+> thuần KHÔNG disclose (không memory action trong plan) — kể cả khi pack có items. Cả hai đúng.
+
+> **Lưu ý:** kiểm `ToolName` thật có đủ các member này không; thiếu member nào → dùng tập con
+> có thật + báo out-of-scope, KHÔNG tự thêm ToolName.
 
 ---
 
 ## 5. Test P3 — `tests/test_runtime_memory_wiring.py`
 
-| Test                                               | Assert                                                                                                                                                                                                                     |
-| -------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `test_retrieve_called_before_plan`                 | spy memory_client → `retrieve_context_pack` gọi TRƯỚC `planner.make_plan`                                                                                                                                                  |
-| `test_degraded_pack_sets_state_flag`               | client trả `degraded=True` → `state.memory_degraded is True` sau run                                                                                                                                                       |
-| `test_degraded_monotonic`                          | inject degraded rồi non-degraded (nếu có thể) → flag vẫn True (chỉ leo lên)                                                                                                                                                |
-| `test_finalize_runs_once`                          | task qua FINISH tool → `_finalize_run` chạy đúng 1 lần (spy/counter), KHÔNG double-write, KHÔNG double-complete                                                                                                            |
-| `test_finish_tool_does_not_complete_directly`      | sau FINISH, `state.complete` chỉ được gọi trong finalize (không trong execute loop)                                                                                                                                        |
-| `test_write_after_finish`                          | task xong → `write_memory_candidates` gọi SAU compose, TRƯỚC complete                                                                                                                                                      |
-| `test_write_failure_not_fatal`                     | client.write raise → `state.memory_write_failed is True`, `status == COMPLETED`, answer vẫn trả                                                                                                                            |
-| `test_disclosure_when_degraded_and_touches_memory` | degraded + plan dùng memory → `disclosure_reasons` chứa "memory_degraded", final answer có câu disclose                                                                                                                    |
-| `test_no_disclosure_when_not_degraded`             | non-degraded → `disclosure_reasons == []`, answer KHÔNG có disclose                                                                                                                                                        |
-| `test_memory_client_none_no_crash`                 | `RuntimeAgent(memory_client=None)` → run OK, không retrieve/write, không raise                                                                                                                                             |
-| `test_shared_store_no_split_brain`                 | tool ghi qua state.memory + client đọc qua retrieve → thấy cùng dữ liệu (cùng store reference)                                                                                                                             |
-| `test_state_memory_is_shared_store`                | composition root truyền `shared_store` → `state.memory is shared_store` (cùng object, không phải default mới). Khẳng định QĐ-2 wiring đúng.                                                                                |
-| `test_context_pack_is_field_not_slots`             | sau retrieve → `state.context_pack` là `ContextPack` (không phải `state.slots["context_pack"]`); `"context_pack" not in state.slots`                                                                                       |
-| `test_no_import_cycle`                             | `import agent_core.state.agent_state` và `import agent_core.memory.contracts` cùng lúc → không raise (TYPE_CHECKING guard hoạt động)                                                                                       |
-| `test_mutating_tool_runs_under_memory_degraded`    | memory_degraded=True (local) + plan có write_note (mutating) → write_note CHẠY (không bị deny). Khẳng định QĐ-4: memory_degraded KHÔNG chặn tool. Đây là test bảo vệ MVP-demo compound.                                    |
-| `test_retrieve_failure_fails_before_plan`          | memory_client.retrieve raise → `state.status == FAILED`, `planner.make_plan` KHÔNG được gọi (spy). Khẳng định: không plan với context lỗi (§3b).                                                                           |
-| `test_append_disclosures_helper`                   | `append_disclosures("ans", [])` == "ans"; `append_disclosures("ans", ["memory_degraded"])` chứa "ans" + câu disclose. Deterministic, KHÔNG phải method FinalComposer.                                                      |
-| `test_disclose_on_recall_fail_empty_pack`          | degraded + plan có READ_NOTE/SEARCH_MEMORY + pack RỖNG (recall fail) → `disclosure_reasons` chứa "memory_degraded", answer disclose. Khẳng định §4b: memory-read task disclose KỂ CẢ khi pack rỗng (case reviewer chỉ ra). |
+| Test                                               | Assert                                                                                                                                                                                                                                                               |
+| -------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `test_retrieve_called_before_plan`                 | spy memory_client → `retrieve_context_pack` gọi TRƯỚC `planner.make_plan`                                                                                                                                                                                            |
+| `test_degraded_pack_sets_state_flag`               | client trả `degraded=True` → `state.memory_degraded is True` sau run                                                                                                                                                                                                 |
+| `test_degraded_monotonic`                          | inject degraded rồi non-degraded (nếu có thể) → flag vẫn True (chỉ leo lên)                                                                                                                                                                                          |
+| `test_finalize_runs_once`                          | task qua FINISH tool → `_finalize_run` chạy đúng 1 lần (spy/counter), KHÔNG double-write, KHÔNG double-complete                                                                                                                                                      |
+| `test_finish_tool_does_not_complete_directly`      | sau FINISH, `state.complete` chỉ được gọi trong finalize (không trong execute loop)                                                                                                                                                                                  |
+| `test_write_after_finish`                          | task xong → `write_memory_candidates` gọi SAU compose, TRƯỚC complete                                                                                                                                                                                                |
+| `test_write_failure_not_fatal`                     | client.write raise → `state.memory_write_failed is True`, `status == COMPLETED`, answer vẫn trả                                                                                                                                                                      |
+| `test_disclosure_when_degraded_and_touches_memory` | degraded + plan dùng memory → `disclosure_reasons` chứa "memory_degraded", final answer có câu disclose                                                                                                                                                              |
+| `test_no_disclosure_when_not_degraded`             | non-degraded → `disclosure_reasons == []`, answer KHÔNG có disclose                                                                                                                                                                                                  |
+| `test_memory_client_none_no_crash`                 | `RuntimeAgent(memory_client=None)` → run OK, không retrieve/write, không raise                                                                                                                                                                                       |
+| `test_shared_store_no_split_brain`                 | tool ghi qua state.memory + client đọc qua retrieve → thấy cùng dữ liệu (cùng store reference)                                                                                                                                                                       |
+| `test_state_memory_is_shared_store`                | composition root truyền `shared_store` → `state.memory is shared_store` (cùng object, không phải default mới). Khẳng định QĐ-2 wiring đúng.                                                                                                                          |
+| `test_context_pack_is_field_not_slots`             | sau retrieve → `state.context_pack` là `ContextPack` (không phải `state.slots["context_pack"]`); `"context_pack" not in state.slots`                                                                                                                                 |
+| `test_no_import_cycle`                             | `import agent_core.state.agent_state` và `import agent_core.memory.contracts` cùng lúc → không raise (TYPE_CHECKING guard hoạt động)                                                                                                                                 |
+| `test_mutating_tool_runs_under_memory_degraded`    | memory_degraded=True (local) + plan có write_note (mutating) → write_note CHẠY (không bị deny). Khẳng định QĐ-4: memory_degraded KHÔNG chặn tool. Đây là test bảo vệ MVP-demo compound.                                                                              |
+| `test_retrieve_failure_fails_before_plan`          | memory_client.retrieve raise → `state.status == FAILED`, `planner.make_plan` KHÔNG được gọi (spy). Khẳng định: không plan với context lỗi (§3b).                                                                                                                     |
+| `test_append_disclosures_helper`                   | `append_disclosures("ans", [])` == "ans"; `append_disclosures("ans", ["memory_degraded"])` chứa "ans" + câu disclose. Deterministic, KHÔNG phải method FinalComposer.                                                                                                |
+| `test_disclose_on_recall_fail_empty_pack`          | degraded + plan có READ_NOTE/SEARCH_MEMORY + pack RỖNG (recall fail) → `disclosure_reasons` chứa "memory_degraded", answer disclose. Khẳng định §4b: memory-read task disclose KỂ CẢ khi pack rỗng (qua nhánh plan).                                                 |
+| `test_no_false_disclosure_calculate_with_items`    | degraded + plan CALCULATE thuần (KHÔNG memory action) + pack CÓ items (store có data) → `disclosure_reasons == []`, answer KHÔNG disclose. Khẳng định bug false-disclosure đã đóng: task không-memory KHÔNG disclose dù pack có items. **Test quan trọng nhất §4b.** |
 
-Chạy `pytest -q` full → 69 (P2) + 18 mới = **87 passed**. Dán raw.
+Chạy `pytest -q` full → 69 (P2) + 19 mới = **88 passed**. Dán raw.
 
 > **Quan trọng nhất:** `test_finalize_runs_once` + `test_finish_tool_does_not_complete_directly`
 > bảo vệ QĐ-1 (một completion authority). `test_shared_store_no_split_brain` bảo vệ QĐ-2.
@@ -422,9 +436,12 @@ Chạy `pytest -q` full → 69 (P2) + 18 mới = **87 passed**. Dán raw.
 
 - `python main.py` chạy lại 3 luồng cũ (web_search, calculate, compound) — vẫn đúng, giờ
   có retrieve trước plan + finalize. Dán output cả 3.
-- `pytest -q` → 87 passed; `import agent_core` OK
+- `pytest -q` → 88 passed; `import agent_core` OK
 - `state.context_pack` là field (QĐ-3); `import agent_core.memory.contracts` không gây cycle
 - finish-tool KHÔNG còn gọi `state.complete` trực tiếp (grep xác nhận)
+- **Global completion authority (QĐ-1):** `grep -Rns "state\.complete(" agent_core main.py`
+  — runtime production chỉ có MỘT call site trong `_finalize_run()`, ngoài định nghĩa
+  `AgentState.complete()` và test. Nhiều hơn một call site runtime = vi phạm QĐ-1.
 - Chạm: `runtime_agent.py`, `agent_state.py`, `final_composer.py`/helper `append_disclosures`,
   `main.py` (bootstrap wiring) (+ test). KHÔNG sửa `MemoryStoreProtocol`/`InMemoryStore`/`LocalMemoryClient`.
 
@@ -437,7 +454,7 @@ Chạy `pytest -q` full → 69 (P2) + 18 mới = **87 passed**. Dán raw.
 - Branch: p3-runtime-wiring
 - Files: <list>
 - What/Why: <2-4 câu>
-- pytest: <raw, 87 passed>
+- pytest: <raw, 88 passed>
 - Quyết định đã chốt: _collect_candidates trả [] (§4a)? xác nhận local write SYNC, KHÔNG hard-timeout (§3f)?
 - python main.py: <output 3 luồng>
 - Out-of-scope findings / Spec deviations: <...>

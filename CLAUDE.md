@@ -23,16 +23,16 @@ durable memory. Chi tiết: `SPEC_memory_client.md`.
 
 Các boundary này là hợp đồng. Vi phạm = từ chối / hỏi lại, không tự sửa.
 
-| Thành phần                      | Trách nhiệm                                                                                             | Cấm                                                                                 |
-| ------------------------------- | ------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
-| `AgentState`                    | Source of truth runtime của 1 task/session                                                              | Cấm biến thành durable-memory god object. Status chỉ đổi qua `fail()`/`complete()`. |
-| `IntentParser`                  | `goal: str → ParsedIntent`                                                                              | Cấm sinh plan. Cấm gọi tool.                                                        |
-| `IntentPlanner`                 | `ParsedIntent → list[Step]`                                                                             | Cấm parse raw text. Cấm gọi tool.                                                   |
-| `RuleBasedPlanner`              | Ghép parser → slot_validator → planner                                                                  | Cấm chứa logic parse hoặc execute.                                                  |
-| `ToolExecutor.execute()`        | **Cổng thực thi duy nhất**: resolve → validate → policy → approval → execute → validate result → record | Cấm bất kỳ nơi nào khác gọi `tool.fn`.                                              |
-| `PolicyEngine` / `ApprovalGate` | Chặn trước khi execute                                                                                  | Cấm bỏ qua. Side-effect tool **phải** qua approval.                                 |
-| `MemoryStoreProtocol`           | Persistence-level (write/get/search/...)                                                                | Cấm chứa logic domain (chọn memory nào promote).                                    |
-| `MemoryAgentProtocol`           | Domain-level (note/fact/preference/decision)                                                            | Cấm gọi vector/backend trực tiếp từ runtime.                                        |
+| Thành phần                      | Trách nhiệm                                                                                             | Cấm                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| ------------------------------- | ------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `AgentState`                    | Source of truth runtime của 1 task/session                                                              | Cấm biến thành durable-memory god object. Status chỉ đổi qua `fail()`/`complete()`.                                                                                                                                                                                                                                                                                                                                  |
+| `IntentParser`                  | `goal: str → ParsedIntent`                                                                              | Cấm sinh plan. Cấm gọi tool.                                                                                                                                                                                                                                                                                                                                                                                         |
+| `IntentPlanner`                 | `ParsedIntent → list[Step]`                                                                             | Cấm parse raw text. Cấm gọi tool.                                                                                                                                                                                                                                                                                                                                                                                    |
+| `RuleBasedPlanner`              | Ghép parser → slot_validator → planner                                                                  | Cấm chứa logic parse hoặc execute.                                                                                                                                                                                                                                                                                                                                                                                   |
+| `ToolExecutor.execute()`        | **Cổng thực thi duy nhất**: resolve → validate → policy → approval → execute → validate result → record | Cấm bất kỳ nơi nào khác gọi `tool.fn`.                                                                                                                                                                                                                                                                                                                                                                               |
+| `PolicyEngine` / `ApprovalGate` | Chặn trước khi execute                                                                                  | Cấm bỏ qua. Mọi tool đi qua PolicyEngine + ApprovalGate trước execute. Tool `requires_approval=True` phải được user approve trước khi `tool.fn` chạy. `mutates_state=True` **KHÔNG** tự động = cần approval (nó dùng cho read_only/risk classification); mutating low-risk nội bộ như `write_note` có thể không cần approval ở MVP. Mọi tool external/irreversible/high-impact phải phân loại + yêu cầu approval rõ. |
+| `MemoryStoreProtocol`           | Persistence-level (write/get/search/...)                                                                | Cấm chứa logic domain (chọn memory nào promote).                                                                                                                                                                                                                                                                                                                                                                     |
+| `MemoryAgentProtocol`           | Domain-level (note/fact/preference/decision)                                                            | Cấm gọi vector/backend trực tiếp từ runtime.                                                                                                                                                                                                                                                                                                                                                                         |
 
 **Quy tắc vàng:** _LLM hiểu ngôn ngữ; code kiểm soát hành vi._ Planner/runtime **không**
 được tự diễn giải "ok", "làm tiếp đi", "cái này". Không execute tool khi intent không
@@ -139,8 +139,10 @@ grep -rn "class SourceType"   agent_core/        # phải = 1 (ở enums.py)
   - `LocalMemoryClient` → bọc `InMemoryStore`/`FileStore` trong repo (fallback nhẹ, **degraded mode**).
 - Backend được **chốt lúc task khởi tạo** (binding-at-task-start). **Cấm đổi backend
   giữa run.** Remote chết giữa chừng → pause/fail an toàn, KHÔNG nhảy sang local.
-- Cờ `memory_degraded` **chỉ leo lên, không tụt xuống** trong một run. `FinalComposer`
-  phải disclose khi degraded có thể ảnh hưởng context/recall/an toàn hành động.
+- Cờ `memory_degraded` **chỉ leo lên, không tụt xuống** trong một run. Disclosure
+  **deterministic**: policy set `disclosure_reasons`, helper `append_disclosures()` thêm
+  fixed text khi reasons không rỗng. Policy quyết CÓ disclose + lý do; FinalComposer/model
+  KHÔNG tự quyết, KHÔNG tự sinh disclosure (KHÔNG mở rộng FinalComposer protocol).
 - `LocalMemoryClient` được coi là **degraded chỉ trong ngữ cảnh MVP-local** (backend
   fallback/demo, có thể không phản ánh state durable remote). Backend local durable
   tương lai có thể non-degraded — ngoài phạm vi MVP.
@@ -176,7 +178,8 @@ trong report và **hỏi**. Không tự khởi động.
 ## 8. Quy trình mỗi step (tóm tắt — chi tiết ở `BUILD_SPEC.md §0`)
 
 1. **Một step một lần.** Không nhảy bước.
-2. `git checkout -b step-N-description` trước khi sửa.
+2. Tạo branch theo tên chỉ định trong **active phase spec** (vd `p3-runtime-wiring`).
+   Nếu spec không chỉ định → `step-N-description`.
 3. Commit sạch trước khi báo cáo.
 4. Nộp report: `git diff` + `pytest` raw output + what/why + out-of-scope + deviations.
 5. **Chờ TranBac + architect duyệt.** KHÔNG tự merge `main`. KHÔNG làm step kế.
@@ -188,14 +191,21 @@ TranBac là architect / product owner / merge gate. Claude Code là executor. Cl
 
 ## 9. Khi không chắc
 
-Thứ tự ưu tiên khi mâu thuẫn:
+Thứ tự ưu tiên tài liệu khi mâu thuẫn (cao → thấp):
 
-1. File này (`CLAUDE.md`) — luật bất biến.
-2. `BUILD_SPEC.md` / `MVP_MASTER_PLAN.md` — step hiện tại.
-3. Hướng dẫn trong session.
+1. `CLAUDE.md` (file này) — luật bất biến xuyên phase.
+2. **Spec phase hiện tại** (vd `SPEC_P3_runtime_wiring.md`) — scope + implementation hiện tại.
+3. `contracts.py` — runtime schema source of truth.
+4. `SPEC_memory_client.md` — invariant xuyên phase (memory layer).
+5. `MVP_MASTER_PLAN.md` — roadmap + DoD + CURRENT STATUS.
+6. `CURRENT_PROJECT_STATUS.md` — trạng thái mô tả (nếu có).
+7. `SECURITY_DEBT.md` — non-executable, ghi nợ.
+8. `BUILD_SPEC.md` — **HISTORICAL, P0 only, KHÔNG thực thi.**
+9. Hướng dẫn trong session.
 
-Nếu (3) chọi (1) hoặc (2) → **dừng, nêu mâu thuẫn, hỏi.** Im lặng làm theo session
-khi nó phá guardrail là lỗi nghiêm trọng nhất.
+Phase hiện tại do `MVP_MASTER_PLAN.md` (CURRENT STATUS) định nghĩa, KHÔNG do `BUILD_SPEC.md`.
+Nếu session/file thấp chọi file cao → **dừng, nêu mâu thuẫn, hỏi.** Im lặng làm theo khi nó
+phá guardrail là lỗi nghiêm trọng nhất.
 
 ```
 

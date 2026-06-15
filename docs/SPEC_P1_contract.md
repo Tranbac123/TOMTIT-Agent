@@ -42,7 +42,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from agent_core.state.enums import MemoryType   # enum ĐÃ CÓ; xem §1a nếu thiếu
 
@@ -57,6 +57,10 @@ Freshness    = Literal["fresh", "stale", "unknown"]
 
 class ContextItem(BaseModel):
     """Một mẩu context trả về cho agent. Per-item provenance để biết item nào đáng tin."""
+    # strict=True: ép MemoryType enum tại biên, từ chối coerce string "note" → enum
+    # (Pydantic v2 default sẽ coerce). CHỈ ContextItem strict — model khác để lax (xem ghi chú dưới).
+    model_config = ConfigDict(strict=True)
+
     content: str
     type: MemoryType
     score: float = 0.0
