@@ -221,10 +221,10 @@ def test_write_failure_not_fatal():
 # ---------------------------------------------------------------------------
 
 def test_disclosure_when_degraded_and_touches_memory():
-    # Pack is degraded + has items → _task_touches_memory = True → disclose
+    # degraded + plan has WRITE_NOTE → _task_touches_memory = True → disclose
     spy_client = SpyMemoryClient(pack=_pack_with_items(degraded=True))
     agent = _make_agent(memory_client=spy_client)
-    state = AgentState(goal="Tính 2+2")
+    state = AgentState(goal="Tính (15+5)*3 rồi lưu vào ghi chú budget")
     agent.run(state)
 
     assert state.memory_degraded is True
@@ -428,3 +428,44 @@ def test_write_failure_no_disclosure_when_no_persistence():
     assert state.memory_write_failed is True
     assert "memory_write_failed" not in state.disclosure_reasons
     assert state.status == AgentStatus.COMPLETED
+
+
+# ---------------------------------------------------------------------------
+# 19. Regression: Calculate + seeded store → NO degraded disclosure (bug fix)
+# ---------------------------------------------------------------------------
+
+def test_no_disclosure_for_calculate_even_when_store_has_items():
+    # Bug (pre-fix): _task_touches_memory checked context_pack.items instead of plan.
+    # LocalMemoryClient returns full store → Calculate task got false disclosure when
+    # store was non-empty. After fix: disclosure is plan-based, not context-pack-based.
+    store = InMemoryStore()
+    store.write(MemoryRecord(content="unrelated note", type=MemoryType.NOTE))
+
+    memory_client = LocalMemoryClient(store)
+    agent = _make_agent(memory_client=memory_client)
+    state = AgentState(goal="Tính 2+2", memory=store)
+    agent.run(state)
+
+    # store has items → context_pack.items is non-empty
+    assert state.context_pack is not None
+    assert len(state.context_pack.items) > 0
+    # BUT plan has no memory action → no disclosure
+    assert "memory_degraded" not in state.disclosure_reasons
+    assert state.status == AgentStatus.COMPLETED
+
+
+# ---------------------------------------------------------------------------
+# 20. Disclosure for READ_NOTE goal (plan-based, not context-pack-based)
+# ---------------------------------------------------------------------------
+
+def test_disclosure_when_plan_has_read_note():
+    # read_note goal → plan has READ_NOTE → _MEMORY_PLAN_ACTIONS → disclose if degraded
+    store = InMemoryStore()
+    store.write_note("budget", "60.0")
+    memory_client = LocalMemoryClient(store)
+    agent = _make_agent(memory_client=memory_client)
+    state = AgentState(goal="Đọc ghi chú budget", memory=store)
+    agent.run(state)
+
+    assert state.memory_degraded is True          # local always degraded
+    assert "memory_degraded" in state.disclosure_reasons

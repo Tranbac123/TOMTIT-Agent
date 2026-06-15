@@ -18,13 +18,18 @@ from agent_core.tools.executor import ToolExecutor
 
 _logger = logging.getLogger(__name__)
 
-# Actions that indicate the user expects durable persistence.
+# Actions that indicate the user expects durable persistence (write path).
 _MEMORY_ACTIONS = frozenset({
     ToolName.WRITE_NOTE,
     ToolName.SAVE_FACT,
     ToolName.SAVE_PREFERENCE,
     ToolName.SAVE_DECISION,
 })
+
+# All plan actions that touch memory (read OR write) — used for degraded disclosure.
+# context_pack.items is NOT a reliable signal: LocalMemoryClient returns the full store
+# regardless of goal, so any seeded store would trigger disclosure for pure-calculate tasks.
+_MEMORY_PLAN_ACTIONS = _MEMORY_ACTIONS | frozenset({ToolName.READ_NOTE})
 
 _DISCLOSURE_TEXT: dict[str, str] = {
     "memory_degraded": (
@@ -273,8 +278,11 @@ class RuntimeAgent:
                 state.disclosure_reasons.append("memory_write_failed")
 
     def _task_touches_memory(self, state: AgentState) -> bool:
-        """True if context_pack has items (agent actually used retrieved context)."""
-        return state.context_pack is not None and bool(state.context_pack.items)
+        """True if the plan has any memory read/write step — disclosure is meaningful only
+        when the task itself depends on memory. Checking context_pack.items is wrong:
+        LocalMemoryClient returns the full store regardless of goal, so a seeded store
+        would trigger disclosure for pure-calculate tasks that never touch memory."""
+        return any(step.action in _MEMORY_PLAN_ACTIONS for step in state.plan)
 
     def _user_expected_persistence(self, state: AgentState) -> bool:
         """True if plan contains a memory-writing step (user expected data to be saved)."""
