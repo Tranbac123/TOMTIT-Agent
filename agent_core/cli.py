@@ -22,6 +22,21 @@ def run_interactive(
         if should_exit(user_input):
             output_fn("Phiên kết thúc.")
             break
+        stripped = user_input.strip()
+        if stripped == "/status":                   # meta-command — chặn trước handle_turn
+            view = session.get_status()
+            output_fn(f"[status] turns={view.turn_count} last={view.last_status}")
+            continue
+        if stripped == "/history":
+            history = session.get_history()
+            if not history:
+                output_fn("[history] no turns")
+            else:
+                for rec in history:
+                    output_fn(
+                        f"[{rec.completed_at.isoformat()}] {rec.goal} -> {rec.status.value}"
+                    )
+            continue
         result = session.handle_turn(user_input)
         output_fn(result.final_answer)
     # unexpected exceptions from handle_turn propagate — NOT caught here
