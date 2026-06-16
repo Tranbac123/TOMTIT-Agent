@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import pytest
+
 from agent_core.cli import run_interactive, should_exit
 from agent_core.memory.contracts import ContextPack, WriteResponse
 from agent_core.memory.in_memory_store import InMemoryStore
 from agent_core.runtime.runtime_agent import RuntimeAgent, build_local_agent
 from agent_core.runtime.session_runtime import SessionRuntime
+from agent_core.state.agent_state import AgentState, Step
+from agent_core.state.enums import AgentStatus, ToolName
 
 
 def _make_session() -> SessionRuntime:
@@ -280,3 +284,290 @@ def test_cli_does_not_swallow_unexpected_exception():
             input_fn=lambda _: "hello",
             output_fn=output_lines.append,
         )
+
+
+# ===========================================================================
+# SR2 tests — S1–S20
+# FakeAgent contract: mutate-and-return-injected-state (never return a different object)
+# ===========================================================================
+
+class _FakeAgent:
+    """FakeAgent that applies mutate_fn to the injected state and returns it."""
+
+    def __init__(self, mutate_fn):
+        self._mutate = mutate_fn
+
+    def run(self, state: AgentState) -> AgentState:
+        self._mutate(state)
+        return state   # return the SAME object SessionRuntime injected
+
+
+def _make_fake_session(mutate_fn) -> SessionRuntime:
+    store = InMemoryStore()
+    return SessionRuntime(_FakeAgent(mutate_fn), store)
+
+
+def _completed_mutate(state: AgentState) -> None:
+    state.status = AgentStatus.COMPLETED
+    state.done = True
+    state.final_answer = "ok"
+
+
+# ---------------------------------------------------------------------------
+# S1 — handle_turn appends one record; goal matches; completed_at is tz-aware
+# ---------------------------------------------------------------------------
+
+def test_handle_turn_appends_one_record():
+    session = _make_fake_session(_completed_mutate)
+    session.handle_turn("my goal")
+
+    history = session.get_history()
+    assert len(history) == 1
+    assert history[0].goal == "my goal"
+    assert history[0].completed_at.tzinfo is not None   # timezone-aware UTC
+
+
+# ---------------------------------------------------------------------------
+# S2 — records accumulate in order; completed_at non-decreasing
+# ---------------------------------------------------------------------------
+
+def test_history_records_accumulate_in_order():
+    session = _make_fake_session(_completed_mutate)
+    session.handle_turn("turn A")
+    session.handle_turn("turn B")
+    session.handle_turn("turn C")
+
+    history = session.get_history(limit=100)
+    assert len(history) == 3
+    assert history[0].goal == "turn A"
+    assert history[1].goal == "turn B"
+    assert history[2].goal == "turn C"
+    assert history[0].completed_at <= history[1].completed_at <= history[2].completed_at
+
+
+# ---------------------------------------------------------------------------
+# S5 — planned_actions = full plan tuple (not filtered by max_steps or execution)
+# ---------------------------------------------------------------------------
+
+def test_planned_actions_is_full_plan_not_executed():
+    def mutate(state: AgentState) -> None:
+        state.plan = [
+            Step(thought="calc", action=ToolName.CALCULATE),
+            Step(thought="note", action=ToolName.WRITE_NOTE),
+        ]
+        state.status = AgentStatus.COMPLETED
+        state.done = True
+        state.final_answer = "done"
+
+    session = _make_fake_session(mutate)
+    session.handle_turn("two-step goal")
+
+    record = session.get_history()[0]
+    assert record.planned_actions == (ToolName.CALCULATE.value, ToolName.WRITE_NOTE.value)
+
+
+# ---------------------------------------------------------------------------
+# S6 — run() raising does NOT append a record; exception propagates
+# ---------------------------------------------------------------------------
+
+def test_run_raises_does_not_append_and_propagates():
+    class _RaisingAgent:
+        def run(self, state: AgentState) -> AgentState:
+            raise RuntimeError("boom")
+
+    session = SessionRuntime(_RaisingAgent(), InMemoryStore())
+
+    with pytest.raises(RuntimeError, match="boom"):
+        session.handle_turn("anything")
+
+    assert len(session.get_history()) == 0
+
+
+# ---------------------------------------------------------------------------
+# S7 — non-terminal state from run() raises RuntimeError, does NOT append
+# ---------------------------------------------------------------------------
+
+def test_non_terminal_state_raises_runtimeerror():
+    def mutate(state: AgentState) -> None:
+        state.final_answer = "partial"
+        # status stays CREATED (not terminal)
+
+    session = _make_fake_session(mutate)
+
+    with pytest.raises(RuntimeError, match="non-terminal"):
+        session.handle_turn("anything")
+
+    assert len(session.get_history()) == 0
+
+
+# ---------------------------------------------------------------------------
+# S8 — FAILED turn is recorded; record.final_answer is None (no raw error leak)
+# ---------------------------------------------------------------------------
+
+def test_failed_turn_is_recorded_with_null_answer():
+    def mutate(state: AgentState) -> None:
+        state.status = AgentStatus.FAILED
+        state.done = True
+        state.final_answer = "Tool error: internal secret details"
+
+    session = _make_fake_session(mutate)
+    session.handle_turn("failing goal")
+
+    history = session.get_history()
+    assert len(history) == 1
+    record = history[0]
+    assert record.status == AgentStatus.FAILED
+    assert record.final_answer is None
+
+
+# ---------------------------------------------------------------------------
+# S13 — /status goes to get_status, NOT handle_turn
+# ---------------------------------------------------------------------------
+
+class _SpySession:
+    def __init__(self, inner: SessionRuntime) -> None:
+        self._inner = inner
+        self.handle_turn_calls: list[str] = []
+        self.get_status_calls: int = 0
+        self.get_history_calls: int = 0
+
+    @property
+    def session_id(self) -> str:
+        return self._inner.session_id
+
+    def handle_turn(self, msg: str) -> AgentState:
+        self.handle_turn_calls.append(msg)
+        return self._inner.handle_turn(msg)
+
+    def get_status(self):
+        self.get_status_calls += 1
+        return self._inner.get_status()
+
+    def get_history(self, *, limit: int = 10):
+        self.get_history_calls += 1
+        return self._inner.get_history(limit=limit)
+
+
+def test_cli_status_command_not_sent_to_handle_turn():
+    spy = _SpySession(_make_fake_session(_completed_mutate))
+    inputs = iter(["/status", "/exit"])
+
+    run_interactive(spy, input_fn=lambda _: next(inputs), output_fn=lambda _: None)
+
+    assert spy.handle_turn_calls == []
+    assert spy.get_status_calls == 1
+
+
+# ---------------------------------------------------------------------------
+# S14 — /history goes to get_history, NOT handle_turn; empty → [history] no turns
+# ---------------------------------------------------------------------------
+
+def test_cli_history_command_not_sent_to_handle_turn():
+    spy = _SpySession(_make_fake_session(_completed_mutate))
+    inputs = iter(["/history", "/exit"])
+    output_lines: list[str] = []
+
+    run_interactive(spy, input_fn=lambda _: next(inputs), output_fn=output_lines.append)
+
+    assert spy.handle_turn_calls == []
+    assert spy.get_history_calls == 1
+    assert any("[history] no turns" in line for line in output_lines)
+
+
+# ---------------------------------------------------------------------------
+# S15 — disclosure_reasons snapshotted directly, not re-derived from state signals
+#        COUNTERFACTUAL: degraded=False + non-memory plan → re-derive would give ().
+#        Record must keep the value that was actually set on state.disclosure_reasons.
+# ---------------------------------------------------------------------------
+
+def test_disclosure_reasons_snapshotted_not_derived():
+    def mutate(state: AgentState) -> None:
+        state.status = AgentStatus.COMPLETED
+        state.done = True
+        state.final_answer = "ok"
+        state.memory_degraded = False        # re-derive condition is False
+        state.memory_write_failed = False
+        state.plan = [Step(thought="t", action=ToolName.CALCULATE)]  # non-memory tool
+        state.disclosure_reasons = ["memory_degraded"]   # set directly — counterfactual
+
+    session = _make_fake_session(mutate)
+    session.handle_turn("some goal")
+
+    record = session.get_history()[0]
+    assert record.disclosure_reasons == ("memory_degraded",)
+
+
+# ---------------------------------------------------------------------------
+# S16 — memory_write_failed captured as-is from state (signal gốc)
+# ---------------------------------------------------------------------------
+
+def test_memory_write_failed_is_captured():
+    def mutate(state: AgentState) -> None:
+        state.status = AgentStatus.COMPLETED
+        state.done = True
+        state.final_answer = "ok"
+        state.memory_write_failed = True
+
+    session = _make_fake_session(mutate)
+    session.handle_turn("any goal")
+
+    record = session.get_history()[0]
+    assert record.memory_write_failed is True
+
+
+# ---------------------------------------------------------------------------
+# S18 — TurnRecord is immutable snapshot: mutating AgentState after handle_turn
+#        does not change the record (capture-then-assert-equality)
+# ---------------------------------------------------------------------------
+
+def test_snapshot_immutable_when_state_mutated_after():
+    def mutate(state: AgentState) -> None:
+        state.status = AgentStatus.COMPLETED
+        state.done = True
+        state.final_answer = "original answer"
+        state.plan = [Step(thought="t", action=ToolName.CALCULATE)]
+        state.disclosure_reasons = ["memory_degraded"]
+
+    session = _make_fake_session(mutate)
+    state = session.handle_turn("immutability goal")
+    record = session.get_history()[0]
+
+    # Capture before mutation (these must be non-empty per spec)
+    orig_answer = record.final_answer           # "original answer"
+    orig_disc = record.disclosure_reasons       # ("memory_degraded",) — non-empty
+    orig_actions = record.planned_actions       # ("calculate",) — non-empty
+
+    assert orig_disc != ()      # guard: non-empty before mutate
+    assert orig_actions != ()   # guard: non-empty before mutate
+
+    # Mutate AgentState after snapshot
+    state.final_answer = "changed"
+    state.disclosure_reasons.append("changed")
+    state.plan.clear()
+
+    # Record must retain original values (copy-by-value, not reference)
+    assert record.final_answer == orig_answer
+    assert record.disclosure_reasons == orig_disc
+    assert record.planned_actions == orig_actions
+
+
+# ---------------------------------------------------------------------------
+# S20 — FAILED turn: raw exception text (sentinel) does NOT appear in any record field
+# ---------------------------------------------------------------------------
+
+def test_failed_turn_does_not_snapshot_raw_error_text():
+    sentinel = "Tool error: https://secret-host/x failed"
+
+    def mutate(state: AgentState) -> None:
+        state.status = AgentStatus.FAILED
+        state.done = True
+        state.final_answer = sentinel   # raw exception text in final_answer
+
+    session = _make_fake_session(mutate)
+    session.handle_turn("normal goal")
+
+    record = session.get_history()[0]
+    assert record.final_answer is None
+    assert sentinel not in record.goal
+    assert not any(sentinel in a for a in record.planned_actions)
+    assert not any(sentinel in r for r in record.disclosure_reasons)
