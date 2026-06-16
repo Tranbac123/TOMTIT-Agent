@@ -201,3 +201,82 @@ def test_import_main_does_not_start_cli():
         cli_spy.assert_not_called()
     finally:
         sys.modules.pop("main", None)
+
+
+# ---------------------------------------------------------------------------
+# T11 — collection isolation: plan/errors/observations/slots are not shared
+# ---------------------------------------------------------------------------
+
+def test_task_state_collections_are_isolated_between_turns():
+    session = _make_session()
+
+    state1 = session.handle_turn("Tính 1+1")
+
+    assert state1.plan is not None
+    state1.slots["__turn_1_sentinel__"] = True
+
+    state2 = session.handle_turn("Tính 2+2")
+
+    assert state1.plan is not state2.plan
+    assert state1.errors is not state2.errors
+    assert state1.observations is not state2.observations
+    assert state1.slots is not state2.slots
+    assert "__turn_1_sentinel__" not in state2.slots
+
+
+# ---------------------------------------------------------------------------
+# T12 — exact shared-store identity: both turns receive the same store object
+# ---------------------------------------------------------------------------
+
+def test_both_turns_share_exact_store_reference():
+    agent, store = build_local_agent()
+    session = SessionRuntime(agent=agent, store=store)
+
+    state1 = session.handle_turn("Tính 1+1")
+    state2 = session.handle_turn("Tính 2+2")
+
+    assert state1.memory is store
+    assert state2.memory is store
+
+
+# ---------------------------------------------------------------------------
+# T13 — KeyboardInterrupt exits cleanly
+# ---------------------------------------------------------------------------
+
+def test_cli_exits_cleanly_on_keyboard_interrupt():
+    session = _make_session()
+    output_lines: list[str] = []
+
+    def raise_keyboard_interrupt(_):
+        raise KeyboardInterrupt
+
+    run_interactive(
+        session,
+        input_fn=raise_keyboard_interrupt,
+        output_fn=output_lines.append,
+    )
+
+    assert any("Phiên kết thúc" in line for line in output_lines)
+
+
+# ---------------------------------------------------------------------------
+# T14 — unexpected RuntimeError from handle_turn propagates, not swallowed
+# ---------------------------------------------------------------------------
+
+def test_cli_does_not_swallow_unexpected_exception():
+    import pytest
+
+    class FailingSession:
+        session_id = "fake-session-id"
+
+        def handle_turn(self, user_message: str):
+            raise RuntimeError("unexpected internal error")
+
+    output_lines: list[str] = []
+
+    with pytest.raises(RuntimeError):
+        run_interactive(
+            session=FailingSession(),
+            input_fn=lambda _: "hello",
+            output_fn=output_lines.append,
+        )
