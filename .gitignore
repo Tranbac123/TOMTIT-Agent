@@ -162,3 +162,6 @@ profiles/
 *.backup
 *.tmp
 *.old
+
+# docs
+/docs/
