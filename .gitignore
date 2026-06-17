@@ -142,6 +142,7 @@ Thumbs.db
 # Cursor / local AI editor files
 .cursor/
 .cursorignore.local
+.claude/
 
 # Test / local reports
 reports/
