@@ -91,8 +91,8 @@ class SessionSerializer:
                         f"expected {expected_canonical!r}"
                     )
 
-            created_at = cls._parse_aware_dt(data["created_at"], "created_at")
-            updated_at = cls._parse_aware_dt(data["updated_at"], "updated_at")
+            created_at = cls._parse_dt(data["created_at"], "created_at")
+            updated_at = cls._parse_dt(data["updated_at"], "updated_at")
 
             if not isinstance(data["turns"], list):
                 raise SessionDataCorruptionError(
@@ -233,7 +233,7 @@ class SessionSerializer:
                 "disclosure_reasons must be a list of str"
             )
 
-        completed_at = cls._parse_aware_dt(data["completed_at"], "completed_at")
+        completed_at = cls._parse_dt(data["completed_at"], "completed_at")
 
         return TurnRecord(
             task_id=task_id,
@@ -280,8 +280,8 @@ class SessionSerializer:
         return value
 
     @staticmethod
-    def _parse_aware_dt(value: object, field_name: str = "") -> datetime:
-        """Parse ISO string to UTC-aware datetime. Naive strings get UTC attached."""
+    def _parse_dt(value: object, field_name: str = "") -> datetime:
+        """Parse ISO string to timezone-aware datetime. Naive strings are rejected."""
         if not isinstance(value, str):
             raise SessionDataCorruptionError(
                 f"{field_name} must be a str (ISO datetime), got {type(value).__name__}"
@@ -292,8 +292,10 @@ class SessionSerializer:
             raise SessionDataCorruptionError(
                 f"{field_name} is not a valid ISO datetime: {value!r}"
             ) from exc
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
+        if dt.tzinfo is None or dt.utcoffset() is None:
+            raise SessionDataCorruptionError(
+                f"{field_name} must be timezone-aware (got naive datetime string: {value!r})"
+            )
         return dt
 
     @staticmethod
@@ -303,3 +305,10 @@ class SessionSerializer:
                 f"updated_at ({session.updated_at.isoformat()}) must be >= "
                 f"created_at ({session.created_at.isoformat()})"
             )
+        if session.turns:
+            last_completed_at = session.turns[-1].completed_at
+            if session.updated_at != last_completed_at:
+                raise SessionDataCorruptionError(
+                    f"updated_at ({session.updated_at.isoformat()}) must equal "
+                    f"turns[-1].completed_at ({last_completed_at.isoformat()})"
+                )

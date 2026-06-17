@@ -418,3 +418,25 @@ def test_secure_dir_permissions_allowed(tmp_path):
     store = FileSessionStore(session_dir)
     result = store.load(str(uuid4()))  # no session exists → None, no error
     assert result is None
+
+
+# ---------------------------------------------------------------------------
+# Parent-dir fsync propagation
+# ---------------------------------------------------------------------------
+
+def test_parent_fsync_does_not_swallow_programming_error(tmp_path):
+    """TypeError from fsync_fn during parent-dir sync propagates (not caught by
+    best-effort handler which only catches OSError/NotImplementedError)."""
+    session_dir = tmp_path / "sessions"
+    calls: list[int] = []
+
+    def selective_fsync(fd: int) -> None:
+        calls.append(fd)
+        if len(calls) == 1:
+            os.fsync(fd)          # first call: temp-file fsync — succeed
+        else:
+            raise TypeError("programming error in parent fsync")
+
+    store = FileSessionStore(session_dir, fsync_fn=selective_fsync)
+    with pytest.raises(TypeError, match="programming error"):
+        store.save(_make_session())

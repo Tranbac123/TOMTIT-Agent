@@ -37,7 +37,7 @@ def _noop_interactive(session) -> None:
 
 def test_main_new_session_starts_without_error(tmp_path, monkeypatch):
     """No --session-id → create fresh session, run_interactive called."""
-    monkeypatch.setattr(sys, "argv", ["main", "--session-db", str(tmp_path)])
+    monkeypatch.setattr(sys, "argv", ["main", "--session-dir", str(tmp_path)])
     monkeypatch.setattr("main.run_interactive", _noop_interactive)
 
     import main as m
@@ -57,7 +57,7 @@ def test_main_resume_session_loads_correct_id(tmp_path, monkeypatch):
         seen_ids.append(session.session_id)
 
     monkeypatch.setattr(sys, "argv", [
-        "main", "--session-id", existing.session_id, "--session-db", str(tmp_path)
+        "main", "--session-id", existing.session_id, "--session-dir", str(tmp_path)
     ])
     monkeypatch.setattr("main.run_interactive", capture)
 
@@ -70,7 +70,7 @@ def test_main_resume_session_loads_correct_id(tmp_path, monkeypatch):
 def test_main_session_not_found_exits_2(tmp_path, monkeypatch, capsys):
     """--session-id for non-existent session → sys.exit(2)."""
     monkeypatch.setattr(sys, "argv", [
-        "main", "--session-id", str(uuid4()), "--session-db", str(tmp_path)
+        "main", "--session-id", str(uuid4()), "--session-dir", str(tmp_path)
     ])
 
     with pytest.raises(SystemExit) as exc_info:
@@ -89,7 +89,7 @@ def test_main_boundary1_session_corruption_exits_2(tmp_path, monkeypatch, capsys
     )
 
     monkeypatch.setattr(sys, "argv", [
-        "main", "--session-id", session_id, "--session-db", str(tmp_path)
+        "main", "--session-id", session_id, "--session-dir", str(tmp_path)
     ])
 
     with pytest.raises(SystemExit) as exc_info:
@@ -112,7 +112,7 @@ def test_main_boundary1_persistence_error_exits_1(tmp_path, monkeypatch, capsys)
 
     monkeypatch.setattr("main.FileSessionStore", _BrokenStore)
     monkeypatch.setattr(sys, "argv", [
-        "main", "--session-id", str(uuid4()), "--session-db", str(tmp_path)
+        "main", "--session-id", str(uuid4()), "--session-dir", str(tmp_path)
     ])
 
     with pytest.raises(SystemExit) as exc_info:
@@ -135,7 +135,7 @@ def test_main_boundary1_message_says_create_load(tmp_path, monkeypatch, capsys):
 
     monkeypatch.setattr("main.FileSessionStore", _BrokenStore)
     monkeypatch.setattr(sys, "argv", [
-        "main", "--session-id", str(uuid4()), "--session-db", str(tmp_path)
+        "main", "--session-id", str(uuid4()), "--session-dir", str(tmp_path)
     ])
 
     with pytest.raises(SystemExit):
@@ -153,7 +153,7 @@ def test_main_boundary1_message_says_create_load(tmp_path, monkeypatch, capsys):
 def test_main_run_session_corruption_exits_1_no_retry(tmp_path, monkeypatch, capsys):
     """RÀNG BUỘC APPROVAL: SessionDataCorruptionError from run → exit 1 with
     'Do not retry automatically' (BOUNDARY 2)."""
-    monkeypatch.setattr(sys, "argv", ["main", "--session-db", str(tmp_path)])
+    monkeypatch.setattr(sys, "argv", ["main", "--session-dir", str(tmp_path)])
 
     def raise_corruption(session) -> None:
         raise SessionDataCorruptionError("corrupt during run")
@@ -171,7 +171,7 @@ def test_main_run_session_corruption_exits_1_no_retry(tmp_path, monkeypatch, cap
 
 def test_main_boundary2_persistence_error_exits_1(tmp_path, monkeypatch, capsys):
     """SessionPersistenceError from run → exit 1 (BOUNDARY 2)."""
-    monkeypatch.setattr(sys, "argv", ["main", "--session-db", str(tmp_path)])
+    monkeypatch.setattr(sys, "argv", ["main", "--session-dir", str(tmp_path)])
 
     def raise_persistence(session) -> None:
         raise SessionPersistenceError("persist failed during run")
@@ -187,7 +187,7 @@ def test_main_boundary2_persistence_error_exits_1(tmp_path, monkeypatch, capsys)
 
 def test_main_boundary2_message_says_do_not_retry(tmp_path, monkeypatch, capsys):
     """BOUNDARY 2 message instructs user not to retry automatically."""
-    monkeypatch.setattr(sys, "argv", ["main", "--session-db", str(tmp_path)])
+    monkeypatch.setattr(sys, "argv", ["main", "--session-dir", str(tmp_path)])
 
     def raise_persistence(session) -> None:
         raise SessionPersistenceError("disk full")
@@ -205,7 +205,7 @@ def test_main_boundary2_message_says_do_not_retry(tmp_path, monkeypatch, capsys)
 
 def test_main_unexpected_exception_propagates(tmp_path, monkeypatch):
     """Unexpected exception from run propagates (NOT caught by BOUNDARY 2)."""
-    monkeypatch.setattr(sys, "argv", ["main", "--session-db", str(tmp_path)])
+    monkeypatch.setattr(sys, "argv", ["main", "--session-dir", str(tmp_path)])
 
     def raise_unexpected(session) -> None:
         raise RuntimeError("unexpected crash!")
@@ -224,7 +224,7 @@ def test_main_unexpected_exception_propagates(tmp_path, monkeypatch):
 def test_main_new_session_creates_file_on_disk(tmp_path, monkeypatch):
     """After a no-op run, the new session JSON file is created on disk."""
     session_dir = tmp_path / "sessions"
-    monkeypatch.setattr(sys, "argv", ["main", "--session-db", str(session_dir)])
+    monkeypatch.setattr(sys, "argv", ["main", "--session-dir", str(session_dir)])
 
     # run_interactive does nothing — SessionRuntime constructor runs and
     # save is only called on handle_turn. So no file yet... unless we force one.
@@ -242,3 +242,32 @@ def test_main_new_session_creates_file_on_disk(tmp_path, monkeypatch):
 
     assert len(seen) == 1
     assert len(seen[0]) == 36  # valid UUID4 string length
+
+
+# ---------------------------------------------------------------------------
+# UUID format validation — before composition
+# ---------------------------------------------------------------------------
+
+def test_main_invalid_uuid_exits_2_without_composition_or_file(tmp_path, monkeypatch, capsys):
+    """Invalid UUID in --session-id → exit 2, build_local_agent not called,
+    no session file created on disk."""
+    import main as m
+
+    build_was_called: list[bool] = []
+
+    def recording_build():
+        build_was_called.append(True)
+        from agent_core.runtime.runtime_agent import build_local_agent as _real
+        return _real()
+
+    monkeypatch.setattr(m, "build_local_agent", recording_build)
+    monkeypatch.setattr(sys, "argv", [
+        "main", "--session-id", "not-valid-uuid-at-all", "--session-dir", str(tmp_path)
+    ])
+
+    with pytest.raises(SystemExit) as exc_info:
+        m.main()
+
+    assert exc_info.value.code == 2
+    assert build_was_called == []
+    assert list(tmp_path.glob("*.json")) == []

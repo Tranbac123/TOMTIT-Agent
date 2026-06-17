@@ -692,6 +692,42 @@ def test_session_runtime_without_store_accumulates_in_memory():
 # SR3-F — store called once per turn, accumulates across turns
 # ---------------------------------------------------------------------------
 
+def test_no_auto_retry_on_persistence_failure():
+    """On persistence failure: agent ran exactly once, save attempted exactly once,
+    live session history unchanged — no silent retry."""
+    run_calls: list[int] = []
+    save_calls: list[int] = []
+
+    class _CountingAgent:
+        def run(self, state: AgentState) -> AgentState:
+            run_calls.append(1)
+            _completed_mutate(state)
+            return state
+
+    class _CountingFailStore:
+        def save(self, session) -> None:
+            save_calls.append(1)
+            raise _SPError("disk full")
+
+        def load(self, session_id: str):
+            return None
+
+    session_state = _make_fresh_session_state()
+    sr = SessionRuntime(
+        _CountingAgent(),
+        InMemoryStore(),
+        session=session_state,
+        session_store=_CountingFailStore(),
+    )
+
+    with pytest.raises(_SPError):
+        sr.handle_turn("hello")
+
+    assert len(run_calls) == 1
+    assert len(save_calls) == 1
+    assert len(sr.get_history()) == 0
+
+
 def test_session_store_called_once_per_turn():
     """store.save() is called exactly once per handle_turn call."""
     session_state = _make_fresh_session_state()

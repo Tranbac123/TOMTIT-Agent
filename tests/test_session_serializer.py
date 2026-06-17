@@ -150,13 +150,12 @@ def test_multiple_turns_preserved_in_order():
     assert [t.goal for t in ss2.turns] == ["first", "second", "third"]
 
 
-def test_naive_datetime_string_gets_utc_attached():
+def test_naive_datetime_string_raises_corruption_error():
     ss = _make_session()
     d = SessionSerializer.to_dict(ss)
-    # Replace created_at with a naive ISO string
-    d["created_at"] = "2026-01-01T12:00:00"  # no offset
-    ss2 = SessionSerializer.from_dict(d)
-    assert ss2.created_at.tzinfo is not None
+    d["created_at"] = "2026-01-01T12:00:00"  # no offset — must be rejected
+    with pytest.raises(SessionDataCorruptionError):
+        SessionSerializer.from_dict(d)
 
 
 # ---------------------------------------------------------------------------
@@ -325,3 +324,46 @@ def test_require_aware_accepts_utc_datetime():
     aware = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
     result = SessionSerializer._require_aware(aware, "field")
     assert result is aware
+
+
+# ---------------------------------------------------------------------------
+# New invariant: non-empty turns → updated_at == turns[-1].completed_at
+# ---------------------------------------------------------------------------
+
+def test_load_rejects_inconsistent_updated_at():
+    """Non-empty turns: updated_at != turns[-1].completed_at → CorruptionError."""
+    ss = _make_session()
+    turn = _make_turn()
+    ss.turns.append(turn)
+    ss.updated_at = turn.completed_at  # correct at serialization time
+    d = SessionSerializer.to_dict(ss)
+    # Mismatch: set updated_at to something other than turn.completed_at
+    d["updated_at"] = "2030-01-01T00:00:00+00:00"
+    with pytest.raises(SessionDataCorruptionError, match="updated_at"):
+        SessionSerializer.from_dict(d)
+
+
+def test_round_trip_preserves_order_with_equal_or_descending_timestamps():
+    """Array position is authoritative; round-trip preserves insertion order
+    even when all turns share the same completed_at timestamp."""
+    now = _now()
+    ss = SessionState(session_id=str(uuid4()), created_at=now, updated_at=now)
+    for goal in ("first", "second", "third"):
+        t = TurnRecord(
+            task_id=str(uuid4()),
+            goal=goal,
+            final_answer="ok",
+            status=AgentStatus.COMPLETED,
+            planned_actions=(),
+            memory_degraded=False,
+            memory_write_failed=False,
+            disclosure_reasons=(),
+            completed_at=now,  # all same timestamp — order must come from array
+        )
+        ss.turns.append(t)
+    ss.updated_at = now  # == turns[-1].completed_at ✓
+
+    d = SessionSerializer.to_dict(ss)
+    ss2 = SessionSerializer.from_dict(d)
+
+    assert [t.goal for t in ss2.turns] == ["first", "second", "third"]

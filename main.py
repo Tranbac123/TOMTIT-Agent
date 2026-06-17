@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 import sys
 from datetime import datetime, timezone
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from agent_core.cli import run_interactive
 from agent_core.runtime.runtime_agent import build_local_agent
@@ -26,15 +26,23 @@ def main() -> None:
         help="resume an existing session by ID",
     )
     parser.add_argument(
-        "--session-db",
+        "--session-dir",
         default=".agent/sessions",
         metavar="PATH",
         help="directory for session files (default: .agent/sessions)",
     )
     args = parser.parse_args()
 
+    # Validate session_id format before expensive composition
+    if args.session_id is not None:
+        try:
+            UUID(args.session_id)
+        except ValueError:
+            print(f"Invalid session ID: {args.session_id!r}", file=sys.stderr)
+            sys.exit(2)
+
     agent, store = build_local_agent()
-    session_store = FileSessionStore(args.session_db)
+    session_store = FileSessionStore(args.session_dir)
 
     # BOUNDARY 1 — create or load session (before task)
     try:
@@ -42,7 +50,7 @@ def main() -> None:
             loaded = session_store.load(args.session_id)
             if loaded is None:
                 raise SessionNotFoundError(
-                    f"Session '{args.session_id}' not found in {args.session_db!r}"
+                    f"Session '{args.session_id}' not found in {args.session_dir!r}"
                 )
             session_state = loaded
         else:
