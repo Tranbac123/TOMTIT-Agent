@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import dataclasses
 from datetime import datetime, timezone
+from typing import TYPE_CHECKING
 from uuid import uuid4
 
 from agent_core.memory.base import MemoryStoreProtocol
@@ -9,23 +11,49 @@ from agent_core.state.agent_state import AgentState
 from agent_core.state.enums import AgentStatus
 from agent_core.state.session_state import SessionState, SessionStatusView, TurnRecord
 
+if TYPE_CHECKING:
+    from agent_core.session_persistence.base import SessionStoreProtocol
+
 
 class SessionRuntime:
     """Manages a multi-turn session over a shared store.
 
     Precondition: agent + store must come from the same composition root (QĐ-2).
     SessionRuntime does NOT enforce this via reflection — caller's responsibility.
+
+    Persistence contract:
+      - Without session_store: turns accumulate in-memory only (SR1/SR2 behaviour).
+      - With session_store: caller MUST pass an explicit session object.
+        Violation → ValueError (programming error, caught at startup, not at runtime).
+      - handle_turn persists a candidate session BEFORE mutating the live session.
+        If save() raises, the live session is NOT mutated (fail-closed for history).
     """
 
-    def __init__(self, agent: RuntimeAgent, store: MemoryStoreProtocol) -> None:
+    def __init__(
+        self,
+        agent: RuntimeAgent,
+        store: MemoryStoreProtocol,
+        *,
+        session: SessionState | None = None,
+        session_store: SessionStoreProtocol | None = None,
+    ) -> None:
+        if session is None and session_store is not None:
+            raise ValueError(
+                "session_store requires an explicit session object. "
+                "Pass session= when constructing SessionRuntime with a store."
+            )
         self._agent = agent
         self._store = store
-        now = datetime.now(timezone.utc)
-        self._session = SessionState(
-            session_id=str(uuid4()),
-            created_at=now,
-            updated_at=now,
-        )
+        self._session_store = session_store
+        if session is not None:
+            self._session = session
+        else:
+            now = datetime.now(timezone.utc)
+            self._session = SessionState(
+                session_id=str(uuid4()),
+                created_at=now,
+                updated_at=now,
+            )
 
     @property
     def session_id(self) -> str:
@@ -56,7 +84,17 @@ class SessionRuntime:
             disclosure_reasons=tuple(state.disclosure_reasons),
             completed_at=datetime.now(timezone.utc),
         )
-        self._session.append_turn(record)
+
+        if self._session_store is not None:
+            # Build candidate WITHOUT mutating live session (persist-before-mutate)
+            candidate = dataclasses.replace(
+                self._session,
+                turns=self._session.turns + [record],
+                updated_at=record.completed_at,
+            )
+            self._session_store.save(candidate)  # SessionPersistenceError → propagate
+
+        self._session.append_turn(record)          # only after successful save
         return state
 
     def get_status(self) -> SessionStatusView:

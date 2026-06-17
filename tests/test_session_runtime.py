@@ -571,3 +571,177 @@ def test_failed_turn_does_not_snapshot_raw_error_text():
     assert sentinel not in record.goal
     assert not any(sentinel in a for a in record.planned_actions)
     assert not any(sentinel in r for r in record.disclosure_reasons)
+
+
+# ===========================================================================
+# SR3 tests — session_store injection, persist-before-mutate
+# ===========================================================================
+
+from agent_core.session_persistence.errors import SessionPersistenceError as _SPError
+
+
+class _CapturingStore:
+    """Records the session object passed to save()."""
+
+    def __init__(self) -> None:
+        self.saved_turns: list[list] = []
+
+    def save(self, session) -> None:
+        # Snapshot turns at time of call (not a reference)
+        self.saved_turns.append(list(session.turns))
+
+    def load(self, session_id: str):
+        return None
+
+
+class _FailingStore:
+    def save(self, session) -> None:
+        raise _SPError("disk failure")
+
+    def load(self, session_id: str):
+        return None
+
+
+def _make_fresh_session_state():
+    from datetime import datetime, timezone
+    from uuid import uuid4
+    from agent_core.state.session_state import SessionState
+    now = datetime.now(timezone.utc)
+    return SessionState(session_id=str(uuid4()), created_at=now, updated_at=now)
+
+
+# ---------------------------------------------------------------------------
+# SR3-A — ValueError when session=None but session_store given
+# ---------------------------------------------------------------------------
+
+def test_session_runtime_raises_valueerror_when_no_session_but_has_store():
+    """session=None + session_store!=None → ValueError (programming error guard)."""
+    from agent_core.runtime.runtime_agent import build_local_agent
+    agent, store = build_local_agent()
+
+    with pytest.raises(ValueError):
+        SessionRuntime(agent, store, session_store=_CapturingStore())
+
+
+# ---------------------------------------------------------------------------
+# SR3-B — provided session is used (not replaced internally)
+# ---------------------------------------------------------------------------
+
+def test_session_runtime_with_provided_session_uses_that_session():
+    """When session= is passed, runtime uses that session_id."""
+    session_state = _make_fresh_session_state()
+    sr = SessionRuntime(_FakeAgent(_completed_mutate), InMemoryStore(), session=session_state)
+    assert sr.session_id == session_state.session_id
+
+
+# ---------------------------------------------------------------------------
+# SR3-C — store.save() called with candidate containing the new turn
+# ---------------------------------------------------------------------------
+
+def test_session_store_receives_candidate_with_new_turn():
+    """SessionStore.save() is called with a session already containing the new turn."""
+    session_state = _make_fresh_session_state()
+    capturing = _CapturingStore()
+    sr = SessionRuntime(
+        _FakeAgent(_completed_mutate),
+        InMemoryStore(),
+        session=session_state,
+        session_store=capturing,
+    )
+
+    sr.handle_turn("my goal")
+
+    assert len(capturing.saved_turns) == 1
+    assert len(capturing.saved_turns[0]) == 1
+    assert capturing.saved_turns[0][0].goal == "my goal"
+
+
+# ---------------------------------------------------------------------------
+# SR3-D — persist failure prevents live session mutation (persist-before-mutate)
+# ---------------------------------------------------------------------------
+
+def test_persistence_failure_prevents_live_session_mutation():
+    """If store.save() raises, live session is NOT mutated."""
+    session_state = _make_fresh_session_state()
+    sr = SessionRuntime(
+        _FakeAgent(_completed_mutate),
+        InMemoryStore(),
+        session=session_state,
+        session_store=_FailingStore(),
+    )
+
+    with pytest.raises(_SPError):
+        sr.handle_turn("anything")
+
+    assert len(sr.get_history()) == 0  # live session not mutated
+
+
+# ---------------------------------------------------------------------------
+# SR3-E — no session_store: old in-memory-only behaviour preserved
+# ---------------------------------------------------------------------------
+
+def test_session_runtime_without_store_accumulates_in_memory():
+    """Without session_store, turns accumulate in memory (SR1/SR2 behaviour)."""
+    sr = SessionRuntime(_FakeAgent(_completed_mutate), InMemoryStore())
+    sr.handle_turn("hello")
+    sr.handle_turn("world")
+    assert len(sr.get_history()) == 2
+
+
+# ---------------------------------------------------------------------------
+# SR3-F — store called once per turn, accumulates across turns
+# ---------------------------------------------------------------------------
+
+def test_no_auto_retry_on_persistence_failure():
+    """On persistence failure: agent ran exactly once, save attempted exactly once,
+    live session history unchanged — no silent retry."""
+    run_calls: list[int] = []
+    save_calls: list[int] = []
+
+    class _CountingAgent:
+        def run(self, state: AgentState) -> AgentState:
+            run_calls.append(1)
+            _completed_mutate(state)
+            return state
+
+    class _CountingFailStore:
+        def save(self, session) -> None:
+            save_calls.append(1)
+            raise _SPError("disk full")
+
+        def load(self, session_id: str):
+            return None
+
+    session_state = _make_fresh_session_state()
+    sr = SessionRuntime(
+        _CountingAgent(),
+        InMemoryStore(),
+        session=session_state,
+        session_store=_CountingFailStore(),
+    )
+
+    with pytest.raises(_SPError):
+        sr.handle_turn("hello")
+
+    assert len(run_calls) == 1
+    assert len(save_calls) == 1
+    assert len(sr.get_history()) == 0
+
+
+def test_session_store_called_once_per_turn():
+    """store.save() is called exactly once per handle_turn call."""
+    session_state = _make_fresh_session_state()
+    capturing = _CapturingStore()
+    sr = SessionRuntime(
+        _FakeAgent(_completed_mutate),
+        InMemoryStore(),
+        session=session_state,
+        session_store=capturing,
+    )
+
+    sr.handle_turn("turn one")
+    sr.handle_turn("turn two")
+
+    assert len(capturing.saved_turns) == 2
+    # Second save includes both turns (candidate is cumulative)
+    assert len(capturing.saved_turns[1]) == 2
