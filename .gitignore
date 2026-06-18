@@ -167,3 +167,14 @@ profiles/
 # docs
 /docs/
 /CLAUDE.md
+
+# Track normative EX1 artifacts only — all other docs/ remain ignored
+!docs/
+docs/*
+!docs/specs/
+docs/specs/*
+!docs/specs/SPEC_EX1_TOOL_REGISTRY.md
+!docs/SPEC_M6_REMOTE_MEMORY_CLIENT.md
+!docs/reports/
+docs/reports/*
+!docs/reports/REPORT_EX1_TOOL_REGISTRY_INVENTORY_VERIFIED.md
