@@ -1,10 +1,10 @@
 # SPEC_EX1_TOOL_REGISTRY.md
 
-> **Version:** 1.0  
-> **Status:** APPROVED FOR IMPLEMENTATION  
-> **Phase:** EX1 — Static Tool Registry  
-> **Baseline:** `503ea5d` (main; one chore/.gitignore commit on top of `44989d6`, 214 tests pass)  
-> **Verified tests:** 214 passed  
+> **Version:** 1.0
+> **Status:** APPROVED FOR IMPLEMENTATION
+> **Phase:** EX1 — Static Tool Registry
+> **Baseline:** `503ea5d` (main; one chore/.gitignore commit on top of `44989d6`, 214 tests pass)
+> **Verified tests:** 214 passed
 > **Primary outcome:** add and describe tools without modifying runtime core
 >
 > **Current-HEAD facts (verified 2026-06-17, commit `44989d6` source files):**
