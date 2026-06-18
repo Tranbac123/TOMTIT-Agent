@@ -29,13 +29,23 @@ TOMTIT-Agent has completed its local MVP through P4.
 | P2    | `LocalMemoryClient`                         | Closed      |
 | P3    | Runtime memory wiring and disclosure        | Closed      |
 | P4    | Real `ContextPack` consumer                 | Closed      |
-| P5    | TOMTIT-Memory HTTP server                   | Not started |
-| P6    | `RemoteMemoryClient` and backend factory    | Not started |
+| P5    | TOMTIT-Memory HTTP server                   | Closed      |
+| P6    | `RemoteMemoryClient` and backend factory    | Closed      |
+
+M6 verification status:
+
+```text
+M6-0: COMPLETE
+M6-A: COMPLETE
+M6-B: COMPLETE
+M6: WAITING FOR ARCHITECT REVIEW
+M7: BLOCKED
+```
 
 Current test suite:
 
 ```text
-102 passed
+298 passed
 ```
 
 Feature development is currently paused for user validation. P5 and P6 are not automatic next steps.
