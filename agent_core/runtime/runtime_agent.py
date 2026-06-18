@@ -8,7 +8,7 @@ from agent_core.memory.client import MemoryClientProtocol
 from agent_core.memory.contracts import MemoryCandidate
 from agent_core.output.final_composer import DefaultFinalComposer, FinalComposer
 from agent_core.planning.plan_validator import validate_plan
-from agent_core.planning.rule_based_planner import RuleBasedPlanner
+from agent_core.planning.rule_based_planner import RuleBasedPlanner, build_rule_based_planner
 from agent_core.runtime.lifecycle import RuntimeLifecycle
 from agent_core.state.agent_state import AgentState
 from agent_core.state.enums import AgentStatus, ToolName
@@ -316,7 +316,7 @@ def build_local_agent(
     resolved_tools = tools or build_tool_registry(FakeWebSearchClient())
     validate_memory_activation(memory_client=memory_client, tools=resolved_tools)
     agent = RuntimeAgent(
-        planner=planner or RuleBasedPlanner(),
+        planner=planner or build_rule_based_planner(tools=resolved_tools),
         tools=resolved_tools,
         memory_client=memory_client,
     )
@@ -340,7 +340,7 @@ def build_agent_with_memory_backend(
     )
     validate_memory_activation(memory_client=components.memory_client, tools=resolved_tools)
     agent = RuntimeAgent(
-        planner=planner or RuleBasedPlanner(),
+        planner=planner or build_rule_based_planner(tools=resolved_tools),
         tools=resolved_tools,
         memory_client=components.memory_client,
     )
@@ -351,7 +351,8 @@ def build_test_agent() -> RuntimeAgent:
     from agent_core.tools.builtin_tools import FakeWebSearchClient
     from agent_core.tools.registry import build_tool_registry
 
+    tools = build_tool_registry(FakeWebSearchClient())
     return RuntimeAgent(
-        planner=RuleBasedPlanner(),
-        tools=build_tool_registry(FakeWebSearchClient()),
+        planner=build_rule_based_planner(tools=tools),
+        tools=tools,
     )

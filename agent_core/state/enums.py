@@ -80,6 +80,16 @@ class ToolName(StrEnum):
     ANSWER_FROM_CONTEXT = "answer_from_context"  # P4: reads state.context_pack
 
 
+class SkillName(StrEnum):
+    CALCULATE_AND_SAVE = "calculate_and_save"
+    READ_AND_SUMMARIZE = "read_and_summarize"
+    WEB_SEARCH = "web_search"
+
+
+class DisabledSkillReason(StrEnum):
+    MISSING_REQUIRED_TOOLS = "missing_required_tools"
+
+
 class ToolResultKind(StrEnum):
     TEXT = "text"
     NUMBER = "number"
