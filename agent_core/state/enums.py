@@ -86,6 +86,10 @@ class SkillName(StrEnum):
     WEB_SEARCH = "web_search"
 
 
+class DisabledSkillReason(StrEnum):
+    MISSING_REQUIRED_TOOLS = "missing_required_tools"
+
+
 class ToolResultKind(StrEnum):
     TEXT = "text"
     NUMBER = "number"

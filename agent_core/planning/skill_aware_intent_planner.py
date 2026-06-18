@@ -1,71 +1,83 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
-from typing import Any
-
 from agent_core.planning.intent_planner import IntentPlanner
 from agent_core.planning.intents import ParsedIntent
-from agent_core.skills.base import SkillSpec
+from agent_core.skills.base import DisabledSkill, SkillSpec
 from agent_core.skills.errors import InvalidSkillPlanError
-from agent_core.skills.registry import SkillRegistry
+from agent_core.skills.registry import SkillCatalog
 from agent_core.state.agent_state import Step
 from agent_core.state.enums import ToolName
-from agent_core.tools.base import ToolSpec
 
 
 class SkillAwareIntentPlanner:
-    """Planner adapter: routes ParsedIntent to a registered skill or falls
-    back to the legacy IntentPlanner for non-skill intents.
+    """Routes ParsedIntent to:
+    - mapped  : active skill plan_factory
+    - unavailable: deterministic capability-unavailable FINISH plan
+    - unknown : existing IntentPlanner fallback (exactly once)
 
-    Public method is ``make_plan(parsed)`` — same signature expected by
-    ``RuleBasedPlanner.intent_planner``.
+    Clarification (missing_slots) precedes all skill dispatch.
     """
 
     def __init__(
         self,
         *,
-        skills: SkillRegistry,
+        catalog: SkillCatalog,
         fallback: IntentPlanner,
-        tools: Mapping[ToolName, ToolSpec],
     ) -> None:
-        self._skills = skills
+        self._catalog = catalog
         self._fallback = fallback
-        self._tools = tools
 
     def make_plan(self, parsed: ParsedIntent) -> list[Step]:
-        # v1.1 change 3: missing_slots MUST be handled before skill dispatch.
+        # 1. Clarification before any skill classification (EX2-I6, v1.1 change 3)
         if parsed.missing_slots:
             return self._fallback.make_plan(parsed)
 
-        spec = self._skills.for_intent(parsed.intent)
-        if spec is None:
-            return self._fallback.make_plan(parsed)
+        # 2. Active skill → mapped
+        active = self._catalog.active_for_intent(parsed.intent)
+        if active is not None:
+            inputs = self._extract_inputs(active, parsed)
+            steps = active.plan_factory(inputs)
+            self._validate_skill_plan(active, steps)
+            return steps
 
-        slots = self._extract_slots(parsed)
-        steps = spec.plan_factory(slots)
-        self._validate_skill_plan(spec, steps)
-        return steps
+        # 3. Disabled skill → unavailable
+        disabled = self._catalog.unavailable_for_intent(parsed.intent)
+        if disabled is not None:
+            return self._capability_unavailable_plan(disabled)
 
-    # ------------------------------------------------------------------
-    # Slot extraction
-    # ------------------------------------------------------------------
-
-    def _extract_slots(self, parsed: ParsedIntent) -> dict[str, Any]:
-        """Extract all non-None slot fields from ParsedIntent into a plain dict.
-        Factory receives Mapping[str, Any] — no ParsedIntent exposure."""
-        slots: dict[str, Any] = {}
-        if parsed.expression is not None:
-            slots["expression"] = parsed.expression
-        if parsed.note_name is not None:
-            slots["note_name"] = parsed.note_name
-        if parsed.content is not None:
-            slots["content"] = parsed.content
-        if parsed.query is not None:
-            slots["query"] = parsed.query
-        return slots
+        # 4. Unknown → existing fallback exactly once
+        return self._fallback.make_plan(parsed)
 
     # ------------------------------------------------------------------
-    # Skill plan validation (§9.3)
+    # Input extraction (spec §10.3)
+    # ------------------------------------------------------------------
+
+    def _extract_inputs(self, spec: SkillSpec, parsed: ParsedIntent) -> dict[str, object]:
+        """Extract only the fields declared in spec.required_inputs from parsed.
+        Returns a detached dict; does not expose full ParsedIntent."""
+        return {name: getattr(parsed, name) for name in spec.required_inputs}
+
+    # ------------------------------------------------------------------
+    # Unavailable plan (spec §10.5)
+    # ------------------------------------------------------------------
+
+    def _capability_unavailable_plan(self, disabled: DisabledSkill) -> list[Step]:
+        missing_values = ", ".join(t.value for t in disabled.missing_tools)
+        return [
+            Step(
+                thought="Thông báo skill không khả dụng với backend hiện tại",
+                action=ToolName.FINISH,
+                args={
+                    "answer": (
+                        f"Skill '{disabled.name.value}' không khả dụng với backend hiện tại. "
+                        f"Thiếu capability: {missing_values}."
+                    )
+                },
+            )
+        ]
+
+    # ------------------------------------------------------------------
+    # Skill plan validation (spec §11)
     # ------------------------------------------------------------------
 
     def _validate_skill_plan(self, spec: SkillSpec, steps: object) -> None:
@@ -86,9 +98,4 @@ class SkillAwareIntentPlanner:
                 raise InvalidSkillPlanError(
                     f"Skill {spec.name!r} step[{i}] action {step.action!r} "
                     f"not declared in required_tools"
-                )
-            if step.action not in self._tools:
-                raise InvalidSkillPlanError(
-                    f"Skill {spec.name!r} step[{i}] action {step.action!r} "
-                    f"not in ToolRegistry"
                 )

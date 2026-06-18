@@ -28,11 +28,8 @@ class RuleBasedPlanner:
 
 
 def build_rule_based_planner(*, tools: Mapping[ToolName, Any]) -> RuleBasedPlanner:
-    """Composition helper: wires SkillRegistry → SkillAwareIntentPlanner → RuleBasedPlanner.
-
-    Every production factory must use this helper (EX2 §11.1) so that the
-    SkillRegistry is built from the same resolved ToolRegistry as the agent.
-    """
+    """Composition helper: resolved ToolRegistry → SkillCatalog → SkillAwareIntentPlanner
+    → RuleBasedPlanner. Every production factory must use this helper (spec §13.1)."""
     return RuleBasedPlanner(intent_planner=_skill_aware_intent_planner_for_tools(tools))
 
 
@@ -46,12 +43,7 @@ def _default_skill_aware_intent_planner() -> Any:
 
 def _skill_aware_intent_planner_for_tools(tools: Mapping[ToolName, Any]) -> Any:
     from agent_core.planning.skill_aware_intent_planner import SkillAwareIntentPlanner
-    from agent_core.skills.registry import build_skill_registry
+    from agent_core.skills.registry import build_skill_catalog
 
-    skills = build_skill_registry(tools=tools)
-    fallback = IntentPlanner()
-    return SkillAwareIntentPlanner(
-        skills=skills,
-        fallback=fallback,
-        tools=tools,
-    )
+    catalog = build_skill_catalog(tools=tools)
+    return SkillAwareIntentPlanner(catalog=catalog, fallback=IntentPlanner())
