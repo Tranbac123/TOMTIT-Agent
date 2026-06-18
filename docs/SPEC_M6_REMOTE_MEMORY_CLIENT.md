@@ -1,10 +1,10 @@
 # SPEC_M6_REMOTE_MEMORY_CLIENT.md
 
-**Project:** TOMTIT-Agent  
-**Phase:** M6 — Remote durable-memory integration  
-**Status:** ACCEPTED FOR IMPLEMENTATION  
-**Depends on:** TOMTIT-Memory M1–M5 implemented and approved  
-**Frozen dependency:** `memory-contract-v1`  
+**Project:** TOMTIT-Agent
+**Phase:** M6 — Remote durable-memory integration
+**Status:** ACCEPTED FOR IMPLEMENTATION
+**Depends on:** TOMTIT-Memory M1–M5 implemented and approved
+**Frozen dependency:** `memory-contract-v1`
 **Out of scope:** M7 restart-and-recall acceptance
 
 ---
