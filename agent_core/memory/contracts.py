@@ -53,7 +53,10 @@ class MemoryCandidate(BaseModel):
     type: MemoryType
     content: str
     tags: list[str] = Field(default_factory=list)
+    importance: float = 0.5
     confidence: float = 1.0
+    evidence_ref: str | None = None
+    metadata: dict = Field(default_factory=dict)
 
 
 class WriteResponse(BaseModel):

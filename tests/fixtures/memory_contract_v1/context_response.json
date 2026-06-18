@@ -1,0 +1,38 @@
+{
+  "schema_version": "memory-contract-v1",
+  "request_id": "req-context-0001",
+  "project_id": "tomtit-agent",
+  "user_id": "local-user",
+  "session_id": "session-2026-06-17-0001",
+  "query": "AgentState memory boundary and approval gate",
+  "memory_source": "tomtit-memory",
+  "tokenizer_id": "cl100k_base",
+  "items": [
+    {
+      "memory_id": "mem_01j00000000000000000000001",
+      "type": "decision",
+      "content": "AgentState keeps only the current-run memory snapshot; durable memory is read through MemoryClientProtocol.",
+      "tags": [
+        "architecture",
+        "memory"
+      ],
+      "importance": 1.0,
+      "confidence": 1.0,
+      "source_task_id": "task-2026-06-17-m0",
+      "evidence_ref": "user-explicit:task-2026-06-17-m0",
+      "score": 1.0,
+      "token_cost": 19,
+      "created_at": "2026-06-17T00:00:00Z",
+      "updated_at": "2026-06-17T00:00:00Z",
+      "metadata": {
+        "repo": "TOMTIT-Agent"
+      }
+    }
+  ],
+  "total_items": 1,
+  "tokens_used": 19,
+  "token_budget": 800,
+  "truncated": false,
+  "degraded": false,
+  "warnings": []
+}

@@ -1,0 +1,42 @@
+{
+  "schema_version": "memory-contract-v1",
+  "request_id": "req-write-0001",
+  "project_id": "tomtit-agent",
+  "user_id": "local-user",
+  "session_id": "session-2026-06-17-0001",
+  "task_id": "task-2026-06-17-m0",
+  "candidates": [
+    {
+      "candidate_id": "cand-0001",
+      "type": "decision",
+      "content": "Remote durable memory and direct local durable-memory tools must not both be active.",
+      "tags": [
+        "architecture",
+        "memory"
+      ],
+      "importance": 1.0,
+      "confidence": 1.0,
+      "evidence_ref": "user-explicit:task-2026-06-17-m0",
+      "metadata": {
+        "repo": "TOMTIT-Agent",
+        "source": "approved-m0-decision"
+      }
+    },
+    {
+      "candidate_id": "cand-0002",
+      "type": "rule",
+      "content": "Memory writes require TOMTIT-Agent persistence-policy approval before TOMTIT-Memory receives a write request.",
+      "tags": [
+        "memory",
+        "policy"
+      ],
+      "importance": 0.9,
+      "confidence": 1.0,
+      "evidence_ref": "user-explicit:task-2026-06-17-m0",
+      "metadata": {
+        "repo": "TOMTIT-Agent",
+        "source": "approved-m0-decision"
+      }
+    }
+  ]
+}

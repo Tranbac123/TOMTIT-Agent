@@ -1,0 +1,13 @@
+{
+  "schema_version": "memory-contract-v1",
+  "request_id": "req-write-0001",
+  "error": {
+    "code": "IDEMPOTENCY_CONFLICT",
+    "message": "The request_id was already used with a different canonical payload.",
+    "retryable": false,
+    "details": {
+      "project_id": "tomtit-agent",
+      "user_id": "local-user"
+    }
+  }
+}

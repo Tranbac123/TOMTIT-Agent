@@ -28,6 +28,7 @@ class MemoryType(StrEnum):
     FACT = "fact"
     PREFERENCE = "preference"
     DECISION = "decision"
+    RULE = "rule"
     TASK_SUMMARY = "task_summary"
     SOURCE = "source"
     LESSON = "lesson"

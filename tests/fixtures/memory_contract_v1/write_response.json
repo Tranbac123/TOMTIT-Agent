@@ -1,0 +1,25 @@
+{
+  "schema_version": "memory-contract-v1",
+  "request_id": "req-write-0001",
+  "project_id": "tomtit-agent",
+  "user_id": "local-user",
+  "session_id": "session-2026-06-17-0001",
+  "results": [
+    {
+      "candidate_id": "cand-0001",
+      "status": "written",
+      "memory_id": "mem_01j00000000000000000000002",
+      "content_hash": "8a8300800df48301a6ca5b1233e3a2ff423e637e2dfc09479121787c79cc2c47",
+      "reason": null
+    },
+    {
+      "candidate_id": "cand-0002",
+      "status": "skipped_duplicate",
+      "memory_id": "mem_01j00000000000000000000003",
+      "content_hash": "8e514940f1eced712e10b61b888615008ab5f8c24e83bfe52b731edcf1b61fcd",
+      "reason": "duplicate_content"
+    }
+  ],
+  "written_count": 1,
+  "skipped_count": 1
+}

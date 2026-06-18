@@ -1,0 +1,19 @@
+{
+  "fixtures": {
+    "context_request.json": "06be91cd6ddb827607e6106aba1faddcbcb085649747b6bcc50c6cc877019c85",
+    "context_response.json": "9f7ab7e561cf43b0dd5399a31d0f12072448a849a3f6235bf59a16ebabe73186",
+    "error_response.json": "3f87aca2e2d9355dab743f592aa586bb4e3d09e1ca81ded12ca2ac3f16b44fcb",
+    "write_request.json": "efc2f6ab490d8eb6728d119ace37ee334fef5c94009a376e07bc83248b4e2771",
+    "write_response.json": "3939158e4b0026fa8fedc99491ff5c2206c50f6cd2bef2af568e5f1c387b7a96"
+  },
+  "routes": [
+    "POST /v1/context/retrieve",
+    "POST /v1/memories/write",
+    "GET /v1/memories/{memory_id}",
+    "GET /v1/health/live",
+    "GET /v1/health/ready"
+  ],
+  "schema_version": "memory-contract-v1",
+  "source_commit": "07d336adf821f032bb53b8ba72e36301871d1728",
+  "source_repository": "TOMTIT-Memory"
+}
