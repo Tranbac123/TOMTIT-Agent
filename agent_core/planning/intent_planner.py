@@ -20,20 +20,11 @@ class IntentPlanner:
         if parsed.intent == IntentName.CALCULATE:
             return self._calculate_plan(parsed)
 
-        if parsed.intent == IntentName.CALCULATE_THEN_SAVE_NOTE:
-            return self._calculate_then_save_note_plan(parsed)
-
         if parsed.intent == IntentName.READ_NOTE:
             return self._read_note_plan(parsed)
 
-        if parsed.intent == IntentName.READ_NOTE_THEN_SUMMARIZE:
-            return self._read_note_then_summarize_plan(parsed)
-
         if parsed.intent == IntentName.WRITE_NOTE:
             return self._write_note_plan(parsed)
-
-        if parsed.intent == IntentName.WEB_SEARCH:
-            return self._web_search_plan(parsed)
 
         if parsed.intent == IntentName.PROJECT_CONTEXT_QUERY:
             return self._project_context_query_plan(parsed)
