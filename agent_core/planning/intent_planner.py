@@ -54,30 +54,6 @@ class IntentPlanner:
             ),
         ]
 
-    def _calculate_then_save_note_plan(self, parsed: ParsedIntent) -> list[Step]:
-        return [
-            Step(
-                thought="Cần tính toán biểu thức trước",
-                action=ToolName.CALCULATE,
-                args={"expression": parsed.expression},
-            ),
-            Step(
-                thought="Lưu kết quả vào ghi chú",
-                action=ToolName.WRITE_NOTE,
-                args={"name": parsed.note_name, "content": "$last_text"},
-            ),
-            Step(
-                thought="Thông báo hoàn tất cho user",
-                action=ToolName.FINISH,
-                args={
-                    "answer": (
-                        f"Đã tính xong và lưu vào ghi chú "
-                        f"'{parsed.note_name}'. Kết quả: ${{slot.calc_result}}"
-                    )
-                },
-            ),
-        ]
-
     def _read_note_plan(self, parsed: ParsedIntent) -> list[Step]:
         return [
             Step(
@@ -92,25 +68,6 @@ class IntentPlanner:
             ),
         ]
 
-    def _read_note_then_summarize_plan(self, parsed: ParsedIntent) -> list[Step]:
-        return [
-            Step(
-                thought="Đọc nội dung ghi chú",
-                action=ToolName.READ_NOTE,
-                args={"name": parsed.note_name},
-            ),
-            Step(
-                thought="Tóm tắt nội dung ghi chú",
-                action=ToolName.SUMMARIZE,
-                args={"text": "$last.output.content"},
-            ),
-            Step(
-                thought="Trả summary cho user",
-                action=ToolName.FINISH,
-                args={"answer": "Tóm tắt: ${last.output.summary}"},
-            ),
-        ]
-
     def _write_note_plan(self, parsed: ParsedIntent) -> list[Step]:
         return [
             Step(
@@ -122,20 +79,6 @@ class IntentPlanner:
                 thought="Thông báo đã lưu ghi chú",
                 action=ToolName.FINISH,
                 args={"answer": f"Đã lưu vào ghi chú '{parsed.note_name}'."},
-            ),
-        ]
-
-    def _web_search_plan(self, parsed: ParsedIntent) -> list[Step]:
-        return [
-            Step(
-                thought="Tìm thông tin trên web",
-                action=ToolName.WEB_SEARCH,
-                args={"query": parsed.query, "max_results": 3},
-            ),
-            Step(
-                thought="Trả kết quả search cho user",
-                action=ToolName.FINISH,
-                args={"answer": "$last_text"},
             ),
         ]
 
