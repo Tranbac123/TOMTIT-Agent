@@ -1,0 +1,50 @@
+=== V-04: architecture greps ===
+cwd: /Users/tranvanbac/Documents/AI/ai-agent/TOMTIT-Agent
+UTC start: 2026-06-18T14:08:55Z
+
+--- AC-01: SkillName sources ---
+command: grep -rn 'class SkillName' agent_core/
+agent_core/state/enums.py:83:class SkillName(StrEnum):
+exit:0
+
+--- AC-02: DisabledSkillReason sources ---
+command: grep -rn 'class DisabledSkillReason' agent_core/
+agent_core/state/enums.py:89:class DisabledSkillReason(StrEnum):
+exit:0
+
+--- AC-12: shadow methods ---
+command: grep -n '_calculate_then_save_note_plan\|_read_note_then_summarize_plan\|_web_search_plan' agent_core/planning/intent_planner.py
+exit:1
+
+--- AC-13: no ParsedIntent in skills ---
+command: grep -rn 'ParsedIntent' agent_core/skills/
+exit:1
+
+--- AC-13: no ToolExecutor in skills ---
+command: grep -rn 'ToolExecutor\|tool\.fn' agent_core/skills/
+exit:1
+
+--- AC-16: .fn( call sites ---
+command: git grep -n '.fn(' eeccbcf -- 'agent_core/**/*.py'
+eeccbcf:agent_core/tools/executor.py:120:            result = tool.fn(state=state, **final_args)
+exit:0
+
+--- AC-16: ToolExecutor in skills at candidate ---
+command: git grep -n 'ToolExecutor' eeccbcf -- 'agent_core/skills/**/*.py'
+exit:1
+
+--- AC-16: PolicyEngine/ApprovalGate wiring ---
+command: git grep -n 'PolicyEngine\|ApprovalGate' eeccbcf -- 'agent_core/**/*.py'
+eeccbcf:agent_core/safety/approval.py:34:class ApprovalGate:
+eeccbcf:agent_core/safety/policy.py:33:class PolicyEngine:
+eeccbcf:agent_core/tools/executor.py:13:from agent_core.safety.approval import ApprovalGate
+eeccbcf:agent_core/tools/executor.py:14:from agent_core.safety.policy import PolicyEngine
+eeccbcf:agent_core/tools/executor.py:24:        policy_engine: PolicyEngine | None = None,
+eeccbcf:agent_core/tools/executor.py:25:        approval_gate: ApprovalGate | None = None,
+eeccbcf:agent_core/tools/executor.py:29:        self.policy_engine = policy_engine or PolicyEngine()
+eeccbcf:agent_core/tools/executor.py:30:        self.approval_gate = approval_gate or ApprovalGate()
+exit:0
+
+--- AC-18: no external skill platform ---
+command: grep -rn 'import.*skill.*yaml\|load_skill\|discover_skill\|SkillLoader' agent_core/
+exit:1

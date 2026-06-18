@@ -1,0 +1,2064 @@
+=== V-00: repo state ===
+command: git show --format=fuller --stat --patch eeccbcf
+cwd: /Users/tranvanbac/Documents/AI/ai-agent/TOMTIT-Agent
+UTC start: 2026-06-18T14:08:13Z
+commit eeccbcfdd7e2370f2e0a043a522fe0ee8a7531fc
+Author:     Tranbac123 <tranvanbac061198@gmail.com>
+AuthorDate: Thu Jun 18 20:48:20 2026 +0700
+Commit:     Tranbac123 <tranvanbac061198@gmail.com>
+CommitDate: Thu Jun 18 20:48:20 2026 +0700
+
+    feat(EX2): add capability-aware skill catalog
+    
+    Introduce DisabledSkillReason, DisabledSkill, and SkillCatalog. The
+    catalog partitions all three static built-in SkillSpecs against the
+    exact resolved ToolRegistry: compatible skills enter the strict active
+    SkillRegistry; incompatible skills produce DisabledSkill records with
+    sorted missing-tool evidence.
+    
+    SkillAwareIntentPlanner now receives SkillCatalog (not SkillRegistry)
+    and routes intents to mapped, unavailable, or unknown outcomes.
+    Disabled intents return a deterministic capability-unavailable FINISH
+    plan instead of falling through to the unknown path.
+    
+    builtin_skill_specs() becomes argument-free; filtering moves entirely
+    into SkillCatalog.from_specs(). SkillRegistry.from_specs() remains
+    strict (MissingSkillToolError if any required tool is absent).
+    
+    Remote backend result: 1 active skill (WEB_SEARCH), 2 disabled with
+    exact missing-tool evidence (write_note, read_note). Local: 3 active,
+    0 disabled.
+    
+    AC-01..AC-20 targeted tests updated; 404 passed.
+    
+    Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+---
+ agent_core/planning/rule_based_planner.py         |  20 +-
+ agent_core/planning/skill_aware_intent_planner.py |  91 +++--
+ agent_core/skills/__init__.py                     |  14 +-
+ agent_core/skills/base.py                         |  28 +-
+ agent_core/skills/registry.py                     | 227 ++++++++---
+ agent_core/state/enums.py                         |   4 +
+ tests/test_skill_aware_intent_planner.py          | 468 ++++++++++++++--------
+ tests/test_skill_registry.py                      | 452 ++++++++++++++-------
+ 8 files changed, 884 insertions(+), 420 deletions(-)
+
+diff --git a/agent_core/planning/rule_based_planner.py b/agent_core/planning/rule_based_planner.py
+index 8bd016c..1dbf16e 100644
+--- a/agent_core/planning/rule_based_planner.py
++++ b/agent_core/planning/rule_based_planner.py
+@@ -28,11 +28,8 @@ class RuleBasedPlanner:
+ 
+ 
+ def build_rule_based_planner(*, tools: Mapping[ToolName, Any]) -> RuleBasedPlanner:
+-    """Composition helper: wires SkillRegistry → SkillAwareIntentPlanner → RuleBasedPlanner.
+-
+-    Every production factory must use this helper (EX2 §11.1) so that the
+-    SkillRegistry is built from the same resolved ToolRegistry as the agent.
+-    """
++    """Composition helper: resolved ToolRegistry → SkillCatalog → SkillAwareIntentPlanner
++    → RuleBasedPlanner. Every production factory must use this helper (spec §13.1)."""
+     return RuleBasedPlanner(intent_planner=_skill_aware_intent_planner_for_tools(tools))
+ 
+ 
+@@ -46,12 +43,7 @@ def _default_skill_aware_intent_planner() -> Any:
+ 
+ def _skill_aware_intent_planner_for_tools(tools: Mapping[ToolName, Any]) -> Any:
+     from agent_core.planning.skill_aware_intent_planner import SkillAwareIntentPlanner
+-    from agent_core.skills.registry import build_skill_registry
+-
+-    skills = build_skill_registry(tools=tools)
+-    fallback = IntentPlanner()
+-    return SkillAwareIntentPlanner(
+-        skills=skills,
+-        fallback=fallback,
+-        tools=tools,
+-    )
++    from agent_core.skills.registry import build_skill_catalog
++
++    catalog = build_skill_catalog(tools=tools)
++    return SkillAwareIntentPlanner(catalog=catalog, fallback=IntentPlanner())
+diff --git a/agent_core/planning/skill_aware_intent_planner.py b/agent_core/planning/skill_aware_intent_planner.py
+index 3120e36..a0943f6 100644
+--- a/agent_core/planning/skill_aware_intent_planner.py
++++ b/agent_core/planning/skill_aware_intent_planner.py
+@@ -1,71 +1,83 @@
+ from __future__ import annotations
+ 
+-from collections.abc import Mapping
+-from typing import Any
+-
+ from agent_core.planning.intent_planner import IntentPlanner
+ from agent_core.planning.intents import ParsedIntent
+-from agent_core.skills.base import SkillSpec
++from agent_core.skills.base import DisabledSkill, SkillSpec
+ from agent_core.skills.errors import InvalidSkillPlanError
+-from agent_core.skills.registry import SkillRegistry
++from agent_core.skills.registry import SkillCatalog
+ from agent_core.state.agent_state import Step
+ from agent_core.state.enums import ToolName
+-from agent_core.tools.base import ToolSpec
+ 
+ 
+ class SkillAwareIntentPlanner:
+-    """Planner adapter: routes ParsedIntent to a registered skill or falls
+-    back to the legacy IntentPlanner for non-skill intents.
++    """Routes ParsedIntent to:
++    - mapped  : active skill plan_factory
++    - unavailable: deterministic capability-unavailable FINISH plan
++    - unknown : existing IntentPlanner fallback (exactly once)
+ 
+-    Public method is ``make_plan(parsed)`` — same signature expected by
+-    ``RuleBasedPlanner.intent_planner``.
++    Clarification (missing_slots) precedes all skill dispatch.
+     """
+ 
+     def __init__(
+         self,
+         *,
+-        skills: SkillRegistry,
++        catalog: SkillCatalog,
+         fallback: IntentPlanner,
+-        tools: Mapping[ToolName, ToolSpec],
+     ) -> None:
+-        self._skills = skills
++        self._catalog = catalog
+         self._fallback = fallback
+-        self._tools = tools
+ 
+     def make_plan(self, parsed: ParsedIntent) -> list[Step]:
+-        # v1.1 change 3: missing_slots MUST be handled before skill dispatch.
++        # 1. Clarification before any skill classification (EX2-I6, v1.1 change 3)
+         if parsed.missing_slots:
+             return self._fallback.make_plan(parsed)
+ 
+-        spec = self._skills.for_intent(parsed.intent)
+-        if spec is None:
+-            return self._fallback.make_plan(parsed)
++        # 2. Active skill → mapped
++        active = self._catalog.active_for_intent(parsed.intent)
++        if active is not None:
++            inputs = self._extract_inputs(active, parsed)
++            steps = active.plan_factory(inputs)
++            self._validate_skill_plan(active, steps)
++            return steps
++
++        # 3. Disabled skill → unavailable
++        disabled = self._catalog.unavailable_for_intent(parsed.intent)
++        if disabled is not None:
++            return self._capability_unavailable_plan(disabled)
+ 
+-        slots = self._extract_slots(parsed)
+-        steps = spec.plan_factory(slots)
+-        self._validate_skill_plan(spec, steps)
+-        return steps
++        # 4. Unknown → existing fallback exactly once
++        return self._fallback.make_plan(parsed)
+ 
+     # ------------------------------------------------------------------
+-    # Slot extraction
++    # Input extraction (spec §10.3)
+     # ------------------------------------------------------------------
+ 
+-    def _extract_slots(self, parsed: ParsedIntent) -> dict[str, Any]:
+-        """Extract all non-None slot fields from ParsedIntent into a plain dict.
+-        Factory receives Mapping[str, Any] — no ParsedIntent exposure."""
+-        slots: dict[str, Any] = {}
+-        if parsed.expression is not None:
+-            slots["expression"] = parsed.expression
+-        if parsed.note_name is not None:
+-            slots["note_name"] = parsed.note_name
+-        if parsed.content is not None:
+-            slots["content"] = parsed.content
+-        if parsed.query is not None:
+-            slots["query"] = parsed.query
+-        return slots
++    def _extract_inputs(self, spec: SkillSpec, parsed: ParsedIntent) -> dict[str, object]:
++        """Extract only the fields declared in spec.required_inputs from parsed.
++        Returns a detached dict; does not expose full ParsedIntent."""
++        return {name: getattr(parsed, name) for name in spec.required_inputs}
+ 
+     # ------------------------------------------------------------------
+-    # Skill plan validation (§9.3)
++    # Unavailable plan (spec §10.5)
++    # ------------------------------------------------------------------
++
++    def _capability_unavailable_plan(self, disabled: DisabledSkill) -> list[Step]:
++        missing_values = ", ".join(t.value for t in disabled.missing_tools)
++        return [
++            Step(
++                thought="Thông báo skill không khả dụng với backend hiện tại",
++                action=ToolName.FINISH,
++                args={
++                    "answer": (
++                        f"Skill '{disabled.name.value}' không khả dụng với backend hiện tại. "
++                        f"Thiếu capability: {missing_values}."
++                    )
++                },
++            )
++        ]
++
++    # ------------------------------------------------------------------
++    # Skill plan validation (spec §11)
+     # ------------------------------------------------------------------
+ 
+     def _validate_skill_plan(self, spec: SkillSpec, steps: object) -> None:
+@@ -87,8 +99,3 @@ class SkillAwareIntentPlanner:
+                     f"Skill {spec.name!r} step[{i}] action {step.action!r} "
+                     f"not declared in required_tools"
+                 )
+-            if step.action not in self._tools:
+-                raise InvalidSkillPlanError(
+-                    f"Skill {spec.name!r} step[{i}] action {step.action!r} "
+-                    f"not in ToolRegistry"
+-                )
+diff --git a/agent_core/skills/__init__.py b/agent_core/skills/__init__.py
+index b9829c6..da596c4 100644
+--- a/agent_core/skills/__init__.py
++++ b/agent_core/skills/__init__.py
+@@ -1,6 +1,6 @@
+ from __future__ import annotations
+ 
+-from agent_core.skills.base import SkillManifestEntry, SkillPlanFactory, SkillSpec
++from agent_core.skills.base import DisabledSkill, SkillManifestEntry, SkillPlanFactory, SkillSpec
+ from agent_core.skills.errors import (
+     DuplicateSkillError,
+     DuplicateSkillIntentError,
+@@ -10,14 +10,24 @@ from agent_core.skills.errors import (
+     SkillRegistryError,
+     UnknownSkillError,
+ )
+-from agent_core.skills.registry import SkillRegistry, build_skill_registry
++from agent_core.skills.registry import (
++    SkillCatalog,
++    SkillRegistry,
++    build_skill_catalog,
++    build_skill_registry,
++    builtin_skill_specs,
++)
+ 
+ __all__ = [
+     "SkillSpec",
+     "SkillPlanFactory",
+     "SkillManifestEntry",
++    "DisabledSkill",
+     "SkillRegistry",
++    "SkillCatalog",
++    "build_skill_catalog",
+     "build_skill_registry",
++    "builtin_skill_specs",
+     "SkillRegistryError",
+     "DuplicateSkillError",
+     "DuplicateSkillIntentError",
+diff --git a/agent_core/skills/base.py b/agent_core/skills/base.py
+index 674bc72..69f13ce 100644
+--- a/agent_core/skills/base.py
++++ b/agent_core/skills/base.py
+@@ -7,7 +7,7 @@ from typing import Any, Protocol
+ from agent_core.planning.intents import IntentName
+ from agent_core.skills.errors import InvalidSkillSpecError
+ from agent_core.state.agent_state import Step
+-from agent_core.state.enums import SkillName, ToolName
++from agent_core.state.enums import DisabledSkillReason, SkillName, ToolName
+ 
+ 
+ class Skill(Protocol):
+@@ -15,14 +15,14 @@ class Skill(Protocol):
+ 
+ 
+ class SkillPlanFactory(Protocol):
+-    def __call__(self, slots: Mapping[str, Any]) -> list[Step]: ...
++    def __call__(self, inputs: Mapping[str, Any]) -> list[Step]: ...
+ 
+ 
+ @dataclass(frozen=True)
+ class SkillSpec:
+     name: SkillName
+     description: str
+-    supported_intents: frozenset[IntentName]
++    applicable_intents: frozenset[IntentName]
+     required_inputs: frozenset[str]
+     required_tools: frozenset[ToolName]
+     plan_factory: SkillPlanFactory
+@@ -32,13 +32,15 @@ class SkillSpec:
+             raise InvalidSkillSpecError(f"name must be SkillName, got {type(self.name)}")
+         if not self.description or not self.description.strip():
+             raise InvalidSkillSpecError(f"Skill {self.name}: description must not be blank")
+-        if not self.supported_intents:
+-            raise InvalidSkillSpecError(f"Skill {self.name}: supported_intents must not be empty")
+-        for intent in self.supported_intents:
++        if not self.applicable_intents:
++            raise InvalidSkillSpecError(f"Skill {self.name}: applicable_intents must not be empty")
++        for intent in self.applicable_intents:
+             if not isinstance(intent, IntentName):
+                 raise InvalidSkillSpecError(
+                     f"Skill {self.name}: invalid intent value {intent!r}"
+                 )
++        if not self.required_inputs:
++            raise InvalidSkillSpecError(f"Skill {self.name}: required_inputs must not be empty")
+         if not self.required_tools:
+             raise InvalidSkillSpecError(f"Skill {self.name}: required_tools must not be empty")
+         for tool in self.required_tools:
+@@ -54,6 +56,18 @@ class SkillSpec:
+ class SkillManifestEntry:
+     name: SkillName
+     description: str
+-    supported_intents: tuple[IntentName, ...]
++    applicable_intents: tuple[IntentName, ...]
+     required_inputs: tuple[str, ...]
+     required_tools: tuple[ToolName, ...]
++
++
++@dataclass(frozen=True)
++class DisabledSkill:
++    """Capability record for a built-in skill whose required tools are absent
++    from the resolved ToolRegistry. No plan factory; no callable."""
++    name: SkillName
++    description: str
++    applicable_intents: tuple[IntentName, ...]
++    required_tools: tuple[ToolName, ...]
++    missing_tools: tuple[ToolName, ...]  # non-empty; sorted by ToolName.value
++    reason: DisabledSkillReason
+diff --git a/agent_core/skills/registry.py b/agent_core/skills/registry.py
+index aaabf04..24a015c 100644
+--- a/agent_core/skills/registry.py
++++ b/agent_core/skills/registry.py
+@@ -1,11 +1,17 @@
+ from __future__ import annotations
+ 
+-from collections.abc import Iterator, Mapping
++from collections.abc import Iterable, Iterator, Mapping
++from dataclasses import dataclass
+ from types import MappingProxyType
+ from typing import Any
+ 
+ from agent_core.planning.intents import IntentName
+-from agent_core.skills.base import SkillManifestEntry, SkillPlanFactory, SkillSpec
++from agent_core.skills.base import (
++    DisabledSkill,
++    SkillManifestEntry,
++    SkillPlanFactory,
++    SkillSpec,
++)
+ from agent_core.skills.calculate_and_save_skill import CalculateAndSaveSkill
+ from agent_core.skills.errors import (
+     DuplicateSkillError,
+@@ -16,12 +22,17 @@ from agent_core.skills.errors import (
+ from agent_core.skills.read_and_summarize_skill import ReadAndSummarizeSkill
+ from agent_core.skills.web_search_skill import WebSearchSkill
+ from agent_core.state.agent_state import Step
+-from agent_core.state.enums import SkillName, ToolName
++from agent_core.state.enums import DisabledSkillReason, SkillName, ToolName
+ from agent_core.tools.base import ToolSpec
+ 
+ 
++# ---------------------------------------------------------------------------
++# SkillRegistry — strict immutable Mapping[SkillName, SkillSpec]
++# ---------------------------------------------------------------------------
++
+ class SkillRegistry(Mapping[SkillName, SkillSpec]):
+-    """Immutable catalog of static skills, indexed by SkillName and IntentName."""
++    """Strict immutable registry of active skills. Every spec admitted here
++    has all its required tools present in the resolved ToolRegistry."""
+ 
+     def __init__(
+         self,
+@@ -34,7 +45,7 @@ class SkillRegistry(Mapping[SkillName, SkillSpec]):
+     @classmethod
+     def from_specs(
+         cls,
+-        specs: tuple[SkillSpec, ...],
++        specs: Iterable[SkillSpec],
+         *,
+         tools: Mapping[ToolName, ToolSpec],
+     ) -> SkillRegistry:
+@@ -52,7 +63,7 @@ class SkillRegistry(Mapping[SkillName, SkillSpec]):
+                     f"Skill {spec.name!r} requires tools not in registry: "
+                     + ", ".join(sorted(str(t) for t in missing))
+                 )
+-            for intent in spec.supported_intents:
++            for intent in spec.applicable_intents:
+                 if intent in intent_index:
+                     raise DuplicateSkillIntentError(
+                         f"Intent {intent!r} already owned by skill "
+@@ -106,7 +117,7 @@ class SkillRegistry(Mapping[SkillName, SkillSpec]):
+             SkillManifestEntry(
+                 name=spec.name,
+                 description=spec.description,
+-                supported_intents=tuple(sorted(spec.supported_intents, key=lambda i: i.value)),
++                applicable_intents=tuple(sorted(spec.applicable_intents, key=lambda i: i.value)),
+                 required_inputs=tuple(sorted(spec.required_inputs)),
+                 required_tools=tuple(sorted(spec.required_tools, key=lambda t: t.value)),
+             )
+@@ -115,90 +126,184 @@ class SkillRegistry(Mapping[SkillName, SkillSpec]):
+ 
+ 
+ # ---------------------------------------------------------------------------
+-# Slot-based adapters (stateless, no tool callable)
++# SkillCatalog — capability-aware partition of all built-in skill definitions
++# ---------------------------------------------------------------------------
++
++@dataclass(frozen=True)
++class SkillCatalog:
++    """Partitions all built-in SkillSpecs into active (compatible) and disabled
++    (missing tools) sets against the exact resolved ToolRegistry.
++
++    Construction follows the spec §5.7 order:
++    1. materialize specs once
++    2. validate duplicate SkillName
++    3. validate duplicate intent ownership
++    4. compute missing tools vs exact resolved ToolRegistry
++    5. partition into compatible/incompatible
++    6. build strict active SkillRegistry
++    7. build deterministic disabled records
++    8. build immutable intent indexes
++    """
++
++    active: SkillRegistry
++    disabled: tuple[DisabledSkill, ...]
++
++    def __post_init__(self) -> None:
++        # Build disabled intent index for O(1) lookup (step 8).
++        idx: dict[IntentName, DisabledSkill] = {}
++        for ds in self.disabled:
++            for intent in ds.applicable_intents:
++                idx[intent] = ds
++        object.__setattr__(self, "_disabled_intent_index", MappingProxyType(idx))
++
++    @classmethod
++    def from_specs(
++        cls,
++        specs: Iterable[SkillSpec],
++        *,
++        tools: Mapping[ToolName, ToolSpec],
++    ) -> SkillCatalog:
++        # Step 1: materialize
++        specs_list = list(specs)
++
++        # Step 2+3: validate duplicates across ALL specs before partitioning
++        seen_names: set[SkillName] = set()
++        seen_intents: dict[IntentName, SkillName] = {}
++        for spec in specs_list:
++            if spec.name in seen_names:
++                raise DuplicateSkillError(
++                    f"Skill {spec.name!r} defined more than once"
++                )
++            seen_names.add(spec.name)
++            for intent in spec.applicable_intents:
++                if intent in seen_intents:
++                    raise DuplicateSkillIntentError(
++                        f"Intent {intent!r} owned by both {seen_intents[intent]!r} "
++                        f"and {spec.name!r}"
++                    )
++                seen_intents[intent] = spec.name
++
++        # Step 4+5: compute missing tools and partition
++        available = frozenset(tools.keys())
++        active_specs: list[SkillSpec] = []
++        disabled: list[DisabledSkill] = []
++
++        for spec in specs_list:
++            missing = spec.required_tools - available
++            if missing:
++                # Step 7: deterministic disabled record
++                disabled.append(DisabledSkill(
++                    name=spec.name,
++                    description=spec.description,
++                    applicable_intents=tuple(
++                        sorted(spec.applicable_intents, key=lambda i: i.value)
++                    ),
++                    required_tools=tuple(
++                        sorted(spec.required_tools, key=lambda t: t.value)
++                    ),
++                    missing_tools=tuple(
++                        sorted(missing, key=lambda t: t.value)
++                    ),
++                    reason=DisabledSkillReason.MISSING_REQUIRED_TOOLS,
++                ))
++            else:
++                active_specs.append(spec)
++
++        # Step 6: build strict active SkillRegistry (raises if invariant violated)
++        active = SkillRegistry.from_specs(active_specs, tools=tools)
++
++        return cls(active=active, disabled=tuple(disabled))
++
++    def active_for_intent(self, intent: IntentName) -> SkillSpec | None:
++        return self.active.for_intent(intent)
++
++    def unavailable_for_intent(self, intent: IntentName) -> DisabledSkill | None:
++        idx: MappingProxyType = object.__getattribute__(self, "_disabled_intent_index")
++        return idx.get(intent)
++
++
++# ---------------------------------------------------------------------------
++# Slot-based adapters (stateless, no tool callable/executor)
+ # ---------------------------------------------------------------------------
+ 
+-def _calculate_and_save_factory(slots: Mapping[str, Any]) -> list[Step]:
++def _calculate_and_save_factory(inputs: Mapping[str, Any]) -> list[Step]:
+     return CalculateAndSaveSkill(
+-        expression=slots["expression"],
+-        note_name=slots["note_name"],
++        expression=inputs["expression"],
++        note_name=inputs["note_name"],
+     ).make_steps()
+ 
+ 
+-def _read_and_summarize_factory(slots: Mapping[str, Any]) -> list[Step]:
++def _read_and_summarize_factory(inputs: Mapping[str, Any]) -> list[Step]:
+     return ReadAndSummarizeSkill(
+-        note_name=slots["note_name"],
++        note_name=inputs["note_name"],
+     ).make_steps()
+ 
+ 
+-def _web_search_factory(slots: Mapping[str, Any]) -> list[Step]:
+-    # max_results is hard-coded to 3 to match pre-EX2 production planner behavior.
++def _web_search_factory(inputs: Mapping[str, Any]) -> list[Step]:
++    # max_results=3 is locked to match accepted pre-EX2 production behavior (spec §8.3).
+     return WebSearchSkill(
+-        query=slots["query"],
++        query=inputs["query"],
+         max_results=3,
+     ).make_steps()
+ 
+ 
+ # ---------------------------------------------------------------------------
+-# Static provider — pre-filters skills to only those whose required tools
+-# are available in the supplied ToolRegistry.  This ensures both local and
+-# M6 remote backends pass SkillRegistry.from_specs() validation (change 7).
++# Built-in skill provider — always returns all three definitions, no filtering.
++# Capability partitioning occurs only in SkillCatalog.from_specs().
+ # ---------------------------------------------------------------------------
+ 
+-_CALCULATE_AND_SAVE_TOOLS = frozenset({
+-    ToolName.CALCULATE, ToolName.WRITE_NOTE, ToolName.FINISH,
+-})
+-_READ_AND_SUMMARIZE_TOOLS = frozenset({
+-    ToolName.READ_NOTE, ToolName.SUMMARIZE, ToolName.FINISH,
+-})
+-_WEB_SEARCH_TOOLS = frozenset({
+-    ToolName.WEB_SEARCH, ToolName.FINISH,
+-})
+-
+-
+-def builtin_skill_specs(
+-    tools: Mapping[ToolName, ToolSpec],
+-) -> tuple[SkillSpec, ...]:
+-    """Return SkillSpec instances for built-in skills whose required tools are
+-    all present in *tools*.  Skills with missing tool dependencies are silently
+-    omitted so that each backend can construct a valid SkillRegistry."""
+-    available = frozenset(tools.keys())
+-    specs: list[SkillSpec] = []
+-
+-    if _CALCULATE_AND_SAVE_TOOLS <= available:
+-        specs.append(SkillSpec(
++def builtin_skill_specs() -> tuple[SkillSpec, ...]:
++    """Return all three static built-in SkillSpec definitions.
++
++    The provider does not filter by backend, memory_mode, or tool availability.
++    Partitioning is the responsibility of SkillCatalog.from_specs().
++    """
++    return (
++        SkillSpec(
+             name=SkillName.CALCULATE_AND_SAVE,
+-            description=(
+-                "Calculate a numeric expression then save the result as a note."
+-            ),
+-            supported_intents=frozenset({IntentName.CALCULATE_THEN_SAVE_NOTE}),
++            description="Calculate a numeric expression then save the result as a note.",
++            applicable_intents=frozenset({IntentName.CALCULATE_THEN_SAVE_NOTE}),
+             required_inputs=frozenset({"expression", "note_name"}),
+-            required_tools=_CALCULATE_AND_SAVE_TOOLS,
++            required_tools=frozenset({ToolName.CALCULATE, ToolName.WRITE_NOTE, ToolName.FINISH}),
+             plan_factory=_calculate_and_save_factory,
+-        ))
+-
+-    if _READ_AND_SUMMARIZE_TOOLS <= available:
+-        specs.append(SkillSpec(
++        ),
++        SkillSpec(
+             name=SkillName.READ_AND_SUMMARIZE,
+             description="Read a note from memory then summarize its content.",
+-            supported_intents=frozenset({IntentName.READ_NOTE_THEN_SUMMARIZE}),
++            applicable_intents=frozenset({IntentName.READ_NOTE_THEN_SUMMARIZE}),
+             required_inputs=frozenset({"note_name"}),
+-            required_tools=_READ_AND_SUMMARIZE_TOOLS,
++            required_tools=frozenset({ToolName.READ_NOTE, ToolName.SUMMARIZE, ToolName.FINISH}),
+             plan_factory=_read_and_summarize_factory,
+-        ))
+-
+-    if _WEB_SEARCH_TOOLS <= available:
+-        specs.append(SkillSpec(
++        ),
++        SkillSpec(
+             name=SkillName.WEB_SEARCH,
+             description="Search the web and return the top results.",
+-            supported_intents=frozenset({IntentName.WEB_SEARCH}),
++            applicable_intents=frozenset({IntentName.WEB_SEARCH}),
+             required_inputs=frozenset({"query"}),
+-            required_tools=_WEB_SEARCH_TOOLS,
++            required_tools=frozenset({ToolName.WEB_SEARCH, ToolName.FINISH}),
+             plan_factory=_web_search_factory,
+-        ))
++        ),
++    )
++
++
++# ---------------------------------------------------------------------------
++# Composition helpers
++# ---------------------------------------------------------------------------
+ 
+-    return tuple(specs)
++def build_skill_catalog(*, tools: Mapping[ToolName, ToolSpec]) -> SkillCatalog:
++    """Build a capability-aware SkillCatalog from all built-in specs and the
++    given resolved ToolRegistry."""
++    return SkillCatalog.from_specs(builtin_skill_specs(), tools=tools)
+ 
+ 
+ def build_skill_registry(*, tools: Mapping[ToolName, ToolSpec]) -> SkillRegistry:
+-    return SkillRegistry.from_specs(builtin_skill_specs(tools), tools=tools)
++    """Build a strict SkillRegistry from only the skills compatible with *tools*.
++
++    Used in tests that exercise SkillRegistry directly. Production code should
++    prefer build_skill_catalog() to retain DisabledSkill evidence.
++    """
++    compatible = [
++        spec for spec in builtin_skill_specs()
++        if spec.required_tools <= frozenset(tools.keys())
++    ]
++    return SkillRegistry.from_specs(compatible, tools=tools)
+diff --git a/agent_core/state/enums.py b/agent_core/state/enums.py
+index c24d49b..32f8885 100644
+--- a/agent_core/state/enums.py
++++ b/agent_core/state/enums.py
+@@ -86,6 +86,10 @@ class SkillName(StrEnum):
+     WEB_SEARCH = "web_search"
+ 
+ 
++class DisabledSkillReason(StrEnum):
++    MISSING_REQUIRED_TOOLS = "missing_required_tools"
++
++
+ class ToolResultKind(StrEnum):
+     TEXT = "text"
+     NUMBER = "number"
+diff --git a/tests/test_skill_aware_intent_planner.py b/tests/test_skill_aware_intent_planner.py
+index 79f2766..1cff0e9 100644
+--- a/tests/test_skill_aware_intent_planner.py
++++ b/tests/test_skill_aware_intent_planner.py
+@@ -1,9 +1,10 @@
+-"""EX2 — SkillAwareIntentPlanner routing, parity, fallback and regression tests."""
++"""EX2 v1.2 — SkillAwareIntentPlanner routing, parity, fallback, unavailable,
++and regression tests."""
+ from __future__ import annotations
+ 
+ from collections.abc import Mapping
+ from typing import Any
+-from unittest.mock import MagicMock, patch
++from unittest.mock import MagicMock
+ 
+ import pytest
+ 
+@@ -11,18 +12,17 @@ from agent_core.planning.intent_planner import IntentPlanner
+ from agent_core.planning.intents import IntentName, ParsedIntent
+ from agent_core.planning.rule_based_planner import RuleBasedPlanner, build_rule_based_planner
+ from agent_core.planning.skill_aware_intent_planner import SkillAwareIntentPlanner
+-from agent_core.skills.base import SkillSpec
++from agent_core.skills.base import DisabledSkill, SkillSpec
+ from agent_core.skills.errors import InvalidSkillPlanError
+-from agent_core.skills.registry import SkillRegistry, build_skill_registry
++from agent_core.skills.registry import SkillCatalog, SkillRegistry, build_skill_catalog
+ from agent_core.state.agent_state import AgentState, Step
+-from agent_core.state.enums import SkillName, ToolName
++from agent_core.state.enums import DisabledSkillReason, SkillName, ToolName
+ from agent_core.tools.builtin_tools import FakeWebSearchClient
+-from agent_core.tools.registry import build_tool_registry
++from agent_core.tools.registry import LOCAL_DURABLE_TOOLS, build_tool_registry
+ 
+ 
+ # ---------------------------------------------------------------------------
+-# Pre-EX2 "golden" plans — captured from production planner BEFORE shadow
+-# removal.  These are the exact Step sequences the planner used to produce.
++# Test helpers
+ # ---------------------------------------------------------------------------
+ 
+ _NOTE = "budget"
+@@ -31,7 +31,6 @@ _QUERY = "thông tin về Ducati Monster 795"
+ 
+ 
+ def _golden_calculate_save(expr: str = _EXPR, note: str = _NOTE) -> list[tuple]:
+-    """(action, args) pairs from pre-EX2 _calculate_then_save_note_plan."""
+     return [
+         (ToolName.CALCULATE,  {"expression": expr}),
+         (ToolName.WRITE_NOTE, {"name": note, "content": "$last_text"}),
+@@ -40,7 +39,6 @@ def _golden_calculate_save(expr: str = _EXPR, note: str = _NOTE) -> list[tuple]:
+ 
+ 
+ def _golden_read_summarize(note: str = _NOTE) -> list[tuple]:
+-    """(action, args) pairs from pre-EX2 _read_note_then_summarize_plan."""
+     return [
+         (ToolName.READ_NOTE, {"name": note}),
+         (ToolName.SUMMARIZE, {"text": "$last.output.content"}),
+@@ -49,7 +47,6 @@ def _golden_read_summarize(note: str = _NOTE) -> list[tuple]:
+ 
+ 
+ def _golden_web_search(query: str = _QUERY) -> list[tuple]:
+-    """(action, args) pairs from pre-EX2 _web_search_plan."""
+     return [
+         (ToolName.WEB_SEARCH, {"query": query, "max_results": 3}),
+         (ToolName.FINISH,     {"answer": "$last_text"}),
+@@ -64,6 +61,10 @@ def _local_tools():
+     return build_tool_registry(FakeWebSearchClient())
+ 
+ 
++def _remote_tools():
++    return build_tool_registry(FakeWebSearchClient(), disabled_tools=LOCAL_DURABLE_TOOLS)
++
++
+ def _parsed(
+     intent: IntentName,
+     *,
+@@ -86,68 +87,69 @@ def _parsed(
+     )
+ 
+ 
+-def _build_planner(tools=None) -> SkillAwareIntentPlanner:
+-    t = tools or _local_tools()
++def _build_local_planner() -> SkillAwareIntentPlanner:
+     return SkillAwareIntentPlanner(
+-        skills=build_skill_registry(tools=t),
++        catalog=build_skill_catalog(tools=_local_tools()),
+         fallback=IntentPlanner(),
+-        tools=t,
+     )
+ 
+ 
++def _build_remote_planner() -> SkillAwareIntentPlanner:
++    return SkillAwareIntentPlanner(
++        catalog=build_skill_catalog(tools=_remote_tools()),
++        fallback=IntentPlanner(),
++    )
++
++
++def _dummy_factory(inputs: Mapping[str, Any]) -> list[Step]:
++    return [Step("dummy", ToolName.FINISH, {"answer": "ok"})]
++
++
+ # ---------------------------------------------------------------------------
+-# §14.4 Plan parity
++# AC-11 Exact plan parity
+ # ---------------------------------------------------------------------------
+ 
+ def test_calculate_save_parity_via_skill_aware():
+-    planner = _build_planner()
+-    parsed = _parsed(
+-        IntentName.CALCULATE_THEN_SAVE_NOTE,
+-        expression=_EXPR,
+-        note_name=_NOTE,
+-    )
++    planner = _build_local_planner()
++    parsed = _parsed(IntentName.CALCULATE_THEN_SAVE_NOTE, expression=_EXPR, note_name=_NOTE)
+     steps = planner.make_plan(parsed)
+     assert _plan_signature(steps) == _golden_calculate_save()
+ 
+ 
+ def test_read_summarize_parity_via_skill_aware():
+-    planner = _build_planner()
+-    parsed = _parsed(IntentName.READ_NOTE_THEN_SUMMARIZE, note_name=_NOTE)
+-    steps = planner.make_plan(parsed)
++    planner = _build_local_planner()
++    steps = planner.make_plan(_parsed(IntentName.READ_NOTE_THEN_SUMMARIZE, note_name=_NOTE))
+     assert _plan_signature(steps) == _golden_read_summarize()
+ 
+ 
+ def test_web_search_parity_via_skill_aware():
+-    planner = _build_planner()
+-    parsed = _parsed(IntentName.WEB_SEARCH, query=_QUERY)
+-    steps = planner.make_plan(parsed)
++    planner = _build_local_planner()
++    steps = planner.make_plan(_parsed(IntentName.WEB_SEARCH, query=_QUERY))
+     assert _plan_signature(steps) == _golden_web_search()
+ 
+ 
+ def test_web_search_max_results_exactly_3():
+-    planner = _build_planner()
+-    parsed = _parsed(IntentName.WEB_SEARCH, query="test")
+-    steps = planner.make_plan(parsed)
++    steps = _build_local_planner().make_plan(_parsed(IntentName.WEB_SEARCH, query="test"))
+     assert steps[0].action == ToolName.WEB_SEARCH
+     assert steps[0].args["max_results"] == 3
+ 
+ 
+ def test_calculate_save_step_order_preserved():
+-    steps = _build_planner().make_plan(
++    steps = _build_local_planner().make_plan(
+         _parsed(IntentName.CALCULATE_THEN_SAVE_NOTE, expression=_EXPR, note_name=_NOTE)
+     )
+     assert [s.action for s in steps] == [ToolName.CALCULATE, ToolName.WRITE_NOTE, ToolName.FINISH]
+ 
+ 
+ def test_read_summarize_step_order_preserved():
+-    steps = _build_planner().make_plan(
++    steps = _build_local_planner().make_plan(
+         _parsed(IntentName.READ_NOTE_THEN_SUMMARIZE, note_name=_NOTE)
+     )
+     assert [s.action for s in steps] == [ToolName.READ_NOTE, ToolName.SUMMARIZE, ToolName.FINISH]
+ 
+ 
+ def test_finish_step_preserved_calculate_save():
+-    steps = _build_planner().make_plan(
++    steps = _build_local_planner().make_plan(
+         _parsed(IntentName.CALCULATE_THEN_SAVE_NOTE, expression=_EXPR, note_name=_NOTE)
+     )
+     finish = steps[-1]
+@@ -157,7 +159,6 @@ def test_finish_step_preserved_calculate_save():
+ 
+ 
+ def test_parity_via_full_rule_based_planner():
+-    """End-to-end: RuleBasedPlanner → SkillAwareIntentPlanner → skill."""
+     planner = build_rule_based_planner(tools=_local_tools())
+     state = AgentState(goal=f"Tính {_EXPR} rồi lưu vào ghi chú {_NOTE}")
+     steps = planner.make_plan(state)
+@@ -173,102 +174,227 @@ def test_web_parity_via_full_rule_based_planner():
+ 
+ 
+ # ---------------------------------------------------------------------------
+-# §14.5 SkillAwareIntentPlanner routing
++# AC-09 Routing — mapped active skills
+ # ---------------------------------------------------------------------------
+ 
+ def test_mapped_calculate_save_calls_skill():
+-    skills = build_skill_registry(tools=_local_tools())
+     fallback = MagicMock(spec=IntentPlanner)
+     planner = SkillAwareIntentPlanner(
+-        skills=skills, fallback=fallback, tools=_local_tools()
++        catalog=build_skill_catalog(tools=_local_tools()), fallback=fallback
+     )
+-    parsed = _parsed(
+-        IntentName.CALCULATE_THEN_SAVE_NOTE, expression="1+1", note_name="n"
++    steps = planner.make_plan(
++        _parsed(IntentName.CALCULATE_THEN_SAVE_NOTE, expression="1+1", note_name="n")
+     )
+-    steps = planner.make_plan(parsed)
+     fallback.make_plan.assert_not_called()
+     assert steps[0].action == ToolName.CALCULATE
+ 
+ 
+ def test_mapped_read_summarize_calls_skill():
+-    skills = build_skill_registry(tools=_local_tools())
+     fallback = MagicMock(spec=IntentPlanner)
+     planner = SkillAwareIntentPlanner(
+-        skills=skills, fallback=fallback, tools=_local_tools()
++        catalog=build_skill_catalog(tools=_local_tools()), fallback=fallback
+     )
+-    parsed = _parsed(IntentName.READ_NOTE_THEN_SUMMARIZE, note_name="n")
+-    steps = planner.make_plan(parsed)
++    steps = planner.make_plan(_parsed(IntentName.READ_NOTE_THEN_SUMMARIZE, note_name="n"))
+     fallback.make_plan.assert_not_called()
+     assert steps[0].action == ToolName.READ_NOTE
+ 
+ 
+ def test_mapped_web_search_calls_skill():
+-    skills = build_skill_registry(tools=_local_tools())
+     fallback = MagicMock(spec=IntentPlanner)
+     planner = SkillAwareIntentPlanner(
+-        skills=skills, fallback=fallback, tools=_local_tools()
++        catalog=build_skill_catalog(tools=_local_tools()), fallback=fallback
+     )
+-    parsed = _parsed(IntentName.WEB_SEARCH, query="q")
+-    steps = planner.make_plan(parsed)
++    steps = planner.make_plan(_parsed(IntentName.WEB_SEARCH, query="q"))
+     fallback.make_plan.assert_not_called()
+     assert steps[0].action == ToolName.WEB_SEARCH
+ 
+ 
+ def test_fallback_not_called_for_mapped_intent():
+-    skills = build_skill_registry(tools=_local_tools())
+     fallback = MagicMock(spec=IntentPlanner)
+     planner = SkillAwareIntentPlanner(
+-        skills=skills, fallback=fallback, tools=_local_tools()
++        catalog=build_skill_catalog(tools=_local_tools()), fallback=fallback
+     )
+     planner.make_plan(_parsed(IntentName.WEB_SEARCH, query="q"))
+     fallback.make_plan.assert_not_called()
+ 
+ 
++# ---------------------------------------------------------------------------
++# AC-10 Routing — unknown → fallback exactly once
++# ---------------------------------------------------------------------------
++
+ def test_fallback_called_for_unmapped_intent():
+-    skills = build_skill_registry(tools=_local_tools())
+     fallback = MagicMock(spec=IntentPlanner)
+     fallback.make_plan.return_value = [Step("done", ToolName.FINISH, {"answer": "ok"})]
+     planner = SkillAwareIntentPlanner(
+-        skills=skills, fallback=fallback, tools=_local_tools()
++        catalog=build_skill_catalog(tools=_local_tools()), fallback=fallback
+     )
+     planner.make_plan(_parsed(IntentName.CALCULATE, expression="1+1"))
+     fallback.make_plan.assert_called_once()
+ 
+ 
+-def test_missing_slots_delegates_to_fallback_before_skill_dispatch():
+-    """v1.1 change 3: missing_slots check is BEFORE skill dispatch."""
+-    skills = build_skill_registry(tools=_local_tools())
++def test_fallback_called_exactly_once_for_unknown():
++    fallback = MagicMock(spec=IntentPlanner)
++    fallback.make_plan.return_value = [Step("done", ToolName.FINISH, {"answer": "ok"})]
++    planner = SkillAwareIntentPlanner(
++        catalog=build_skill_catalog(tools=_local_tools()), fallback=fallback
++    )
++    planner.make_plan(_parsed(IntentName.UNKNOWN))
++    assert fallback.make_plan.call_count == 1
++
++
++# ---------------------------------------------------------------------------
++# AC-07D Routing — disabled → unavailable FINISH
++# ---------------------------------------------------------------------------
++
++def test_disabled_calculate_save_produces_unavailable_plan():
++    planner = _build_remote_planner()
++    steps = planner.make_plan(
++        _parsed(IntentName.CALCULATE_THEN_SAVE_NOTE, expression="1+1", note_name="n")
++    )
++    assert len(steps) == 1
++    assert steps[0].action == ToolName.FINISH
++    assert "calculate_and_save" in steps[0].args["answer"]
++    assert "write_note" in steps[0].args["answer"]
++
++
++def test_disabled_read_summarize_produces_unavailable_plan():
++    planner = _build_remote_planner()
++    steps = planner.make_plan(_parsed(IntentName.READ_NOTE_THEN_SUMMARIZE, note_name="n"))
++    assert len(steps) == 1
++    assert steps[0].action == ToolName.FINISH
++    assert "read_and_summarize" in steps[0].args["answer"]
++    assert "read_note" in steps[0].args["answer"]
++
++
++def test_unavailable_exact_message_format():
++    planner = _build_remote_planner()
++    steps = planner.make_plan(
++        _parsed(IntentName.CALCULATE_THEN_SAVE_NOTE, expression="1+1", note_name="n")
++    )
++    assert steps[0].args["answer"] == (
++        "Skill 'calculate_and_save' không khả dụng với backend hiện tại. "
++        "Thiếu capability: write_note."
++    )
++
++
++def test_unavailable_does_not_call_fallback():
++    fallback = MagicMock(spec=IntentPlanner)
++    planner = SkillAwareIntentPlanner(
++        catalog=build_skill_catalog(tools=_remote_tools()), fallback=fallback
++    )
++    planner.make_plan(
++        _parsed(IntentName.CALCULATE_THEN_SAVE_NOTE, expression="1+1", note_name="n")
++    )
++    fallback.make_plan.assert_not_called()
++
++
++def test_unavailable_does_not_call_plan_factory():
++    factory_called: list[bool] = []
++
++    def spy_factory(inputs: Mapping[str, Any]) -> list[Step]:
++        factory_called.append(True)
++        return [Step("x", ToolName.FINISH, {"answer": "ok"})]
++
++    tools_no_web = build_tool_registry(
++        FakeWebSearchClient(), disabled_tools=frozenset({ToolName.WEB_SEARCH})
++    )
++    spec = SkillSpec(
++        name=SkillName.WEB_SEARCH,
++        description="web",
++        applicable_intents=frozenset({IntentName.WEB_SEARCH}),
++        required_inputs=frozenset({"query"}),
++        required_tools=frozenset({ToolName.WEB_SEARCH, ToolName.FINISH}),
++        plan_factory=spy_factory,
++    )
++    catalog = SkillCatalog.from_specs((spec,), tools=tools_no_web)
++    planner = SkillAwareIntentPlanner(catalog=catalog, fallback=IntentPlanner())
++    planner.make_plan(_parsed(IntentName.WEB_SEARCH, query="q"))
++    assert not factory_called, "plan_factory was called for a disabled skill"
++
++
++def test_unavailable_multiple_missing_tools_sorted():
++    spec = SkillSpec(
++        name=SkillName.CALCULATE_AND_SAVE,
++        description="test",
++        applicable_intents=frozenset({IntentName.CALCULATE_THEN_SAVE_NOTE}),
++        required_inputs=frozenset({"expression", "note_name"}),
++        required_tools=frozenset({
++            ToolName.CALCULATE, ToolName.WRITE_NOTE, ToolName.READ_NOTE, ToolName.FINISH
++        }),
++        plan_factory=_dummy_factory,
++    )
++    catalog = SkillCatalog.from_specs((spec,), tools=_remote_tools())
++    planner = SkillAwareIntentPlanner(catalog=catalog, fallback=IntentPlanner())
++    steps = planner.make_plan(
++        _parsed(IntentName.CALCULATE_THEN_SAVE_NOTE, expression="1", note_name="n")
++    )
++    msg = steps[0].args["answer"]
++    assert "read_note, write_note" in msg  # lexicographic: read_note < write_note
++
++
++# ---------------------------------------------------------------------------
++# AC-08 Clarification precedes skill dispatch (missing_slots)
++# ---------------------------------------------------------------------------
++
++def test_missing_slots_delegates_to_fallback_before_active():
++    fallback = MagicMock(spec=IntentPlanner)
++    fallback.make_plan.return_value = [Step("clarify", ToolName.FINISH, {"answer": "?"})]
++    planner = SkillAwareIntentPlanner(
++        catalog=build_skill_catalog(tools=_local_tools()), fallback=fallback
++    )
++    planner.make_plan(_parsed(IntentName.WEB_SEARCH, missing_slots=("query",)))
++    fallback.make_plan.assert_called_once()
++
++
++def test_missing_slots_delegates_to_fallback_before_unavailable():
+     fallback = MagicMock(spec=IntentPlanner)
+     fallback.make_plan.return_value = [Step("clarify", ToolName.FINISH, {"answer": "?"})]
+     planner = SkillAwareIntentPlanner(
+-        skills=skills, fallback=fallback, tools=_local_tools()
++        catalog=build_skill_catalog(tools=_remote_tools()), fallback=fallback
+     )
+-    # WEB_SEARCH is a registered skill, but missing_slots is non-empty
+-    parsed = _parsed(IntentName.WEB_SEARCH, missing_slots=("query",))
+-    planner.make_plan(parsed)
++    planner.make_plan(_parsed(
++        IntentName.CALCULATE_THEN_SAVE_NOTE, missing_slots=("expression",)
++    ))
+     fallback.make_plan.assert_called_once()
+ 
+ 
+-def test_registered_skill_failure_does_not_silently_fall_back():
+-    """§9.5: InvalidSkillPlanError on bad plan — no silent fallback."""
+-    from collections.abc import Mapping as AbcMapping
+-    tools = _local_tools()
++# ---------------------------------------------------------------------------
++# AC-12 Shadow logic absent
++# ---------------------------------------------------------------------------
++
++def test_shadow_methods_absent_from_intent_planner():
++    planner = IntentPlanner()
++    assert not hasattr(planner, "_calculate_then_save_note_plan")
++    assert not hasattr(planner, "_read_note_then_summarize_plan")
++    assert not hasattr(planner, "_web_search_plan")
++
++
++def test_shadow_routing_produces_unknown_via_intent_planner_alone():
++    """IntentPlanner alone for skill intents → unknown (shadow removed)."""
++    planner = IntentPlanner()
++    result = planner.make_plan(
++        _parsed(IntentName.CALCULATE_THEN_SAVE_NOTE, expression="1+1", note_name="n")
++    )
++    assert len(result) == 1
++    assert result[0].action == ToolName.FINISH
+ 
+-    def bad_factory(slots: AbcMapping) -> list[Step]:
+-        return []  # empty plan — forbidden
+ 
+-    from agent_core.planning.intents import IntentName as IN
++def test_registered_skill_failure_does_not_silently_fall_back():
++    def bad_factory(inputs: Mapping[str, Any]) -> list[Step]:
++        return []
++
+     spec = SkillSpec(
+         name=SkillName.WEB_SEARCH,
+         description="bad",
+-        supported_intents=frozenset({IntentName.WEB_SEARCH}),
++        applicable_intents=frozenset({IntentName.WEB_SEARCH}),
+         required_inputs=frozenset({"query"}),
+         required_tools=frozenset({ToolName.WEB_SEARCH, ToolName.FINISH}),
+         plan_factory=bad_factory,
+     )
+-    registry = SkillRegistry.from_specs((spec,), tools=tools)
++    registry = SkillRegistry.from_specs((spec,), tools=_local_tools())
++    catalog = SkillCatalog(active=registry, disabled=())
+     fallback = MagicMock(spec=IntentPlanner)
+-    planner = SkillAwareIntentPlanner(skills=registry, fallback=fallback, tools=tools)
++    planner = SkillAwareIntentPlanner(catalog=catalog, fallback=fallback)
+ 
+     with pytest.raises(InvalidSkillPlanError, match="empty"):
+         planner.make_plan(_parsed(IntentName.WEB_SEARCH, query="q"))
+@@ -276,74 +402,61 @@ def test_registered_skill_failure_does_not_silently_fall_back():
+ 
+ 
+ def test_non_list_skill_output_rejected():
+-    tools = _local_tools()
+-
+-    def bad_factory(slots) -> list[Step]:  # type: ignore[return-value]
++    def bad_factory(inputs: Mapping[str, Any]) -> list[Step]:  # type: ignore[return-value]
+         return None  # type: ignore[return-value]
+ 
+     spec = SkillSpec(
+-        name=SkillName.WEB_SEARCH,
+-        description="bad",
+-        supported_intents=frozenset({IntentName.WEB_SEARCH}),
++        name=SkillName.WEB_SEARCH, description="bad",
++        applicable_intents=frozenset({IntentName.WEB_SEARCH}),
+         required_inputs=frozenset({"query"}),
+         required_tools=frozenset({ToolName.WEB_SEARCH, ToolName.FINISH}),
+         plan_factory=bad_factory,
+     )
+-    registry = SkillRegistry.from_specs((spec,), tools=tools)
+-    planner = SkillAwareIntentPlanner(
+-        skills=registry, fallback=IntentPlanner(), tools=tools
+-    )
++    registry = SkillRegistry.from_specs((spec,), tools=_local_tools())
++    catalog = SkillCatalog(active=registry, disabled=())
++    planner = SkillAwareIntentPlanner(catalog=catalog, fallback=IntentPlanner())
+     with pytest.raises(InvalidSkillPlanError, match="NoneType"):
+         planner.make_plan(_parsed(IntentName.WEB_SEARCH, query="q"))
+ 
+ 
+ def test_non_step_item_rejected():
+-    tools = _local_tools()
+-
+-    def bad_factory(slots) -> list[Step]:  # type: ignore[return-value]
++    def bad_factory(inputs: Mapping[str, Any]) -> list[Step]:  # type: ignore[return-value]
+         return ["not_a_step"]  # type: ignore[return-value]
+ 
+     spec = SkillSpec(
+-        name=SkillName.WEB_SEARCH,
+-        description="bad",
+-        supported_intents=frozenset({IntentName.WEB_SEARCH}),
++        name=SkillName.WEB_SEARCH, description="bad",
++        applicable_intents=frozenset({IntentName.WEB_SEARCH}),
+         required_inputs=frozenset({"query"}),
+         required_tools=frozenset({ToolName.WEB_SEARCH, ToolName.FINISH}),
+         plan_factory=bad_factory,
+     )
+-    registry = SkillRegistry.from_specs((spec,), tools=tools)
+-    planner = SkillAwareIntentPlanner(
+-        skills=registry, fallback=IntentPlanner(), tools=tools
+-    )
++    registry = SkillRegistry.from_specs((spec,), tools=_local_tools())
++    catalog = SkillCatalog(active=registry, disabled=())
++    planner = SkillAwareIntentPlanner(catalog=catalog, fallback=IntentPlanner())
+     with pytest.raises(InvalidSkillPlanError, match="Step"):
+         planner.make_plan(_parsed(IntentName.WEB_SEARCH, query="q"))
+ 
+ 
+ def test_undeclared_tool_action_rejected():
+-    tools = _local_tools()
+-
+-    def bad_factory(slots) -> list[Step]:
+-        # Emits a tool NOT in required_tools
++    def bad_factory(inputs: Mapping[str, Any]) -> list[Step]:
+         return [Step("bad", ToolName.CALCULATE, {"expression": "1"})]
+ 
+     spec = SkillSpec(
+-        name=SkillName.WEB_SEARCH,
+-        description="bad",
+-        supported_intents=frozenset({IntentName.WEB_SEARCH}),
++        name=SkillName.WEB_SEARCH, description="bad",
++        applicable_intents=frozenset({IntentName.WEB_SEARCH}),
+         required_inputs=frozenset({"query"}),
+         required_tools=frozenset({ToolName.WEB_SEARCH, ToolName.FINISH}),
+         plan_factory=bad_factory,
+     )
+-    registry = SkillRegistry.from_specs((spec,), tools=tools)
+-    planner = SkillAwareIntentPlanner(
+-        skills=registry, fallback=IntentPlanner(), tools=tools
+-    )
++    registry = SkillRegistry.from_specs((spec,), tools=_local_tools())
++    catalog = SkillCatalog(active=registry, disabled=())
++    planner = SkillAwareIntentPlanner(catalog=catalog, fallback=IntentPlanner())
+     with pytest.raises(InvalidSkillPlanError, match="required_tools"):
+         planner.make_plan(_parsed(IntentName.WEB_SEARCH, query="q"))
+ 
+ 
+ def test_fresh_plan_returned_on_repeated_calls():
+-    planner = _build_planner()
++    planner = _build_local_planner()
+     parsed = _parsed(IntentName.WEB_SEARCH, query="q")
+     a = planner.make_plan(parsed)
+     b = planner.make_plan(parsed)
+@@ -352,12 +465,44 @@ def test_fresh_plan_returned_on_repeated_calls():
+ 
+ 
+ # ---------------------------------------------------------------------------
+-# §14.6 Non-skill regression parity
++# AC-14 RuntimeAgent class unchanged
++# ---------------------------------------------------------------------------
++
++def test_all_production_factories_use_skill_aware_planner():
++    from agent_core.runtime.runtime_agent import build_local_agent, build_test_agent
++    agent_local, _ = build_local_agent()
++    agent_test = build_test_agent()
++    for agent in (agent_local, agent_test):
++        assert isinstance(agent.planner, RuleBasedPlanner)
++        assert isinstance(agent.planner.intent_planner, SkillAwareIntentPlanner)
++
++
++def test_skill_aware_planner_uses_catalog_not_registry_directly():
++    catalog = build_skill_catalog(tools=_local_tools())
++    planner = SkillAwareIntentPlanner(catalog=catalog, fallback=IntentPlanner())
++    assert hasattr(planner, "_catalog")
++    assert isinstance(planner._catalog, SkillCatalog)
++
++
++def test_runtime_agent_class_unchanged():
++    from agent_core.runtime.runtime_agent import RuntimeAgent
++    import inspect
++    sig = inspect.signature(RuntimeAgent.__init__)
++    params = list(sig.parameters)
++    assert "planner" in params
++    assert "tools" in params
++    assert "memory_client" in params
++    assert "skill_registry" not in params
++    assert "skill_catalog" not in params
++
++
++# ---------------------------------------------------------------------------
++# Non-skill regression parity
+ # ---------------------------------------------------------------------------
+ 
+ def test_clarification_plan_unchanged():
+     planner = build_rule_based_planner(tools=_local_tools())
+-    state = AgentState(goal="Tính giúp tôi")  # missing expression
++    state = AgentState(goal="Tính giúp tôi")
+     steps = planner.make_plan(state)
+     assert len(steps) == 1
+     assert steps[0].action == ToolName.FINISH
+@@ -394,83 +539,92 @@ def test_unknown_plan_unchanged():
+ 
+ 
+ def test_web_search_then_save_note_remains_unsupported():
+-    """WEB_SEARCH_THEN_SAVE_NOTE must not produce a skill plan."""
+-    planner = build_rule_based_planner(tools=_local_tools())
+-    # The intent exists in IntentName but has no skill and no planner branch
+-    parsed = _parsed(IntentName.WEB_SEARCH_THEN_SAVE_NOTE, query="q")
+-    planner_direct = _build_planner()
+-    steps = planner_direct.make_plan(parsed)
+-    # Must fall to unknown plan (FINISH with unknown message)
++    planner_direct = _build_local_planner()
++    steps = planner_direct.make_plan(
++        _parsed(IntentName.WEB_SEARCH_THEN_SAVE_NOTE, query="q")
++    )
+     assert len(steps) == 1
+     assert steps[0].action == ToolName.FINISH
+ 
+ 
+ # ---------------------------------------------------------------------------
+-# §14.7 Composition
++# AC-16 Backend safety / composition
+ # ---------------------------------------------------------------------------
+ 
+-def test_all_production_factories_use_skill_aware_planner():
+-    """build_local_agent and build_test_agent use build_rule_based_planner."""
+-    from agent_core.runtime.runtime_agent import build_local_agent, build_test_agent
+-    agent_local, _ = build_local_agent()
+-    agent_test = build_test_agent()
+-    for agent in (agent_local, agent_test):
+-        planner = agent.planner
+-        assert isinstance(planner, RuleBasedPlanner)
+-        assert isinstance(planner.intent_planner, SkillAwareIntentPlanner)
++def test_m6_local_composition_still_builds():
++    from agent_core.runtime.runtime_agent import build_local_agent
++    agent, store = build_local_agent()
++    assert agent is not None and store is not None
+ 
+ 
+-def test_runtime_agent_class_unchanged():
+-    """RuntimeAgent.__init__ signature and core methods must not have changed."""
+-    from agent_core.runtime.runtime_agent import RuntimeAgent
+-    import inspect
+-    sig = inspect.signature(RuntimeAgent.__init__)
+-    params = list(sig.parameters)
+-    # Core params still present; SkillRegistry not injected into RuntimeAgent
+-    assert "planner" in params
+-    assert "tools" in params
+-    assert "memory_client" in params
+-    assert "skill_registry" not in params
++def test_remote_active_skill_does_not_use_write_note():
++    catalog = build_skill_catalog(tools=_remote_tools())
++    for spec in catalog.active.values():
++        assert ToolName.WRITE_NOTE not in spec.required_tools
++
++
++def test_remote_active_skill_does_not_use_read_note():
++    catalog = build_skill_catalog(tools=_remote_tools())
++    for spec in catalog.active.values():
++        assert ToolName.READ_NOTE not in spec.required_tools
++
++
++def test_produced_plans_pass_plan_validator():
++    from agent_core.planning.plan_validator import validate_plan
++    tools = _local_tools()
++    planner = build_rule_based_planner(tools=tools)
++    for goal in [
++        f"Tính {_EXPR} rồi lưu vào ghi chú {_NOTE}",
++        f"Đọc ghi chú {_NOTE} rồi tóm tắt",
++        "Tìm thông tin về Ducati",
++    ]:
++        validate_plan(planner.make_plan(AgentState(goal=goal)), tools)
+ 
+ 
+ # ---------------------------------------------------------------------------
+-# §14.8 Runtime integration
++# AC-13 Skills are stateless / slot-only
+ # ---------------------------------------------------------------------------
+ 
+-def test_calculate_save_skill_selected_in_production_path():
++def test_plan_factory_receives_only_required_inputs():
++    """Factory receives only required_inputs fields, not full ParsedIntent."""
++    received: list[dict] = []
++
++    def capturing_factory(inputs: Mapping[str, Any]) -> list[Step]:
++        received.append(dict(inputs))
++        return [
++            Step("s1", ToolName.WEB_SEARCH, {"query": inputs["query"], "max_results": 3}),
++            Step("s2", ToolName.FINISH, {"answer": "$last_text"}),
++        ]
++
++    spec = SkillSpec(
++        name=SkillName.WEB_SEARCH, description="capturing",
++        applicable_intents=frozenset({IntentName.WEB_SEARCH}),
++        required_inputs=frozenset({"query"}),
++        required_tools=frozenset({ToolName.WEB_SEARCH, ToolName.FINISH}),
++        plan_factory=capturing_factory,
++    )
++    registry = SkillRegistry.from_specs((spec,), tools=_local_tools())
++    catalog = SkillCatalog(active=registry, disabled=())
++    planner = SkillAwareIntentPlanner(catalog=catalog, fallback=IntentPlanner())
++    planner.make_plan(_parsed(IntentName.WEB_SEARCH, query="test"))
++
++    assert len(received) == 1
++    assert set(received[0].keys()) == {"query"}  # only required_inputs
++    assert received[0]["query"] == "test"
++
++
++def test_runtime_path_calculate_save_uses_skill():
+     from agent_core.runtime.runtime_agent import build_test_agent
+     agent = build_test_agent()
+     state = AgentState(goal=f"Tính {_EXPR} rồi lưu vào ghi chú {_NOTE}")
+     agent.run(state)
+     assert state.done
+-    # Plan was built via skill (not shadow IntentPlanner branch)
+     assert any(s.action == ToolName.WRITE_NOTE for s in state.plan)
+ 
+ 
+-def test_web_search_skill_selected_in_production_path():
++def test_runtime_path_web_search_uses_skill():
+     from agent_core.runtime.runtime_agent import build_test_agent
+     agent = build_test_agent()
+     state = AgentState(goal="Tìm thông tin về Ducati Monster 795")
+     agent.run(state)
+     assert any(s.action == ToolName.WEB_SEARCH for s in state.plan)
+-
+-
+-def test_produced_plans_pass_plan_validator():
+-    from agent_core.planning.plan_validator import validate_plan
+-    tools = _local_tools()
+-    planner = build_rule_based_planner(tools=tools)
+-    for goal, intent_args in [
+-        (f"Tính {_EXPR} rồi lưu vào ghi chú {_NOTE}", {}),
+-        (f"Đọc ghi chú {_NOTE} rồi tóm tắt", {}),
+-        ("Tìm thông tin về Ducati", {}),
+-    ]:
+-        state = AgentState(goal=goal)
+-        steps = planner.make_plan(state)
+-        validate_plan(steps, tools)  # must not raise
+-
+-
+-def test_m6_local_composition_still_builds():
+-    from agent_core.runtime.runtime_agent import build_local_agent
+-    agent, store = build_local_agent()
+-    assert agent is not None
+-    assert store is not None
+diff --git a/tests/test_skill_registry.py b/tests/test_skill_registry.py
+index 733e7ed..e45d6d1 100644
+--- a/tests/test_skill_registry.py
++++ b/tests/test_skill_registry.py
+@@ -1,14 +1,14 @@
+-"""EX2 contract tests — SkillName, SkillSpec, SkillRegistry."""
++"""EX2 v1.2 contract tests — SkillName, DisabledSkillReason, SkillSpec,
++SkillRegistry, SkillCatalog, DisabledSkill, builtin_skill_specs."""
+ from __future__ import annotations
+ 
+ from collections.abc import Mapping
+ from typing import Any
+-from unittest.mock import MagicMock
+ 
+ import pytest
+ 
+ from agent_core.planning.intents import IntentName
+-from agent_core.skills.base import SkillManifestEntry, SkillSpec
++from agent_core.skills.base import DisabledSkill, SkillManifestEntry, SkillSpec
+ from agent_core.skills.errors import (
+     DuplicateSkillError,
+     DuplicateSkillIntentError,
+@@ -17,25 +17,27 @@ from agent_core.skills.errors import (
+     UnknownSkillError,
+ )
+ from agent_core.skills.registry import (
++    SkillCatalog,
+     SkillRegistry,
++    build_skill_catalog,
+     build_skill_registry,
+     builtin_skill_specs,
+ )
+ from agent_core.state.agent_state import Step
+-from agent_core.state.enums import RiskLevel, SkillName, ToolName
++from agent_core.state.enums import DisabledSkillReason, SkillName, ToolName
+ from agent_core.tools.builtin_tools import FakeWebSearchClient
+-from agent_core.tools.registry import build_tool_registry
++from agent_core.tools.registry import LOCAL_DURABLE_TOOLS, build_tool_registry
+ 
+ 
+ # ---------------------------------------------------------------------------
+ # Helpers
+ # ---------------------------------------------------------------------------
+ 
+-def _dummy_factory(slots: Mapping[str, Any]) -> list[Step]:
++def _dummy_factory(inputs: Mapping[str, Any]) -> list[Step]:
+     return [Step("dummy", ToolName.FINISH, {"answer": "ok"})]
+ 
+ 
+-def _dummy_factory_b(slots: Mapping[str, Any]) -> list[Step]:
++def _dummy_factory_b(inputs: Mapping[str, Any]) -> list[Step]:
+     return [Step("dummy b", ToolName.FINISH, {"answer": "ok"})]
+ 
+ 
+@@ -50,7 +52,7 @@ def _make_spec(
+     return SkillSpec(
+         name=name,
+         description=description,
+-        supported_intents=intents or frozenset({IntentName.WEB_SEARCH}),
++        applicable_intents=intents or frozenset({IntentName.WEB_SEARCH}),
+         required_inputs=required_inputs or frozenset({"query"}),
+         required_tools=required_tools or frozenset({ToolName.WEB_SEARCH, ToolName.FINISH}),
+         plan_factory=factory,
+@@ -62,12 +64,16 @@ def _local_tools() -> Mapping[ToolName, Any]:
+ 
+ 
+ def _remote_tools() -> Mapping[ToolName, Any]:
+-    from agent_core.tools.registry import LOCAL_DURABLE_TOOLS
+     return build_tool_registry(FakeWebSearchClient(), disabled_tools=LOCAL_DURABLE_TOOLS)
+ 
+ 
++def _steps_comparable(steps: list) -> list[tuple]:
++    """Extract (action, args) pairs — id/created_at are unique per call by design."""
++    return [(s.action, s.args) for s in steps]
++
++
+ # ---------------------------------------------------------------------------
+-# §14.1 SkillName and SkillSpec
++# AC-01 SkillName
+ # ---------------------------------------------------------------------------
+ 
+ def test_skill_name_has_three_values():
+@@ -79,36 +85,76 @@ def test_skill_name_has_three_values():
+     }
+ 
+ 
++def test_skill_name_in_single_enum_source():
++    import inspect
++    import agent_core.state.enums as enums_mod
++    # SkillName.__module__ must point to enums.py, not any skills sub-module
++    assert SkillName.__module__ == enums_mod.__name__, (
++        f"SkillName is defined in {SkillName.__module__!r}, expected {enums_mod.__name__!r}"
++    )
++    assert inspect.getfile(SkillName) == inspect.getfile(enums_mod)
++
++
++# ---------------------------------------------------------------------------
++# AC-02 DisabledSkillReason
++# ---------------------------------------------------------------------------
++
++def test_disabled_skill_reason_has_one_value():
++    values = set(DisabledSkillReason)
++    assert values == {DisabledSkillReason.MISSING_REQUIRED_TOOLS}
++
++
++def test_disabled_skill_reason_in_single_enum_source():
++    import inspect, agent_core.state.enums as enums_mod
++    assert inspect.getfile(DisabledSkillReason) == inspect.getfile(enums_mod)
++
++
++# ---------------------------------------------------------------------------
++# AC-03 SkillSpec
++# ---------------------------------------------------------------------------
++
+ def test_skill_spec_blank_description_rejected():
+     with pytest.raises(InvalidSkillSpecError, match="description"):
+         SkillSpec(
+             name=SkillName.WEB_SEARCH,
+             description="   ",
+-            supported_intents=frozenset({IntentName.WEB_SEARCH}),
++            applicable_intents=frozenset({IntentName.WEB_SEARCH}),
+             required_inputs=frozenset({"query"}),
+             required_tools=frozenset({ToolName.WEB_SEARCH, ToolName.FINISH}),
+             plan_factory=_dummy_factory,
+         )
+ 
+ 
+-def test_skill_spec_empty_supported_intents_rejected():
+-    with pytest.raises(InvalidSkillSpecError, match="supported_intents"):
++def test_skill_spec_empty_applicable_intents_rejected():
++    with pytest.raises(InvalidSkillSpecError, match="applicable_intents"):
+         SkillSpec(
+             name=SkillName.WEB_SEARCH,
+             description="ok",
+-            supported_intents=frozenset(),
++            applicable_intents=frozenset(),
+             required_inputs=frozenset({"query"}),
+             required_tools=frozenset({ToolName.WEB_SEARCH, ToolName.FINISH}),
+             plan_factory=_dummy_factory,
+         )
+ 
+ 
++def test_skill_spec_empty_required_inputs_rejected():
++    with pytest.raises(InvalidSkillSpecError, match="required_inputs"):
++        SkillSpec(
++            name=SkillName.WEB_SEARCH,
++            description="ok",
++            applicable_intents=frozenset({IntentName.WEB_SEARCH}),
++            required_inputs=frozenset(),
++            required_tools=frozenset({ToolName.WEB_SEARCH, ToolName.FINISH}),
++            plan_factory=_dummy_factory,
++        )
++
++
+ def test_skill_spec_empty_required_tools_rejected():
+     with pytest.raises(InvalidSkillSpecError, match="required_tools"):
+         SkillSpec(
+             name=SkillName.WEB_SEARCH,
+             description="ok",
+-            supported_intents=frozenset({IntentName.WEB_SEARCH}),
++            applicable_intents=frozenset({IntentName.WEB_SEARCH}),
+             required_inputs=frozenset({"query"}),
+             required_tools=frozenset(),
+             plan_factory=_dummy_factory,
+@@ -120,7 +166,7 @@ def test_skill_spec_non_callable_factory_rejected():
+         SkillSpec(
+             name=SkillName.WEB_SEARCH,
+             description="ok",
+-            supported_intents=frozenset({IntentName.WEB_SEARCH}),
++            applicable_intents=frozenset({IntentName.WEB_SEARCH}),
+             required_inputs=frozenset({"query"}),
+             required_tools=frozenset({ToolName.WEB_SEARCH, ToolName.FINISH}),
+             plan_factory="not_a_callable",  # type: ignore[arg-type]
+@@ -133,11 +179,17 @@ def test_skill_spec_is_frozen():
+         spec.description = "mutated"  # type: ignore[misc]
+ 
+ 
++def test_skill_spec_no_enable_disable_state():
++    spec = _make_spec()
++    for attr in ("enabled", "disabled", "active", "missing_tools", "backend"):
++        assert not hasattr(spec, attr), f"SkillSpec has unexpected field {attr!r}"
++
++
+ def test_skill_manifest_entry_is_frozen():
+     entry = SkillManifestEntry(
+         name=SkillName.WEB_SEARCH,
+         description="ok",
+-        supported_intents=(IntentName.WEB_SEARCH,),
++        applicable_intents=(IntentName.WEB_SEARCH,),
+         required_inputs=("query",),
+         required_tools=(ToolName.WEB_SEARCH, ToolName.FINISH),
+     )
+@@ -146,16 +198,9 @@ def test_skill_manifest_entry_is_frozen():
+ 
+ 
+ # ---------------------------------------------------------------------------
+-# §14.2 SkillRegistry
++# AC-04 SkillRegistry — strict Mapping
+ # ---------------------------------------------------------------------------
+ 
+-def test_registry_builds_from_three_unique_specs():
+-    tools = _local_tools()
+-    specs = builtin_skill_specs(tools)
+-    registry = SkillRegistry.from_specs(specs, tools=tools)
+-    assert len(registry) == 3
+-
+-
+ def test_registry_implements_mapping():
+     from collections.abc import Mapping as AbcMapping
+     registry = build_skill_registry(tools=_local_tools())
+@@ -164,12 +209,12 @@ def test_registry_implements_mapping():
+ 
+ def test_registry_preserves_insertion_order():
+     tools = _local_tools()
+-    specs = builtin_skill_specs(tools)
++    specs = [s for s in builtin_skill_specs() if s.required_tools <= frozenset(tools.keys())]
+     registry = SkillRegistry.from_specs(specs, tools=tools)
+     assert list(registry) == [spec.name for spec in specs]
+ 
+ 
+-def test_duplicate_skill_name_rejected():
++def test_registry_duplicate_skill_name_rejected():
+     tools = _local_tools()
+     spec_a = _make_spec(name=SkillName.WEB_SEARCH, intents=frozenset({IntentName.WEB_SEARCH}))
+     spec_b = _make_spec(name=SkillName.WEB_SEARCH, intents=frozenset({IntentName.PROJECT_CONTEXT_QUERY}))
+@@ -177,21 +222,12 @@ def test_duplicate_skill_name_rejected():
+         SkillRegistry.from_specs((spec_a, spec_b), tools=tools)
+ 
+ 
+-def test_duplicate_skill_does_not_overwrite():
+-    tools = _local_tools()
+-    spec_a = _make_spec(name=SkillName.WEB_SEARCH, intents=frozenset({IntentName.WEB_SEARCH}))
+-    spec_b = _make_spec(name=SkillName.WEB_SEARCH, intents=frozenset({IntentName.PROJECT_CONTEXT_QUERY}))
+-    with pytest.raises(DuplicateSkillError):
+-        SkillRegistry.from_specs((spec_a, spec_b), tools=tools)
+-    # if no exception, original would be unchanged — test proves error is raised first
+-
+-
+-def test_duplicate_intent_ownership_rejected():
++def test_registry_duplicate_intent_rejected():
+     tools = _local_tools()
+     spec_a = _make_spec(name=SkillName.WEB_SEARCH, intents=frozenset({IntentName.WEB_SEARCH}))
+     spec_b = _make_spec(
+         name=SkillName.CALCULATE_AND_SAVE,
+-        intents=frozenset({IntentName.WEB_SEARCH}),  # duplicate intent
++        intents=frozenset({IntentName.WEB_SEARCH}),
+         required_tools=frozenset({ToolName.CALCULATE, ToolName.FINISH}),
+         factory=_dummy_factory_b,
+     )
+@@ -199,47 +235,42 @@ def test_duplicate_intent_ownership_rejected():
+         SkillRegistry.from_specs((spec_a, spec_b), tools=tools)
+ 
+ 
+-def test_missing_required_tool_rejected():
+-    # Build a tools mapping without WRITE_NOTE so CALCULATE_AND_SAVE fails
+-    from agent_core.tools.registry import LOCAL_DURABLE_TOOLS
+-    limited_tools = build_tool_registry(FakeWebSearchClient(), disabled_tools=LOCAL_DURABLE_TOOLS)
++def test_registry_missing_required_tool_rejected():
+     spec = SkillSpec(
+         name=SkillName.CALCULATE_AND_SAVE,
+         description="test",
+-        supported_intents=frozenset({IntentName.CALCULATE_THEN_SAVE_NOTE}),
++        applicable_intents=frozenset({IntentName.CALCULATE_THEN_SAVE_NOTE}),
+         required_inputs=frozenset({"expression", "note_name"}),
+         required_tools=frozenset({ToolName.CALCULATE, ToolName.WRITE_NOTE, ToolName.FINISH}),
+         plan_factory=_dummy_factory,
+     )
+     with pytest.raises(MissingSkillToolError, match="write_note"):
+-        SkillRegistry.from_specs((spec,), tools=limited_tools)
++        SkillRegistry.from_specs((spec,), tools=_remote_tools())
+ 
+ 
+-def test_known_skill_returned():
++def test_registry_known_skill_returned():
+     registry = build_skill_registry(tools=_local_tools())
+     spec = registry[SkillName.WEB_SEARCH]
+     assert spec.name == SkillName.WEB_SEARCH
+ 
+ 
+-def test_unknown_skill_rejected():
+-    # Build a registry with only one skill, then require a non-registered name
+-    tools = _local_tools()
++def test_registry_unknown_skill_rejected():
+     spec = _make_spec(name=SkillName.WEB_SEARCH, intents=frozenset({IntentName.WEB_SEARCH}))
+-    registry = SkillRegistry.from_specs((spec,), tools=tools)
++    registry = SkillRegistry.from_specs((spec,), tools=_local_tools())
+     with pytest.raises(UnknownSkillError):
+         registry.require(SkillName.CALCULATE_AND_SAVE)
+     with pytest.raises(KeyError):
+         _ = registry[SkillName.READ_AND_SUMMARIZE]
+ 
+ 
+-def test_for_intent_returns_mapped_skill():
++def test_registry_for_intent_returns_mapped_skill():
+     registry = build_skill_registry(tools=_local_tools())
+     spec = registry.for_intent(IntentName.WEB_SEARCH)
+     assert spec is not None
+     assert spec.name == SkillName.WEB_SEARCH
+ 
+ 
+-def test_for_intent_unmapped_returns_none():
++def test_registry_for_intent_unmapped_returns_none():
+     registry = build_skill_registry(tools=_local_tools())
+     assert registry.for_intent(IntentName.UNKNOWN) is None
+ 
+@@ -250,19 +281,18 @@ def test_registry_is_immutable():
+         registry[SkillName.WEB_SEARCH] = _make_spec()  # type: ignore[index]
+ 
+ 
+-def test_all_view_is_read_only():
++def test_registry_all_view_is_read_only():
+     registry = build_skill_registry(tools=_local_tools())
+     view = registry.all()
+     with pytest.raises(TypeError):
+         view[SkillName.WEB_SEARCH] = _make_spec()  # type: ignore[index]
+ 
+ 
+-def test_no_public_register_method():
+-    registry = build_skill_registry(tools=_local_tools())
+-    assert not hasattr(registry, "register")
++def test_registry_no_public_register_method():
++    assert not hasattr(build_skill_registry(tools=_local_tools()), "register")
+ 
+ 
+-def test_manifest_is_deterministic():
++def test_registry_manifest_is_deterministic():
+     tools = _local_tools()
+     m1 = build_skill_registry(tools=tools).manifest()
+     m2 = build_skill_registry(tools=tools).manifest()
+@@ -270,32 +300,200 @@ def test_manifest_is_deterministic():
+     assert isinstance(m1, tuple)
+ 
+ 
+-def test_manifest_contains_no_callable():
++def test_registry_manifest_contains_no_callable():
+     for entry in build_skill_registry(tools=_local_tools()).manifest():
+         for value in vars(entry).values():
+             assert not callable(value), f"manifest entry contains callable: {value!r}"
+ 
+ 
+-def test_manifest_contains_no_tool_callable():
++def test_registry_manifest_has_no_plan_factory_field():
+     for entry in build_skill_registry(tools=_local_tools()).manifest():
+         assert not hasattr(entry, "plan_factory")
+         assert not hasattr(entry, "fn")
+ 
+ 
+-def test_manifest_mutation_does_not_affect_registry():
+-    registry = build_skill_registry(tools=_local_tools())
+-    m = registry.manifest()
+-    # manifest returns a new tuple each call; mutating it does not change registry
+-    assert registry.manifest() == m
++# ---------------------------------------------------------------------------
++# AC-05 / AC-06 SkillCatalog partitioning
++# ---------------------------------------------------------------------------
++
++def test_catalog_local_three_active_zero_disabled():
++    catalog = build_skill_catalog(tools=_local_tools())
++    assert len(catalog.active) == 3
++    assert len(catalog.disabled) == 0
++
++
++def test_catalog_remote_one_active_two_disabled():
++    catalog = build_skill_catalog(tools=_remote_tools())
++    assert len(catalog.active) == 1
++    assert len(catalog.disabled) == 2
++
++
++def test_catalog_remote_active_is_web_search():
++    catalog = build_skill_catalog(tools=_remote_tools())
++    assert SkillName.WEB_SEARCH in catalog.active
++
++
++def test_catalog_remote_disabled_names():
++    catalog = build_skill_catalog(tools=_remote_tools())
++    disabled_names = {ds.name for ds in catalog.disabled}
++    assert disabled_names == {SkillName.CALCULATE_AND_SAVE, SkillName.READ_AND_SUMMARIZE}
++
++
++def test_catalog_no_skill_disappears_silently():
++    """Every incompatible built-in must appear as a DisabledSkill (AC-06)."""
++    catalog = build_skill_catalog(tools=_remote_tools())
++    all_names = {s.name for s in builtin_skill_specs()}
++    active_names = set(catalog.active)
++    disabled_names = {ds.name for ds in catalog.disabled}
++    assert all_names == active_names | disabled_names
++
++
++def test_catalog_active_and_disabled_are_disjoint():
++    catalog = build_skill_catalog(tools=_remote_tools())
++    active_names = set(catalog.active)
++    disabled_names = {ds.name for ds in catalog.disabled}
++    assert active_names.isdisjoint(disabled_names)
++
++
++def test_catalog_disabled_ordering_deterministic():
++    """Same tool set produces same disabled tuple order on repeated calls."""
++    c1 = build_skill_catalog(tools=_remote_tools())
++    c2 = build_skill_catalog(tools=_remote_tools())
++    assert [ds.name for ds in c1.disabled] == [ds.name for ds in c2.disabled]
+ 
+ 
+ # ---------------------------------------------------------------------------
+-# §14.3 Existing skill behavior
++# AC-07C exact missing tools
+ # ---------------------------------------------------------------------------
+ 
+-def _steps_comparable(steps: list) -> list[tuple]:
+-    """Extract (action, args) pairs — id/created_at are unique per call by design."""
+-    return [(s.action, s.args) for s in steps]
++def test_catalog_calculate_and_save_disabled_missing_write_note():
++    catalog = build_skill_catalog(tools=_remote_tools())
++    ds = next(ds for ds in catalog.disabled if ds.name == SkillName.CALCULATE_AND_SAVE)
++    assert ToolName.WRITE_NOTE in ds.missing_tools
++
++
++def test_catalog_read_and_summarize_disabled_missing_read_note():
++    catalog = build_skill_catalog(tools=_remote_tools())
++    ds = next(ds for ds in catalog.disabled if ds.name == SkillName.READ_AND_SUMMARIZE)
++    assert ToolName.READ_NOTE in ds.missing_tools
++
++
++def test_catalog_disabled_missing_tools_subset_of_required_tools():
++    for ds in build_skill_catalog(tools=_remote_tools()).disabled:
++        assert frozenset(ds.missing_tools) <= frozenset(ds.required_tools)
++
++
++def test_catalog_disabled_missing_tools_sorted_by_value():
++    for ds in build_skill_catalog(tools=_remote_tools()).disabled:
++        values = [t.value for t in ds.missing_tools]
++        assert values == sorted(values)
++
++
++def test_catalog_disabled_missing_tools_non_empty():
++    for ds in build_skill_catalog(tools=_remote_tools()).disabled:
++        assert len(ds.missing_tools) > 0
++
++
++def test_catalog_disabled_has_correct_reason():
++    for ds in build_skill_catalog(tools=_remote_tools()).disabled:
++        assert ds.reason == DisabledSkillReason.MISSING_REQUIRED_TOOLS
++
++
++def test_catalog_disabled_no_plan_factory():
++    for ds in build_skill_catalog(tools=_remote_tools()).disabled:
++        assert not hasattr(ds, "plan_factory")
++        assert not callable(ds)
++
++
++def test_catalog_disabled_no_callable():
++    for ds in build_skill_catalog(tools=_remote_tools()).disabled:
++        for attr in vars(ds).values():
++            assert not callable(attr), f"DisabledSkill has callable field: {attr!r}"
++
++
++def test_catalog_disabled_is_frozen():
++    ds_list = build_skill_catalog(tools=_remote_tools()).disabled
++    assert len(ds_list) > 0
++    with pytest.raises(Exception):
++        ds_list[0].reason = DisabledSkillReason.MISSING_REQUIRED_TOOLS  # type: ignore[misc]
++
++
++# ---------------------------------------------------------------------------
++# AC-05 SkillCatalog construction order — duplicates validated before partition
++# ---------------------------------------------------------------------------
++
++def test_catalog_duplicate_name_fails_before_partition():
++    """DuplicateSkillError must fire before any partitioning happens."""
++    spec_a = _make_spec(name=SkillName.WEB_SEARCH, intents=frozenset({IntentName.WEB_SEARCH}))
++    spec_b = _make_spec(name=SkillName.WEB_SEARCH, intents=frozenset({IntentName.PROJECT_CONTEXT_QUERY}))
++    with pytest.raises(DuplicateSkillError):
++        SkillCatalog.from_specs((spec_a, spec_b), tools=_remote_tools())
++
++
++def test_catalog_duplicate_intent_fails_before_partition():
++    """DuplicateSkillIntentError fires before partition even when skills have different names."""
++    spec_a = _make_spec(name=SkillName.WEB_SEARCH, intents=frozenset({IntentName.WEB_SEARCH}))
++    spec_b = _make_spec(
++        name=SkillName.CALCULATE_AND_SAVE,
++        intents=frozenset({IntentName.WEB_SEARCH}),
++        required_tools=frozenset({ToolName.CALCULATE, ToolName.FINISH}),
++        factory=_dummy_factory_b,
++    )
++    with pytest.raises(DuplicateSkillIntentError):
++        SkillCatalog.from_specs((spec_a, spec_b), tools=_remote_tools())
++
++
++# ---------------------------------------------------------------------------
++# AC-04 SkillRegistry remains strict when called directly
++# ---------------------------------------------------------------------------
++
++def test_registry_directly_rejects_incompatible_spec():
++    """SkillRegistry.from_specs() must still raise MissingSkillToolError when
++    called directly with a spec that has missing tools (not via catalog)."""
++    spec = SkillSpec(
++        name=SkillName.CALCULATE_AND_SAVE,
++        description="test",
++        applicable_intents=frozenset({IntentName.CALCULATE_THEN_SAVE_NOTE}),
++        required_inputs=frozenset({"expression", "note_name"}),
++        required_tools=frozenset({ToolName.CALCULATE, ToolName.WRITE_NOTE, ToolName.FINISH}),
++        plan_factory=_dummy_factory,
++    )
++    with pytest.raises(MissingSkillToolError):
++        SkillRegistry.from_specs((spec,), tools=_remote_tools())
++
++
++# ---------------------------------------------------------------------------
++# AC-13 / provider rules
++# ---------------------------------------------------------------------------
++
++def test_builtin_skill_specs_always_returns_three():
++    """Provider returns all 3 specs regardless of backend."""
++    specs = builtin_skill_specs()
++    assert len(specs) == 3
++    names = {spec.name for spec in specs}
++    assert names == {SkillName.CALCULATE_AND_SAVE, SkillName.READ_AND_SUMMARIZE, SkillName.WEB_SEARCH}
++
++
++def test_builtin_skill_specs_takes_no_args():
++    """Provider must be called without arguments (spec §8.4)."""
++    import inspect
++    sig = inspect.signature(builtin_skill_specs)
++    assert len(sig.parameters) == 0
++
++
++def test_builtin_skill_specs_does_not_filter_by_backend():
++    """Same function call returns the same specs regardless of backend state."""
++    specs = builtin_skill_specs()
++    assert SkillName.CALCULATE_AND_SAVE in {s.name for s in specs}
++    assert SkillName.READ_AND_SUMMARIZE in {s.name for s in specs}
++
++
++def test_skills_are_stateless():
++    from agent_core.skills.calculate_and_save_skill import CalculateAndSaveSkill
++    skill = CalculateAndSaveSkill("1+1", "n")
++    before = _steps_comparable(skill.make_steps())
++    after = _steps_comparable(skill.make_steps())
++    assert before == after
+ 
+ 
+ def test_calculate_and_save_returns_fresh_list_each_call():
+@@ -325,99 +523,79 @@ def test_web_search_returns_fresh_list_each_call():
+     assert _steps_comparable(a) == _steps_comparable(b)
+ 
+ 
+-def test_skills_are_stateless():
+-    from agent_core.skills.calculate_and_save_skill import CalculateAndSaveSkill
+-    skill = CalculateAndSaveSkill("1+1", "n")
+-    before = _steps_comparable(skill.make_steps())
+-    after = _steps_comparable(skill.make_steps())
+-    assert before == after
+-
+-
+ def test_no_skill_calls_tool_executor():
+-    from agent_core.skills.calculate_and_save_skill import CalculateAndSaveSkill
+-    from agent_core.skills.read_and_summarize_skill import ReadAndSummarizeSkill
+-    from agent_core.skills.web_search_skill import WebSearchSkill
+-    import agent_core.tools.executor as exec_module
+-    # Executor is never imported by any skill module
++    import sys
+     skill_modules = [
+         "agent_core.skills.calculate_and_save_skill",
+         "agent_core.skills.read_and_summarize_skill",
+         "agent_core.skills.web_search_skill",
+     ]
+-    import sys
+     for mod_name in skill_modules:
+         mod = sys.modules[mod_name]
+         assert not hasattr(mod, "ToolExecutor"), f"{mod_name} imports ToolExecutor"
+ 
+ 
+-def test_every_emitted_action_is_in_required_tools():
+-    from agent_core.skills.registry import (
+-        _calculate_and_save_factory,
+-        _read_and_summarize_factory,
+-        _web_search_factory,
+-    )
+-    calc_save_slots = {"expression": "2+2", "note_name": "n"}
+-    read_slots = {"note_name": "n"}
+-    web_slots = {"query": "q"}
+-
+-    from agent_core.skills.registry import (
+-        _CALCULATE_AND_SAVE_TOOLS,
+-        _READ_AND_SUMMARIZE_TOOLS,
+-        _WEB_SEARCH_TOOLS,
+-    )
+-    for step in _calculate_and_save_factory(calc_save_slots):
+-        assert step.action in _CALCULATE_AND_SAVE_TOOLS
+-    for step in _read_and_summarize_factory(read_slots):
+-        assert step.action in _READ_AND_SUMMARIZE_TOOLS
+-    for step in _web_search_factory(web_slots):
+-        assert step.action in _WEB_SEARCH_TOOLS
+-
++def test_no_skill_receives_tool_fn():
++    tools = _local_tools()
++    registry = build_skill_registry(tools=tools)
++    for spec in registry.values():
++        for tool_spec in tools.values():
++            assert spec.plan_factory is not tool_spec.fn
+ 
+-# ---------------------------------------------------------------------------
+-# §14.7 Composition
+-# ---------------------------------------------------------------------------
+ 
+-def test_build_skill_registry_returns_skill_registry():
+-    assert isinstance(build_skill_registry(tools=_local_tools()), SkillRegistry)
++def test_no_skill_receives_tool_executor():
++    from agent_core.tools.executor import ToolExecutor
++    for spec in build_skill_registry(tools=_local_tools()).values():
++        assert not isinstance(getattr(spec.plan_factory, "__self__", None), ToolExecutor)
+ 
+ 
+-def test_local_backend_registers_three_skills():
+-    registry = build_skill_registry(tools=_local_tools())
+-    assert len(registry) == 3
++# ---------------------------------------------------------------------------
++# AC-07E remote active skills do not use local-memory tools
++# ---------------------------------------------------------------------------
+ 
++def test_remote_active_skills_reference_no_local_memory_tools():
++    """No active remote skill's required_tools may overlap LOCAL_DURABLE_TOOLS (AC-07E)."""
++    catalog = build_skill_catalog(tools=_remote_tools())
++    for spec in catalog.active.values():
++        overlap = spec.required_tools & LOCAL_DURABLE_TOOLS
++        assert not overlap, (
++            f"Active remote skill {spec.name!r} references local-memory tools: {overlap}"
++        )
+ 
+-def test_remote_backend_registers_one_skill():
+-    registry = build_skill_registry(tools=_remote_tools())
+-    assert len(registry) == 1
+-    assert SkillName.WEB_SEARCH in registry
+ 
++def test_remote_catalog_build_does_not_raise():
++    """Remote startup succeeds even with incompatible skills (AC-07B)."""
++    catalog = build_skill_catalog(tools=_remote_tools())
++    assert isinstance(catalog, SkillCatalog)
+ 
+-def test_remote_backend_passes_required_tools_validation():
+-    # Must not raise MissingSkillToolError
+-    registry = build_skill_registry(tools=_remote_tools())
+-    assert isinstance(registry, SkillRegistry)
+ 
++# ---------------------------------------------------------------------------
++# AC-15 catalog uses exact resolved ToolRegistry
++# ---------------------------------------------------------------------------
+ 
+-def test_all_required_tools_exist_in_local_tool_registry():
++def test_local_backend_all_active_required_tools_present():
+     tools = _local_tools()
+-    for spec in build_skill_registry(tools=tools).values():
++    catalog = build_skill_catalog(tools=tools)
++    for spec in catalog.active.values():
+         missing = spec.required_tools - frozenset(tools.keys())
+         assert not missing, f"{spec.name} has missing tools: {missing}"
+ 
+ 
+-def test_no_skill_receives_tool_fn():
+-    tools = _local_tools()
+-    registry = build_skill_registry(tools=tools)
+-    for spec in registry.values():
+-        # plan_factory must not be a ToolSpec.fn
+-        for tool_spec in tools.values():
+-            assert spec.plan_factory is not tool_spec.fn
+-
+-
+-def test_no_skill_receives_tool_executor():
+-    from agent_core.tools.executor import ToolExecutor
+-    tools = _local_tools()
+-    registry = build_skill_registry(tools=tools)
+-    for spec in registry.values():
+-        # plan_factory should not be an instance method of ToolExecutor
+-        assert not isinstance(getattr(spec.plan_factory, "__self__", None), ToolExecutor)
++def test_catalog_is_built_from_same_registry_as_agent():
++    from agent_core.runtime.runtime_agent import build_local_agent, build_test_agent
++    from agent_core.planning.skill_aware_intent_planner import SkillAwareIntentPlanner
++    from agent_core.planning.rule_based_planner import RuleBasedPlanner
++    for factory_name, build_fn in [("build_local_agent", lambda: build_local_agent()[0]),
++                                    ("build_test_agent", build_test_agent)]:
++        agent = build_fn()
++        assert isinstance(agent.planner, RuleBasedPlanner)
++        planner = agent.planner.intent_planner
++        assert isinstance(planner, SkillAwareIntentPlanner)
++        catalog = planner._catalog
++        # catalog's active tools ⊆ agent's tools
++        for spec in catalog.active.values():
++            for tool_name in spec.required_tools:
++                assert tool_name in agent.tools, (
++                    f"{factory_name}: skill {spec.name!r} uses {tool_name!r} "
++                    f"but it is not in agent.tools"
++                )

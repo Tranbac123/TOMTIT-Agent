@@ -1,0 +1,6 @@
+=== V-03: import sanity ===
+command: python3 -c 'import agent_core ...'
+cwd: /Users/tranvanbac/Documents/AI/ai-agent/TOMTIT-Agent
+UTC start: 2026-06-18T14:08:35Z
+IMPORT_OK
+import_exit:0

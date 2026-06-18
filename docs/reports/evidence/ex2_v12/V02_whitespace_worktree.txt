@@ -1,0 +1,6 @@
+=== V-02: whitespace + worktree ===
+command: git diff --check cf471dde..eeccbcf && git status --short --untracked-files=all
+cwd: /Users/tranvanbac/Documents/AI/ai-agent/TOMTIT-Agent
+UTC start: 2026-06-18T14:08:26Z
+diff_check_exit:0
+status_exit:0

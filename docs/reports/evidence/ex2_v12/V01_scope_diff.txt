@@ -1,0 +1,16 @@
+=== V-01: scope diff ===
+command: git diff --name-status cf471dde..eeccbcf
+cwd: /Users/tranvanbac/Documents/AI/ai-agent/TOMTIT-Agent
+UTC start: 2026-06-18T14:08:25Z
+M	agent_core/planning/intent_planner.py
+M	agent_core/planning/rule_based_planner.py
+A	agent_core/planning/skill_aware_intent_planner.py
+M	agent_core/runtime/runtime_agent.py
+A	agent_core/skills/__init__.py
+M	agent_core/skills/base.py
+A	agent_core/skills/errors.py
+A	agent_core/skills/registry.py
+M	agent_core/state/enums.py
+A	docs/reports/REPORT_EX2_STATIC_SKILL_REGISTRY_INVENTORY_VERIFIED.md
+A	tests/test_skill_aware_intent_planner.py
+A	tests/test_skill_registry.py

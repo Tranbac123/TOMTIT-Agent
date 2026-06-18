@@ -1,0 +1,52 @@
+=== V-10: AC-15 composition + object identity ===
+cwd: /Users/tranvanbac/Documents/AI/ai-agent/TOMTIT-Agent
+UTC start: 2026-06-18T14:12:03Z
+=== Path: build_rule_based_planner(tools) ===
+id(resolved_tools) = 4350846224
+catalog is SkillCatalog: True
+  calculate_and_save.finish: id=4350783760 -- same ToolSpec object
+  calculate_and_save.calculate: id=4300266768 -- same ToolSpec object
+  calculate_and_save.write_note: id=4300266896 -- same ToolSpec object
+  read_and_summarize.finish: id=4350783760 -- same ToolSpec object
+  read_and_summarize.summarize: id=4350782992 -- same ToolSpec object
+  read_and_summarize.read_note: id=4350487632 -- same ToolSpec object
+  web_search.finish: id=4350783760 -- same ToolSpec object
+  web_search.web_search: id=4350783568 -- same ToolSpec object
+
+=== Path: build_local_agent() ===
+id(agent.tools) = 4383890768
+  calculate_and_save.finish: id=4383889744 -- in agent.tools
+  calculate_and_save.calculate: id=4350850192 -- in agent.tools
+  calculate_and_save.write_note: id=4383887952 -- in agent.tools
+  read_and_summarize.finish: id=4383889744 -- in agent.tools
+  read_and_summarize.summarize: id=4383888976 -- in agent.tools
+  read_and_summarize.read_note: id=4383888016 -- in agent.tools
+  web_search.finish: id=4383889744 -- in agent.tools
+  web_search.web_search: id=4383890128 -- in agent.tools
+
+=== Path: build_test_agent() ===
+id(agent2.tools) = 4383893776
+  calculate_and_save.finish: id=4383893520 -- in agent2.tools
+  calculate_and_save.calculate: id=4383892240 -- in agent2.tools
+  calculate_and_save.write_note: id=4383892304 -- in agent2.tools
+  read_and_summarize.finish: id=4383893520 -- in agent2.tools
+  read_and_summarize.summarize: id=4383893328 -- in agent2.tools
+  read_and_summarize.read_note: id=4383892560 -- in agent2.tools
+  web_search.finish: id=4383893520 -- in agent2.tools
+  web_search.web_search: id=4383893392 -- in agent2.tools
+
+IDENTITY CLAIM: In each factory the single resolved_tools dict is passed as
+the same reference to both build_rule_based_planner(tools=X) and RuntimeAgent(tools=X).
+The catalog is built inside build_rule_based_planner from that same X.
+Therefore catalog.active.required_tools subset-of agent.tools is guaranteed by construction.
+
+  IDENTITY OK: resolved['finish'] === same object in both catalog and agent
+  IDENTITY OK: resolved['calculate'] === same object in both catalog and agent
+  IDENTITY OK: resolved['write_note'] === same object in both catalog and agent
+  IDENTITY OK: resolved['finish'] === same object in both catalog and agent
+  IDENTITY OK: resolved['summarize'] === same object in both catalog and agent
+  IDENTITY OK: resolved['read_note'] === same object in both catalog and agent
+  IDENTITY OK: resolved['finish'] === same object in both catalog and agent
+  IDENTITY OK: resolved['web_search'] === same object in both catalog and agent
+AC-15 PASS
+exit:0

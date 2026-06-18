@@ -1,0 +1,28 @@
+=== V-08: 3× repeatability targeted tests (raw) ===
+command: pytest tests/test_skill_registry.py tests/test_skill_aware_intent_planner.py -p no:cacheprovider -q (×3)
+cwd: /Users/tranvanbac/Documents/AI/ai-agent/TOMTIT-Agent
+UTC start: 2026-06-18T14:11:07Z
+
+--- RUN 1 ---
+run1_start: 2026-06-18T14:11:07Z
+........................................................................ [ 67%]
+..................................                                       [100%]
+106 passed in 0.31s
+run1_exit:0
+run1_end: 2026-06-18T14:11:10Z
+
+--- RUN 2 ---
+run2_start: 2026-06-18T14:11:10Z
+........................................................................ [ 67%]
+..................................                                       [100%]
+106 passed in 0.28s
+run2_exit:0
+run2_end: 2026-06-18T14:11:13Z
+
+--- RUN 3 ---
+run3_start: 2026-06-18T14:11:13Z
+........................................................................ [ 67%]
+..................................                                       [100%]
+106 passed in 0.28s
+run3_exit:0
+run3_end: 2026-06-18T14:11:15Z

@@ -1,0 +1,9 @@
+=== V-09: exact unavailable message + RuntimeAgent signature ===
+cwd: /Users/tranvanbac/Documents/AI/ai-agent/TOMTIT-Agent
+UTC start: 2026-06-18T14:11:36Z
+exact_message_match: True
+actual_message: "Skill 'calculate_and_save' không khả dụng với backend hiện tại. Thiếu capability: write_note."
+expected_message: "Skill 'calculate_and_save' không khả dụng với backend hiện tại. Thiếu capability: write_note."
+
+RuntimeAgent.__init__ params: ['self', 'planner', 'tools', 'executor', 'final_composer', 'lifecycle', 'debug', 'memory_client']
+exit:0

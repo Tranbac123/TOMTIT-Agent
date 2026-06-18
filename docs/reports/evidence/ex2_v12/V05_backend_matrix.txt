@@ -1,0 +1,10 @@
+=== V-05: backend matrix ===
+cwd: /Users/tranvanbac/Documents/AI/ai-agent/TOMTIT-Agent
+UTC start: 2026-06-18T14:09:09Z
+builtin_skill_specs() count: 3
+LOCAL active: ['calculate_and_save', 'read_and_summarize', 'web_search']
+LOCAL disabled count: 0
+REMOTE active: ['web_search']
+  REMOTE disabled: calculate_and_save | missing: ['write_note'] | reason: missing_required_tools
+  REMOTE disabled: read_and_summarize | missing: ['read_note'] | reason: missing_required_tools
+exit:0
