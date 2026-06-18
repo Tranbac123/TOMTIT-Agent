@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from datetime import datetime, timezone
 from uuid import UUID, uuid4
 
 from agent_core.cli import run_interactive
-from agent_core.runtime.runtime_agent import build_local_agent
+from agent_core.memory.errors import RemoteMemoryConfigurationError
+from agent_core.memory.factory import MemoryBackendConfig
+from agent_core.runtime.runtime_agent import build_agent_with_memory_backend, build_local_agent
 from agent_core.runtime.session_runtime import SessionRuntime
 from agent_core.session_persistence import (
     FileSessionStore,
@@ -31,6 +34,33 @@ def main() -> None:
         metavar="PATH",
         help="directory for session files (default: .agent/sessions)",
     )
+    parser.add_argument(
+        "--memory-backend",
+        default=os.environ.get("TOMTIT_MEMORY_BACKEND", "local"),
+        choices=("local", "remote", "none"),
+        help="memory backend: local, remote, or none",
+    )
+    parser.add_argument(
+        "--memory-base-url",
+        default=os.environ.get("TOMTIT_MEMORY_BASE_URL"),
+        help="TOMTIT-Memory base URL for remote backend",
+    )
+    parser.add_argument(
+        "--memory-project-id",
+        default=os.environ.get("TOMTIT_MEMORY_PROJECT_ID"),
+        help="TOMTIT-Memory project_id for remote backend",
+    )
+    parser.add_argument(
+        "--memory-user-id",
+        default=os.environ.get("TOMTIT_MEMORY_USER_ID"),
+        help="default TOMTIT-Memory user_id for remote backend",
+    )
+    parser.add_argument(
+        "--memory-timeout-seconds",
+        type=float,
+        default=float(os.environ.get("TOMTIT_MEMORY_TIMEOUT_SECONDS", "5.0")),
+        help="remote memory HTTP timeout in seconds",
+    )
     args = parser.parse_args()
 
     # Validate session_id format before expensive composition
@@ -41,7 +71,21 @@ def main() -> None:
             print(f"Invalid session ID: {args.session_id!r}", file=sys.stderr)
             sys.exit(2)
 
-    agent, store = build_local_agent()
+    try:
+        if args.memory_backend == "local":
+            agent, store = build_local_agent()
+        else:
+            memory_config = MemoryBackendConfig.from_values(
+                backend=args.memory_backend,
+                base_url=args.memory_base_url,
+                project_id=args.memory_project_id,
+                default_user_id=args.memory_user_id,
+                timeout_seconds=args.memory_timeout_seconds,
+            )
+            agent, store = build_agent_with_memory_backend(memory_config=memory_config)
+    except RemoteMemoryConfigurationError as exc:
+        print(str(exc), file=sys.stderr)
+        sys.exit(2)
     session_store = FileSessionStore(args.session_dir)
 
     # BOUNDARY 1 — create or load session (before task)

@@ -8,6 +8,19 @@ from agent_core.state.enums import RiskLevel, ToolName
 from agent_core.tools.base import ToolSpec
 from agent_core.tools.errors import DuplicateToolError, UnknownToolError
 
+LOCAL_DURABLE_TOOLS = frozenset({
+    ToolName.WRITE_NOTE,
+    ToolName.READ_NOTE,
+    ToolName.LIST_NOTES,
+    ToolName.SAVE_FACT,
+    ToolName.SAVE_PREFERENCE,
+    ToolName.SAVE_DECISION,
+    ToolName.SEARCH_MEMORY,
+    ToolName.SUMMARIZE_MEMORY,
+})
+CONTEXT_CONSUMER_TOOLS = frozenset({ToolName.ANSWER_FROM_CONTEXT})
+NON_MEMORY_TOOLS = frozenset(set(ToolName) - LOCAL_DURABLE_TOOLS - CONTEXT_CONSUMER_TOOLS)
+
 
 # ---------------------------------------------------------------------------
 # Planner-safe manifest entry (no fn, no runtime state)
@@ -295,16 +308,22 @@ def builtin_tool_specs(
 
 def build_tool_registry(
     web_search_client: WebSearchClient | None = None,
+    *,
+    disabled_tools: Iterable[ToolName] | None = None,
 ) -> ToolRegistry:
     """Build and return the production immutable tool registry."""
     dependencies = BuiltinToolDependencies(
         web_search_client=web_search_client or FakeWebSearchClient(),
     )
-    specs = builtin_tool_specs(dependencies)
+    disabled = frozenset(disabled_tools or ())
+    specs = tuple(
+        spec for spec in builtin_tool_specs(dependencies)
+        if spec.name not in disabled
+    )
 
     # Completeness guard: every ToolName member must appear exactly once.
     registered = {s.name for s in specs}
-    declared = set(ToolName)
+    declared = set(ToolName) - set(disabled)
     if registered != declared:
         raise RuntimeError(
             f"Built-in registry mismatch — missing: {declared - registered}, "

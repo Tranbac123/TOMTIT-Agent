@@ -307,17 +307,44 @@ def build_local_agent(
     """
     from agent_core.memory.in_memory_store import InMemoryStore
     from agent_core.memory.local_client import LocalMemoryClient
+    from agent_core.memory.factory import validate_memory_activation
     from agent_core.tools.builtin_tools import FakeWebSearchClient
     from agent_core.tools.registry import build_tool_registry
 
     store = InMemoryStore()
     memory_client = LocalMemoryClient(store)
+    resolved_tools = tools or build_tool_registry(FakeWebSearchClient())
+    validate_memory_activation(memory_client=memory_client, tools=resolved_tools)
     agent = RuntimeAgent(
         planner=planner or RuleBasedPlanner(),
-        tools=tools or build_tool_registry(FakeWebSearchClient()),
+        tools=resolved_tools,
         memory_client=memory_client,
     )
     return agent, store
+
+
+def build_agent_with_memory_backend(
+    *,
+    memory_config: Any,
+    planner: Any = None,
+    tools: Any = None,
+) -> tuple[RuntimeAgent, Any]:
+    from agent_core.memory.factory import build_memory_backend, validate_memory_activation
+    from agent_core.tools.builtin_tools import FakeWebSearchClient
+    from agent_core.tools.registry import build_tool_registry
+
+    components = build_memory_backend(memory_config)
+    resolved_tools = tools or build_tool_registry(
+        FakeWebSearchClient(),
+        disabled_tools=components.disabled_tools,
+    )
+    validate_memory_activation(memory_client=components.memory_client, tools=resolved_tools)
+    agent = RuntimeAgent(
+        planner=planner or RuleBasedPlanner(),
+        tools=resolved_tools,
+        memory_client=components.memory_client,
+    )
+    return agent, components.store
 
 
 def build_test_agent() -> RuntimeAgent:
