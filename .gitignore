@@ -167,3 +167,10 @@ profiles/
 # docs
 /docs/
 /CLAUDE.md
+
+# Track normative EX1 artifacts
+!docs/
+!docs/specs/
+!docs/specs/SPEC_EX1_TOOL_REGISTRY.md
+!docs/reports/
+!docs/reports/REPORT_EX1_TOOL_REGISTRY_INVENTORY_VERIFIED.md
