@@ -21,7 +21,7 @@ from agent_core.memory.wire.v1 import (
     WriteRequestV1,
     WriteResponseV1,
 )
-from agent_core.state.enums import MemoryType
+from agent_core.state.enums import MemoryType, SourceType, TrustLevel
 
 _RETRIEVE_PATH = "/v1/context/retrieve"
 _WRITE_PATH = "/v1/memories/write"
@@ -207,6 +207,9 @@ class RemoteMemoryClient:
             confidence="normal",
             freshness="fresh",
             metadata=metadata,
+            source_type=SourceType.MEMORY,
+            trust_level=TrustLevel.UNTRUSTED_EVIDENCE,
+            source_ref=item.memory_id,
         )
 
     def _to_write_response(self, response: WriteResponseV1) -> WriteResponse:

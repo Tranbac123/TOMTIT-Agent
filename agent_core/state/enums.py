@@ -21,6 +21,15 @@ class SourceType(StrEnum):
     USER = "user"
     AGENT = "agent"
     SYSTEM = "system"
+    SESSION = "session"
+    WORKSPACE = "workspace"
+    SKILL = "skill"
+
+
+class TrustLevel(StrEnum):
+    TRUSTED_INSTRUCTION = "trusted_instruction"
+    TRUSTED_CONFIGURATION = "trusted_configuration"
+    UNTRUSTED_EVIDENCE = "untrusted_evidence"
 
 
 class MemoryType(StrEnum):
