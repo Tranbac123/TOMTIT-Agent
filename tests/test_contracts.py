@@ -11,7 +11,7 @@ from agent_core.memory.contracts import (
     WriteResponse,
 )
 from agent_core.memory.token_counter import ApproxTokenCounter
-from agent_core.state.enums import MemoryType
+from agent_core.state.enums import MemoryType, SourceType, TrustLevel
 
 
 def test_contextpack_defaults():
@@ -65,3 +65,64 @@ def test_approx_token_counter():
     counter = ApproxTokenCounter()
     assert counter.count("a b c") == 3
     assert counter.count("") == 1
+
+
+# ---------------------------------------------------------------------------
+# SF1 — ContextItem trust and source fields
+# ---------------------------------------------------------------------------
+
+def test_contextitem_sf1_defaults():
+    """New SF1 fields have correct defaults when not specified."""
+    item = ContextItem(content="x", type=MemoryType.NOTE)
+    assert item.source_type is SourceType.MEMORY
+    assert item.trust_level is TrustLevel.UNTRUSTED_EVIDENCE
+    assert item.source_ref is None
+
+
+def test_contextitem_sf1_explicit_fields():
+    """Explicit SF1 field values are preserved."""
+    item = ContextItem(
+        content="x",
+        type=MemoryType.FACT,
+        source_type=SourceType.TOOL,
+        trust_level=TrustLevel.TRUSTED_INSTRUCTION,
+        source_ref="task:t1/step:s1/tool:calculate",
+    )
+    assert item.source_type is SourceType.TOOL
+    assert item.trust_level is TrustLevel.TRUSTED_INSTRUCTION
+    assert item.source_ref == "task:t1/step:s1/tool:calculate"
+
+
+def test_contextitem_source_ref_none_accepted():
+    item = ContextItem(content="x", type=MemoryType.NOTE, source_ref=None)
+    assert item.source_ref is None
+
+
+def test_contextitem_model_dump_python_mode():
+    """model_dump() includes SF1 fields with enum instances (python mode)."""
+    item = ContextItem(content="x", type=MemoryType.NOTE)
+    d = item.model_dump()
+    assert "source_type" in d
+    assert "trust_level" in d
+    assert "source_ref" in d
+    assert d["source_ref"] is None
+
+
+def test_contextitem_model_dump_json_mode():
+    """model_dump(mode='json') serializes SF1 enum fields to their string values."""
+    item = ContextItem(content="x", type=MemoryType.NOTE)
+    d = item.model_dump(mode="json")
+    assert d["source_type"] == "memory"
+    assert d["trust_level"] == "untrusted_evidence"
+
+
+def test_contextitem_strict_unchanged():
+    """Existing strict=True behavior is not broken by SF1 additions."""
+    with pytest.raises(ValidationError):
+        ContextItem(content="x", type="note")
+
+    with pytest.raises(ValidationError):
+        ContextItem(content="x", type=MemoryType.NOTE, source_type="memory")
+
+    with pytest.raises(ValidationError):
+        ContextItem(content="x", type=MemoryType.NOTE, trust_level="untrusted_evidence")

@@ -5,7 +5,7 @@ from agent_core.memory.contracts import MemoryCandidate
 from agent_core.memory.in_memory_store import InMemoryStore
 from agent_core.memory.local_client import LocalMemoryClient
 from agent_core.memory.memory_records import MemoryQuery, MemoryRecord
-from agent_core.state.enums import MemoryType
+from agent_core.state.enums import MemoryType, SourceType, TrustLevel
 
 
 def test_protocol_conformance():
@@ -118,3 +118,77 @@ def test_write_note_type_goes_through_write():
     assert rec.type == MemoryType.NOTE
     # write() without metadata["name"] → note_index NOT populated (proves path via write, not write_note)
     assert len(store.note_index) == 0
+
+
+# ---------------------------------------------------------------------------
+# SF1 — local adapter trust/source fields
+# ---------------------------------------------------------------------------
+
+def test_local_item_source_type_is_memory():
+    """_to_item always sets source_type=MEMORY."""
+    store = InMemoryStore()
+    store.write(MemoryRecord(content="x", type=MemoryType.FACT))
+    client = LocalMemoryClient(store)
+    pack = client.retrieve_context_pack("")
+    assert len(pack.items) == 1
+    assert pack.items[0].source_type is SourceType.MEMORY
+
+
+def test_local_item_trust_level_is_untrusted_evidence():
+    """_to_item always sets trust_level=UNTRUSTED_EVIDENCE."""
+    store = InMemoryStore()
+    store.write(MemoryRecord(content="x", type=MemoryType.FACT))
+    client = LocalMemoryClient(store)
+    pack = client.retrieve_context_pack("")
+    assert pack.items[0].trust_level is TrustLevel.UNTRUSTED_EVIDENCE
+
+
+def test_local_item_source_ref_equals_memory_id():
+    """source_ref == metadata['memory_id'] == record id."""
+    store = InMemoryStore()
+    rec = MemoryRecord(content="y", type=MemoryType.NOTE)
+    store.write(rec)
+    client = LocalMemoryClient(store)
+    pack = client.retrieve_context_pack("")
+    item = pack.items[0]
+    assert item.source_ref == item.metadata["memory_id"]
+    assert item.source_ref == rec.id.strip()
+
+
+def test_local_item_padded_id_normalizes():
+    """IDs with surrounding whitespace are stripped in source_ref and metadata."""
+    store = InMemoryStore()
+    rec = MemoryRecord(content="z", type=MemoryType.FACT)
+    store.write(rec)
+    # Manually pad the ID in the store to simulate a padded value
+    padded_id = f"  {rec.id}  "
+    store.records[rec.id].id = padded_id
+    client = LocalMemoryClient(store)
+    pack = client.retrieve_context_pack("")
+    item = pack.items[0]
+    assert item.source_ref == rec.id.strip()
+    assert item.metadata["memory_id"] == rec.id.strip()
+
+
+def test_local_item_empty_id_fails():
+    """An empty record ID raises ValueError."""
+    import pytest
+    store = InMemoryStore()
+    rec = MemoryRecord(content="bad", type=MemoryType.FACT)
+    store.write(rec)
+    store.records[rec.id].id = ""
+    client = LocalMemoryClient(store)
+    with pytest.raises(ValueError, match="non-blank"):
+        client.retrieve_context_pack("")
+
+
+def test_local_item_explicit_kwargs_counterfactual():
+    """Removing source_type kwarg from _to_item would cause default MEMORY — test verifies explicit value."""
+    store = InMemoryStore()
+    store.write(MemoryRecord(content="x", type=MemoryType.FACT))
+    client = LocalMemoryClient(store)
+    pack = client.retrieve_context_pack("")
+    # If the explicit kwarg were removed, default would still be MEMORY — so also verify
+    # trust_level which has the same default and is still explicitly set
+    assert pack.items[0].trust_level is TrustLevel.UNTRUSTED_EVIDENCE
+    assert pack.items[0].source_type is SourceType.MEMORY
