@@ -168,12 +168,16 @@ profiles/
 /docs/
 /CLAUDE.md
 
-# Track normative EX1 artifacts only — all other docs/ remain ignored
+# Track normative specs and reports — all other docs/ remain ignored
 !docs/
 docs/*
 !docs/specs/
 docs/specs/*
 !docs/specs/SPEC_EX1_TOOL_REGISTRY.md
+!docs/specs/SPEC_SF1_TRUST_EVIDENCE_CONTRACTS.md
+!docs/standards/
+docs/standards/*
+!docs/standards/VERIFICATION_GATE.md
 !docs/reports/
 docs/reports/*
 !docs/reports/REPORT_EX1_TOOL_REGISTRY_INVENTORY_VERIFIED.md
