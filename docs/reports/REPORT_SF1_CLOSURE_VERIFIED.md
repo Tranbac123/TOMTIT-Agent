@@ -66,7 +66,7 @@ Current public-contract snapshots:
 | SF1CLOSE-02 backup and classify all 3 root reports | Backup tar contains all three original reports; classification table above. | PASS |
 | SF1CLOSE-03 select one canonical closure report | `docs/reports/REPORT_SF1_CLOSURE_VERIFIED.md`. | PASS |
 | SF1CLOSE-04 retain only useful support | Kept SF1/SF2 boundary inventory as supporting audit; removed superseded spec review. | PASS |
-| SF1CLOSE-05 no root report remains untracked | Final verification includes `find . -maxdepth 1 -type f | rg "REPORT_SF1" || true`. | PASS_PENDING_FINAL_STATUS |
+| SF1CLOSE-05 no root report remains untracked | Final verification includes `find . -maxdepth 1 -type f | rg "REPORT_SF1" || true`. | PASS |
 | SF1CLOSE-06 evidence models immutable/provenance-aware | `EvidenceEnvelope` is frozen, metadata is copied/read-only, source/trust/source_ref are tested. | PASS |
 | SF1CLOSE-07 evidence does not grant authority or bypass policy | No changes to `PolicyEngine`, `ApprovalGate`, planner, or tool registry authority paths. | PASS |
 | SF1CLOSE-08 planner/model cannot forge trusted confirmation | No LLM/model path exists; planner files unchanged; `TrustLevel` alone grants no approval. | PASS |
@@ -76,8 +76,8 @@ Current public-contract snapshots:
 | SF1CLOSE-12 boundary regressions pass | Boundary command over contracts/local/remote/tool/session/runtime/memory files: 232 passed. | PASS |
 | SF1CLOSE-13 full Agent suite passes | `PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q`: 465 passed. | PASS |
 | SF1CLOSE-14 fresh Python >=3.11 passes | Fresh venv Python 3.11 with `.[dev]`: `pytest -q` 465 passed; `pytest -q -W default` 465 passed; import PASS. | PASS |
-| SF1CLOSE-15 candidate only report finalization changes | Closure commit stages only report move/create/delete under root/docs/reports. | PASS_PENDING_FINAL_DIFF |
-| SF1CLOSE-16 final worktree clean | To be verified after closure commit. | PASS_PENDING_FINAL_STATUS |
+| SF1CLOSE-15 candidate only report finalization changes | Closure commit stages only report move/create/delete under root/docs/reports. | PASS |
+| SF1CLOSE-16 final worktree clean | Verified after closure report commits. | PASS |
 | SF1CLOSE-17 no M7/SF2 implementation | No M7/SF2/source/test/config/spec changes made during closure. | PASS |
 | SF1CLOSE-18 GO does not authorize M7-A inventory | This report explicitly stops after SF1 closure eligibility. | PASS |
 
@@ -152,14 +152,14 @@ Notes:
 - No TOMTIT-Memory or wire JSON change: `agent_core/memory/wire/**` fixture and field-set tests remain green.
 
 ## Repository hygiene
-Pre-commit closure target:
+Final closure hygiene:
 - Root SF1 reports removed or moved; no untracked `REPORT_SF1*` should remain at repository root.
 - Only report finalization files are staged.
 - `git diff --check` and `git diff --cached --check` must pass.
 - Final post-commit `git status --short --untracked-files=all` must be clean except ignored local caches/venvs.
 
 ## GO / NO-GO decision
-GO for human/architect review of `SF1 CLOSED`, conditional on the final report-only commit passing cached diff check, post-commit read-only verification, and clean worktree status.
+GO for human/architect review of `SF1 CLOSED`. Final report-only commits passed diff checks, post-commit read-only verification, and clean worktree status.
 
 This GO is not permission to start M7-A, M7-B, SF2, M7 implementation, LLM activation, or TOMTIT-Memory work.
 
