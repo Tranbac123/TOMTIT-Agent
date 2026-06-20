@@ -63,3 +63,53 @@ def test_optional_sibling_memory_fixtures_match_when_present():
         return
     for name in _load("manifest.json")["fixtures"]:
         assert (FIXTURES / name).read_bytes() == (sibling / name).read_bytes()
+
+
+# ---------------------------------------------------------------------------
+# SF1 — field-set snapshot assertions (wire must not change)
+# ---------------------------------------------------------------------------
+
+def test_context_item_v1_field_set_unchanged():
+    """ContextItemV1 wire field set must match the SF1 preflight snapshot."""
+    import dataclasses, json as _json, hashlib
+    from agent_core.memory.wire.v1 import ContextItemV1
+    fields = tuple(ContextItemV1.model_fields.keys())
+    fp = hashlib.sha256(
+        _json.dumps({"f": list(fields)}, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()[:16]
+    assert fp == "0b17c5b1b21e543d", f"ContextItemV1 wire fields changed: {fields}"
+
+
+def test_context_request_v1_field_set_unchanged():
+    from agent_core.memory.wire.v1 import ContextRequestV1
+    import json as _json, hashlib
+    fields = tuple(ContextRequestV1.model_fields.keys())
+    fp = hashlib.sha256(
+        _json.dumps({"f": list(fields)}, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()[:16]
+    assert fp == "1831bb7212c144e3", f"ContextRequestV1 wire fields changed: {fields}"
+
+
+def test_context_response_v1_field_set_unchanged():
+    from agent_core.memory.wire.v1 import ContextResponseV1
+    import json as _json, hashlib
+    fields = tuple(ContextResponseV1.model_fields.keys())
+    fp = hashlib.sha256(
+        _json.dumps({"f": list(fields)}, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()[:16]
+    assert fp == "c0e001b250230d92", f"ContextResponseV1 wire fields changed: {fields}"
+
+
+def test_canonical_fixture_sha256_hashes():
+    """All six wire fixtures must match their SF1-implementation-baseline SHA-256 hashes."""
+    expected = {
+        "context_request.json":  "06be91cd6ddb827607e6106aba1faddcbcb085649747b6bcc50c6cc877019c85",
+        "context_response.json": "9f7ab7e561cf43b0dd5399a31d0f12072448a849a3f6235bf59a16ebabe73186",
+        "error_response.json":   "3f87aca2e2d9355dab743f592aa586bb4e3d09e1ca81ded12ca2ac3f16b44fcb",
+        "manifest.json":         "5a439f07adc9922394a8bb05512174a3c42f132c7c14234ffbe21f3202228450",
+        "write_request.json":    "efc2f6ab490d8eb6728d119ace37ee334fef5c94009a376e07bc83248b4e2771",
+        "write_response.json":   "3939158e4b0026fa8fedc99491ff5c2206c50f6cd2bef2af568e5f1c387b7a96",
+    }
+    for name, sha in expected.items():
+        actual = hashlib.sha256((FIXTURES / name).read_bytes()).hexdigest()
+        assert actual == sha, f"Wire fixture {name!r} hash mismatch: {actual}"

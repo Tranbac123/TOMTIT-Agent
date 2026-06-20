@@ -3,15 +3,16 @@ from __future__ import annotations
 from dataclasses import replace
 from types import SimpleNamespace
 from typing import Any
+from uuid import uuid4
 
 from agent_core import AgentState, ToolName, build_tool_registry
-from agent_core.state.enums import RiskLevel
+from agent_core.state.enums import RiskLevel, SourceType, TrustLevel
 from agent_core.tools.arg_resolver import ArgResolver
 from agent_core.tools.executor import ToolExecutor
 
 
 def make_step(action: ToolName, args: dict[str, Any]) -> SimpleNamespace:
-    return SimpleNamespace(action=action, args=args, status=None)
+    return SimpleNamespace(action=action, args=args, status=None, id=str(uuid4()))
 
 
 def make_executor(tools: dict[ToolName, Any]) -> ToolExecutor:
@@ -163,6 +164,11 @@ def test_executor_rejects_unknown_args():
     assert not result.success
     assert result.metadata["error_type"] in {"InvalidToolArgs", "ValueError"}
     assert state.last_result is result
+    # P5: arg/schema failure records observation with full SF1 contract
+    obs = _last_obs(state)
+    assert obs.source_type is SourceType.TOOL
+    assert obs.trust_level is TrustLevel.UNTRUSTED_EVIDENCE
+    assert obs.source_ref == f"task:{state.task_id}/step:{step.id}/tool:calculate"
 
 
 def test_executor_blocks_critical_risk_tool():
@@ -208,3 +214,181 @@ def test_executor_rejects_missing_required_args():
     assert not result.success
     assert result.metadata["error_type"] in {"InvalidToolArgs", "ValueError"}
     assert state.last_result is result
+
+
+# ---------------------------------------------------------------------------
+# P1–P9 observation path tests (SF1)
+# ---------------------------------------------------------------------------
+
+def _last_obs(state: AgentState):
+    return state.observations[-1]
+
+
+def test_p1_invalid_action_observation():
+    """P1: invalid action type → observation with exact source_ref using stripped str canonical."""
+    state = AgentState(goal="x")
+    step = SimpleNamespace(action="not_a_toolname", args={}, status=None, id=str(uuid4()))
+    executor = ToolExecutor(tools=build_tool_registry(), resolver=ArgResolver())
+
+    result = executor.execute(step, state)
+
+    assert not result.success
+    assert result.metadata["error_type"] == "InvalidToolAction"
+    obs = _last_obs(state)
+    assert obs.source_type is SourceType.TOOL
+    assert obs.trust_level is TrustLevel.UNTRUSTED_EVIDENCE
+    assert obs.source_ref == f"task:{state.task_id}/step:{step.id}/tool:not_a_toolname"
+
+
+def test_p2_unknown_tool_observation():
+    """P2: known ToolName but not in registry → observation with exact source_ref."""
+    state = AgentState(goal="x")
+    executor = ToolExecutor(tools={}, resolver=ArgResolver())
+    step = make_step(ToolName.CALCULATE, {})
+
+    result = executor.execute(step, state)
+
+    assert not result.success
+    assert result.metadata["error_type"] == "UnknownTool"
+    obs = _last_obs(state)
+    assert obs.source_type is SourceType.TOOL
+    assert obs.trust_level is TrustLevel.UNTRUSTED_EVIDENCE
+    assert obs.source_ref == f"task:{state.task_id}/step:{step.id}/tool:calculate"
+
+
+def test_p3_policy_denied_observation():
+    """P3: policy denied → observation with exact source_ref."""
+    from agent_core.state.enums import RiskLevel
+    from dataclasses import replace as dc_replace
+
+    state = AgentState(goal="x")
+    tools = dict(build_tool_registry())
+    tools[ToolName.CALCULATE] = dc_replace(tools[ToolName.CALCULATE], risk_level=RiskLevel.CRITICAL)
+    executor = make_executor(tools)
+    step = make_step(ToolName.CALCULATE, {"expression": "1+1"})
+
+    result = executor.execute(step, state)
+
+    assert not result.success
+    assert result.metadata["error_type"] == "PolicyDenied"
+    obs = _last_obs(state)
+    assert obs.source_type is SourceType.TOOL
+    assert obs.trust_level is TrustLevel.UNTRUSTED_EVIDENCE
+    assert obs.source_ref == f"task:{state.task_id}/step:{step.id}/tool:calculate"
+
+
+def test_p4_approval_required_observation():
+    """P4: approval required and not given → observation with exact source_ref."""
+    from dataclasses import replace as dc_replace
+
+    state = AgentState(goal="x")
+    tools = dict(build_tool_registry())
+    tools[ToolName.CALCULATE] = dc_replace(tools[ToolName.CALCULATE], requires_approval=True)
+    executor = make_executor(tools)
+    step = make_step(ToolName.CALCULATE, {"expression": "1+1"})
+
+    result = executor.execute(step, state)
+
+    assert not result.success
+    assert result.metadata["error_type"] == "ApprovalRequired"
+    obs = _last_obs(state)
+    assert obs.source_type is SourceType.TOOL
+    assert obs.trust_level is TrustLevel.UNTRUSTED_EVIDENCE
+    assert obs.source_ref == f"task:{state.task_id}/step:{step.id}/tool:calculate"
+
+
+def test_p9_success_observation():
+    """P9: successful execution → observation with exact source_ref."""
+    state = AgentState(goal="x")
+    tools = build_tool_registry()
+    executor = make_executor(tools)
+    step = make_step(ToolName.CALCULATE, {"expression": "2+2"})
+
+    result = executor.execute(step, state)
+
+    assert result.success
+    obs = _last_obs(state)
+    assert obs.success is True
+    assert obs.source_type is SourceType.TOOL
+    assert obs.trust_level is TrustLevel.UNTRUSTED_EVIDENCE
+    assert obs.source_ref == f"task:{state.task_id}/step:{step.id}/tool:calculate"
+
+
+def test_observation_source_ref_contains_step_id():
+    """source_ref embeds the step.id of the executing step."""
+    state = AgentState(goal="x")
+    tools = build_tool_registry()
+    executor = make_executor(tools)
+    step = make_step(ToolName.CALCULATE, {"expression": "1+1"})
+
+    executor.execute(step, state)
+
+    obs = _last_obs(state)
+    assert step.id in obs.source_ref
+
+
+def test_p6_unexpected_resolve_exception_observation():
+    """P6: unexpected exception from resolve boundary → observation with exact source_ref."""
+
+    class _FailResolver:
+        def resolve_args(self, args: dict, state: Any) -> dict:
+            raise RuntimeError("injected resolve failure")
+
+    state = AgentState(goal="x")
+    tools = build_tool_registry()
+    executor = ToolExecutor(tools=tools, resolver=_FailResolver())
+    step = make_step(ToolName.CALCULATE, {"expression": "1+1"})
+
+    result = executor.execute(step, state)
+
+    assert not result.success
+    assert result.metadata["error_type"] == "RuntimeError"
+    obs = _last_obs(state)
+    assert obs.source_type is SourceType.TOOL
+    assert obs.trust_level is TrustLevel.UNTRUSTED_EVIDENCE
+    assert obs.source_ref == f"task:{state.task_id}/step:{step.id}/tool:calculate"
+
+
+def test_p7_tool_fn_exception_observation():
+    """P7: tool.fn raises → observation recorded with exact source_ref."""
+
+    def _crashing_fn(**_: Any) -> Any:
+        raise RuntimeError("tool function crashed")
+
+    state = AgentState(goal="x")
+    tools = dict(build_tool_registry())
+    tools[ToolName.CALCULATE] = replace(tools[ToolName.CALCULATE], fn=_crashing_fn)
+    executor = make_executor(tools)
+    step = make_step(ToolName.CALCULATE, {"expression": "1+1"})
+
+    result = executor.execute(step, state)
+
+    assert not result.success
+    assert result.metadata["error_type"] == "RuntimeError"
+    assert result.metadata.get("unexpected") is True
+    obs = _last_obs(state)
+    assert obs.source_type is SourceType.TOOL
+    assert obs.trust_level is TrustLevel.UNTRUSTED_EVIDENCE
+    assert obs.source_ref == f"task:{state.task_id}/step:{step.id}/tool:calculate"
+
+
+def test_p8_invalid_tool_result_observation():
+    """P8: tool.fn returns non-ToolResult → observation recorded with exact source_ref."""
+
+    def _invalid_fn(**_: Any) -> Any:
+        return "not a ToolResult"
+
+    state = AgentState(goal="x")
+    tools = dict(build_tool_registry())
+    tools[ToolName.CALCULATE] = replace(tools[ToolName.CALCULATE], fn=_invalid_fn)
+    executor = make_executor(tools)
+    step = make_step(ToolName.CALCULATE, {"expression": "1+1"})
+
+    result = executor.execute(step, state)
+
+    assert not result.success
+    assert result.metadata["error_type"] == "InvalidToolResult"
+    obs = _last_obs(state)
+    assert obs.source_type is SourceType.TOOL
+    assert obs.trust_level is TrustLevel.UNTRUSTED_EVIDENCE
+    assert obs.source_ref == f"task:{state.task_id}/step:{step.id}/tool:calculate"

@@ -13,7 +13,7 @@ from agent_core.memory.errors import (
     RemoteMemoryWriteError,
 )
 from agent_core.memory.remote_client import RemoteMemoryClient
-from agent_core.state.enums import MemoryType
+from agent_core.state.enums import MemoryType, SourceType, TrustLevel
 
 FIXTURES = Path(__file__).parent / "fixtures" / "memory_contract_v1"
 
@@ -262,3 +262,45 @@ def test_write_malformed_success_response_raises():
             ],
             task_id="task-1",
         )
+
+
+# ---------------------------------------------------------------------------
+# SF1 — remote adapter trust/source fields
+# ---------------------------------------------------------------------------
+
+def _retrieve_pack():
+    def handler(request):
+        return httpx.Response(200, json=_fixture("context_response.json"))
+    client = _client(handler)
+    return client.retrieve_context_pack("test goal")
+
+
+def test_remote_item_source_type_is_memory():
+    pack = _retrieve_pack()
+    assert len(pack.items) > 0
+    for item in pack.items:
+        assert item.source_type is SourceType.MEMORY
+
+
+def test_remote_item_trust_level_is_untrusted_evidence():
+    pack = _retrieve_pack()
+    assert len(pack.items) > 0
+    for item in pack.items:
+        assert item.trust_level is TrustLevel.UNTRUSTED_EVIDENCE
+
+
+def test_remote_item_source_ref_equals_memory_id():
+    pack = _retrieve_pack()
+    assert len(pack.items) > 0
+    for item in pack.items:
+        assert item.source_ref is not None
+        assert item.source_ref == item.metadata["memory_id"]
+
+
+def test_remote_wire_isolation():
+    """Adding agent-side fields does not affect wire fixture SHA-256."""
+    import hashlib
+    fixture_path = FIXTURES / "context_response.json"
+    sha = hashlib.sha256(fixture_path.read_bytes()).hexdigest()
+    # SHA frozen at SF1 implementation baseline — wire must not change
+    assert sha == "9f7ab7e561cf43b0dd5399a31d0f12072448a849a3f6235bf59a16ebabe73186"

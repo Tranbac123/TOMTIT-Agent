@@ -5,7 +5,8 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from agent_core.state.enums import StepStatus, ToolName, ToolResultKind
+from agent_core.safety.evidence import tool_observation_ref
+from agent_core.state.enums import SourceType, StepStatus, ToolName, ToolResultKind, TrustLevel
 from agent_core.state.observation import Observation
 from agent_core.tools.arg_resolver import ArgResolver
 from agent_core.tools.base import ToolSpec
@@ -155,6 +156,7 @@ class ToolExecutor:
         step.status = StepStatus.COMPLETED if result.success else StepStatus.FAILED
         self._record_result(
             state=state,
+            step=step,
             tool_name=tool_name,
             args=final_args,
             result=result,
@@ -201,6 +203,7 @@ class ToolExecutor:
 
         self._record_result(
             state=state,
+            step=step,
             tool_name=tool_name,
             args=metadata.get("resolved_args", {}) if metadata else {},
             result=result,
@@ -211,19 +214,27 @@ class ToolExecutor:
         self,
         *,
         state: Any,
+        step: Any,
         tool_name: ToolName | str,
         args: dict[str, Any],
         result: ToolResult,
     ) -> None:
-        tool_name_value = self._tool_name_value(tool_name)
+        canonical = self._canonical_tool_name(tool_name)
 
         state.last_result = result
         state.add_observation(
             Observation(
                 step_index=state.current_step,
-                action=tool_name_value,
+                action=canonical,
                 args=args,
                 success=result.success,
+                trust_level=TrustLevel.UNTRUSTED_EVIDENCE,
+                source_type=SourceType.TOOL,
+                source_ref=tool_observation_ref(
+                    task_id=state.task_id,
+                    step_id=step.id,
+                    tool_name=canonical,
+                ),
                 output=result.output,
                 error=result.error,
                 sources=result.sources,
@@ -244,6 +255,14 @@ class ToolExecutor:
             kind=ToolResultKind.JSON,
             metadata={"error_type": error_type, **(metadata or {})},
         )
+
+    def _canonical_tool_name(self, tool_name: ToolName | str) -> str:
+        if isinstance(tool_name, ToolName):
+            return tool_name.value
+        stripped = tool_name.strip()
+        if not stripped:
+            raise ValueError("tool_name must be a non-blank string")
+        return stripped
 
     def _tool_name_value(self, tool_name: ToolName | str) -> str:
         if isinstance(tool_name, ToolName):

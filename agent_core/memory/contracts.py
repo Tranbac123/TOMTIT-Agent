@@ -4,7 +4,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from agent_core.state.enums import MemoryType
+from agent_core.state.enums import MemoryType, SourceType, TrustLevel
 
 SCHEMA_VERSION = "1"
 
@@ -30,6 +30,9 @@ class ContextItem(BaseModel):
     confidence: Confidence = "normal"
     freshness: Freshness = "unknown"
     metadata: dict = Field(default_factory=dict)
+    source_type: SourceType = SourceType.MEMORY
+    trust_level: TrustLevel = TrustLevel.UNTRUSTED_EVIDENCE
+    source_ref: str | None = None
 
 
 # NOTE: chỉ ContextItem dùng strict=True (ép MemoryType tại biên — điểm typo rủi ro nhất).

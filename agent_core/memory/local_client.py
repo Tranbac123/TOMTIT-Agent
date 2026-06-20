@@ -9,6 +9,7 @@ from agent_core.memory.contracts import (
 )
 from agent_core.memory.memory_records import MemoryQuery, MemoryRecord
 from agent_core.memory.token_counter import ApproxTokenCounter, TokenCounter
+from agent_core.state.enums import SourceType, TrustLevel
 
 
 class LocalMemoryClient:
@@ -99,6 +100,9 @@ class LocalMemoryClient:
         return WriteResponse(written_ids=written, skipped=[])
 
     def _to_item(self, rec: MemoryRecord, tokens: int) -> ContextItem:
+        if not isinstance(rec.id, str) or not rec.id.strip():
+            raise ValueError("MemoryRecord.id must be a non-blank string")
+        memory_id = rec.id.strip()
         # provenance/source/confidence cố định cho local fallback (SPEC §4c).
         return ContextItem(
             content=rec.content,
@@ -109,5 +113,8 @@ class LocalMemoryClient:
             provenance="fallback",
             confidence="limited",
             freshness="unknown",
-            metadata={"memory_id": rec.id},
+            metadata={"memory_id": memory_id},
+            source_type=SourceType.MEMORY,
+            trust_level=TrustLevel.UNTRUSTED_EVIDENCE,
+            source_ref=memory_id,
         )

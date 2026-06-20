@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from types import SimpleNamespace
+from uuid import uuid4
 from typing import Any
 
 import pytest
@@ -81,7 +82,7 @@ def _make_list_spec() -> ToolSpec:
 
 
 def make_step(action: ToolName, args: dict[str, Any]) -> SimpleNamespace:
-    return SimpleNamespace(action=action, args=args, status=None)
+    return SimpleNamespace(action=action, args=args, status=None, id=str(uuid4()))
 
 
 # ---------------------------------------------------------------------------
