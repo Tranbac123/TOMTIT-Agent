@@ -225,7 +225,7 @@ def _last_obs(state: AgentState):
 
 
 def test_p1_invalid_action_observation():
-    """P1: invalid action type → observation with TOOL source, UNTRUSTED_EVIDENCE."""
+    """P1: invalid action type → observation with exact source_ref using stripped str canonical."""
     state = AgentState(goal="x")
     step = SimpleNamespace(action="not_a_toolname", args={}, status=None, id=str(uuid4()))
     executor = ToolExecutor(tools=build_tool_registry(), resolver=ArgResolver())
@@ -233,14 +233,15 @@ def test_p1_invalid_action_observation():
     result = executor.execute(step, state)
 
     assert not result.success
+    assert result.metadata["error_type"] == "InvalidToolAction"
     obs = _last_obs(state)
     assert obs.source_type is SourceType.TOOL
     assert obs.trust_level is TrustLevel.UNTRUSTED_EVIDENCE
-    assert obs.source_ref is not None
+    assert obs.source_ref == f"task:{state.task_id}/step:{step.id}/tool:not_a_toolname"
 
 
 def test_p2_unknown_tool_observation():
-    """P2: known ToolName but not in registry → observation recorded."""
+    """P2: known ToolName but not in registry → observation with exact source_ref."""
     state = AgentState(goal="x")
     executor = ToolExecutor(tools={}, resolver=ArgResolver())
     step = make_step(ToolName.CALCULATE, {})
@@ -248,14 +249,15 @@ def test_p2_unknown_tool_observation():
     result = executor.execute(step, state)
 
     assert not result.success
+    assert result.metadata["error_type"] == "UnknownTool"
     obs = _last_obs(state)
     assert obs.source_type is SourceType.TOOL
     assert obs.trust_level is TrustLevel.UNTRUSTED_EVIDENCE
-    assert obs.source_ref is not None
+    assert obs.source_ref == f"task:{state.task_id}/step:{step.id}/tool:calculate"
 
 
 def test_p3_policy_denied_observation():
-    """P3: policy denied → observation with TOOL source."""
+    """P3: policy denied → observation with exact source_ref."""
     from agent_core.state.enums import RiskLevel
     from dataclasses import replace as dc_replace
 
@@ -268,10 +270,11 @@ def test_p3_policy_denied_observation():
     result = executor.execute(step, state)
 
     assert not result.success
+    assert result.metadata["error_type"] == "PolicyDenied"
     obs = _last_obs(state)
     assert obs.source_type is SourceType.TOOL
     assert obs.trust_level is TrustLevel.UNTRUSTED_EVIDENCE
-    assert obs.source_ref is not None
+    assert obs.source_ref == f"task:{state.task_id}/step:{step.id}/tool:calculate"
 
 
 def test_p4_approval_required_observation():
@@ -295,7 +298,7 @@ def test_p4_approval_required_observation():
 
 
 def test_p9_success_observation():
-    """P9: successful execution → observation with correct source_ref."""
+    """P9: successful execution → observation with exact source_ref."""
     state = AgentState(goal="x")
     tools = build_tool_registry()
     executor = make_executor(tools)
@@ -308,11 +311,7 @@ def test_p9_success_observation():
     assert obs.success is True
     assert obs.source_type is SourceType.TOOL
     assert obs.trust_level is TrustLevel.UNTRUSTED_EVIDENCE
-    assert obs.source_ref.startswith("task:")
-    assert "/step:" in obs.source_ref
-    assert "/tool:calculate" in obs.source_ref
-    assert state.task_id in obs.source_ref
-    assert step.id in obs.source_ref
+    assert obs.source_ref == f"task:{state.task_id}/step:{step.id}/tool:calculate"
 
 
 def test_observation_source_ref_contains_step_id():
