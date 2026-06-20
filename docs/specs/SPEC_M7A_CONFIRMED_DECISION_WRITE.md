@@ -1,32 +1,39 @@
 # SPEC_M7A_CONFIRMED_DECISION_WRITE
 
-**Version:** `1.2`
-**Status:** `FROZEN FOR IMPLEMENTATION AUTHORIZATION REVIEW`
+**Version:** `1.3-draft`
+**Status:** `DRAFT FOR ARCHITECT REVIEW — IMPLEMENTATION NOT AUTHORIZED`
 **Repository:** `TOMTIT-Agent`
-**Authoritative baseline:** `main@0e55156ce13243386e12cb04c4aab061033cc566`
+**Authoritative baseline:** `main@bf967b88ee1040d769d44a5f8f7500ee8f46ad08`
 **Verification process:** `docs/standards/VERIFICATION_GATE.md`
 **Depends on:** M6 CLOSED, SF1 CLOSED, Product Spec v0.3 CLOSED, Architecture v1.0 CLOSED, fresh Python 3.11 baseline PASS
-**Inventory evidence:** `REPORT_M7A_CONFIRMED_DECISION_WRITE_INVENTORY_VERIFIED.md`
-**Inventory SHA-256:** `4c9d5e044ac7955f00337d7c5058e1f98ee9a7d3da19ac3f2a4cd2d1468f16ec`
-**Inventory custody at draft time:** repository-local read-only evidence; it must be committed or cited by exact SHA in the implementation authorization
+**Inventory evidence:** `docs/reports/REPORT_M7A_CONFIRMED_DECISION_WRITE_INVENTORY_VERIFIED.md`
+**Inventory artifact SHA-256:** `4c9d5e044ac7955f00337d7c5058e1f98ee9a7d3da19ac3f2a4cd2d1468f16ec`
+**Inventory commit:** `dd7bfcd41c1058407135458b174202586dd30eb5`
+**Supersedes:** frozen M7-A spec v1.2 at `main@bf967b88ee1040d769d44a5f8f7500ee8f46ad08`
+**Prior v1.2 implementation authorization:** `SUSPENDED — a new authorization must cite frozen v1.3`
 
 ---
 
-## Revision note — v1.2-draft
+## Revision note — v1.3-draft
 
-This revision keeps the M7-A product scope unchanged and closes the final pre-freeze defects in:
+This revision uses v1.2 as the canonical base and changes only three contract-governance areas:
 
-- fail-closed transport-neutral required-write capability owned by `MemoryClientProtocol`, eliminating capability/client drift;
-- exact `MemoryCandidate` → wire `candidate_id` mapping;
-- application-owned `user_id`;
-- failure-message versus `TurnRecord` semantics;
-- intentional persistence of safe provenance text;
-- replay-ready request construction versus real server replay;
-- response envelope correlation;
-- error taxonomy and logging data minimization;
-- inventory evidence custody;
-- complete protocol-double test-manifest coverage;
-- removal of `MemoryBackendComponents.required_write_enabled` and `RuntimeAgent.required_memory_write_enabled` from the proposed design.
+1. resolves the normative error-taxonomy contradiction between response consistency validation and the typed remote-memory error hierarchy;
+2. canonicalizes inventory evidence custody under `docs/reports/` with an exact artifact SHA and a required commit reference before freeze;
+3. renumbers the test catalogue and adds explicit taxonomy-preservation tests.
+
+The following v1.2 decisions remain unchanged:
+
+- `MemoryClientProtocol.supports_required_write` owns the fail-closed capability;
+- `RemoteMemoryClient=True`, `LocalMemoryClient=False`, `NullMemoryClient=False`;
+- caller-controlled `request_id = memory-write:<confirmation_id>`;
+- M7-A candidate identity uses the existing reserved adapter bridge `metadata["candidate_id"]`;
+- no typed `MemoryCandidate.candidate_id` field is added in M7-A;
+- `ConfirmedSaveOperation.session_id` remains `str | None`, while the SessionRuntime save command requires a nonblank current session;
+- in-memory FAILED state may contain only the fixed safe message, while FAILED `TurnRecord.final_answer` remains `None`;
+- Memory Contract v1, wire DTOs, endpoints and fixtures remain unchanged.
+
+The frozen v1.2 artifact remains historical evidence. It is not modified in place. Any prior v1.2 implementation instruction is suspended until v1.3 is reviewed, frozen, merged and cited by a new implementation authorization.
 
 Implementation remains unauthorized.
 
@@ -46,9 +53,11 @@ The implementation phase may begin only after:
 2. all architect decisions in §5 are explicitly accepted;
 3. the approved document is frozen at a committed revision;
 4. its SHA-256 is recorded;
-5. the inventory evidence is either committed at a canonical path or cited by the exact SHA-256 recorded above;
-6. a separate implementation instruction cites the exact accepted spec revision and inventory evidence;
-7. the implementation candidate later passes `VERIFICATION_GATE.md`.
+5. the inventory evidence exists at the canonical path recorded above;
+6. its bytes match the recorded artifact SHA-256;
+7. the commit containing that canonical report is recorded in this document before freeze;
+8. a separate implementation instruction cites the exact frozen v1.3 revision and inventory commit;
+9. the implementation candidate later passes `VERIFICATION_GATE.md`.
 
 Normative precedence for M7-A:
 
@@ -208,7 +217,7 @@ M7-A must not add or enable:
 
 # 4. Verified baseline facts
 
-At baseline `0e55156ce13243386e12cb04c4aab061033cc566`:
+At baseline `bf967b88ee1040d769d44a5f8f7500ee8f46ad08`:
 
 1. `AgentState` has one production construction site in `SessionRuntime`.
 2. `confirmed_save_operation` does not exist.
@@ -705,7 +714,27 @@ Before converting `WriteResponseV1` into domain `WriteResponse`, the client must
 10. every `skipped_duplicate` result maps to the submitted candidate ID and uses the wire-approved duplicate reason;
 11. status remains restricted by `WriteStatusV1`.
 
-Any failure raises `RemoteMemoryWriteError` and no success response is returned.
+No failed validation may return a domain success response.
+
+`RemoteMemoryClient` must raise the most specific existing typed error:
+
+```text
+invalid client configuration or missing required configured identity
+→ RemoteMemoryConfigurationError
+
+unsupported candidate contract, malformed/schema-invalid success response,
+response-envelope mismatch, result-count mismatch, candidate-ID mismatch,
+missing/extra/duplicate result identity, or invalid status-specific fields
+→ RemoteMemoryContractError
+
+timeout, transport failure, 5xx, explicit backend write rejection,
+or another non-success write error response/envelope
+→ RemoteMemoryWriteError
+```
+
+If a lower-level path already raises another existing `RemoteMemoryError` subtype, including `RemoteMemoryUnavailableError`, the client and confirmed-save boundary must preserve that exact cause category rather than collapsing it.
+
+The confirmed-save runtime boundary may wrap a remote-memory error in `ConfirmedWriteBackendError`, but it must use `raise ... from exc`, preserve the original exception as `__cause__`, and record only a safe diagnostic category.
 
 This validation is generic transport-contract protection, not M7-specific policy.
 
@@ -881,7 +910,9 @@ Domain-model `__post_init__` may use `ValueError` for direct construction errors
 
 Policy, backend gate and response checker use the typed errors above.
 
-Existing `RemoteMemoryConfigurationError`, `RemoteMemoryContractError`, `RemoteMemoryUnavailableError` and `RemoteMemoryWriteError` remain the transport/configuration taxonomy. A confirmed-write wrapper must preserve the original exception with `raise ... from exc`; it must not erase whether the cause was validation, timeout/transport, HTTP/backend, contract/schema, idempotency conflict or response consistency.
+Existing `RemoteMemoryConfigurationError`, `RemoteMemoryContractError`, `RemoteMemoryUnavailableError` and `RemoteMemoryWriteError` remain the transport/configuration taxonomy.
+
+Normative classification follows §10.2. In particular, malformed/schema-invalid success payloads and response-correlation violations are contract failures, not generic write failures. Timeout/transport/backend write failures remain operational write failures. A confirmed-write wrapper must preserve the original exception with `raise ... from exc`; it must not erase whether the cause was configuration, timeout/transport, HTTP/backend, contract/schema, idempotency conflict or response consistency.
 
 No raw exception message may be returned as a successful or persisted final answer.
 
@@ -1330,13 +1361,14 @@ M7-A verifies that the new operation has a new confirmation/request ID and can c
 | `tests/test_runtime_memory_wiring.py` | MODIFY/VERIFY | runtime/factory wiring remains protocol-capability-based and fail-closed |
 | `tests/test_p4_local_demo.py` | MODIFY/VERIFY | local demo client/doubles conform to capability property without enabling required writes |
 
-## 19.4 Conditional files
+## 19.4 Verify-only evidence and conditional files
 
-| Path | Allowed only when |
-|---|---|
-| `agent_core/confirmation/constants.py` | exact user-facing messages or safe goal are reused in 3+ production modules |
-| existing CLI test filename | repository already has a canonical CLI test module |
-| `agent_core/memory/factory.py` | VERIFY ONLY by default; modify only if the existing factory cannot return the selected clients without changing behavior, which requires architect review |
+| Path | Classification | Rule |
+|---|---|---|
+| `docs/reports/REPORT_M7A_CONFIRMED_DECISION_WRITE_INVENTORY_VERIFIED.md` | PRE-IMPLEMENTATION VERIFY ONLY | must exist at the canonical path, match the recorded artifact SHA and have its commit recorded before v1.3 freeze; implementation must not modify it |
+| `agent_core/memory/factory.py` | VERIFY ONLY | modify only if the existing factory cannot return the selected clients without changing behavior, which requires architect review |
+| `agent_core/confirmation/constants.py` | CONDITIONAL | allowed only when exact user-facing messages or the safe goal are reused in 3+ production modules |
+| existing CLI test filename | CONDITIONAL | use the repository's canonical CLI test module when one already exists |
 
 ## 19.5 Forbidden files
 
@@ -1349,6 +1381,7 @@ tests/fixtures/memory_contract_v1/**
 docs/ARCHITECTURE.md
 docs/goal_product/PRODUCT_SPEC_MVP_USER_TRIAL.md
 docs/standards/VERIFICATION_GATE.md
+docs/reports/** after the v1.3 freeze commit
 requirements/constraints/pyproject dependency declarations
 TOMTIT-Memory repository files
 ```
@@ -1361,11 +1394,15 @@ Any need to touch a forbidden path is a stop condition requiring a spec revision
 
 Implementation must proceed in this order.
 
-## M7A-I0 — Freeze
+## M7A-I0 — Evidence custody and freeze
 
-- commit this approved spec;
+- place the verified inventory report at the canonical `docs/reports/` path;
+- verify its SHA-256 equals the artifact SHA recorded in this document;
+- record the commit containing the canonical report;
+- commit the approved v1.3 spec;
 - record baseline, spec commit and SHA-256;
-- create implementation branch from the exact accepted baseline.
+- create the implementation branch from the exact accepted baseline;
+- do not reuse the suspended v1.2 implementation authorization.
 
 ## M7A-I1 — Pure domain contracts
 
@@ -1469,94 +1506,97 @@ At minimum, the implementation must contain explicit tests for all items below.
 36. remote candidate mismatch rejected;
 37. remote duplicate candidate result rejected;
 38. unknown status rejected by wire validation;
-39. wire fixture shape unchanged.
+39. malformed/schema-invalid success response raises `RemoteMemoryContractError`;
+40. request/project/user/session/result-correlation violation raises `RemoteMemoryContractError`;
+41. timeout/transport/5xx/non-success write response preserves `RemoteMemoryWriteError`;
+42. an existing lower-level `RemoteMemoryError` subtype is preserved as the wrapped `__cause__`;
+43. wire fixture shape unchanged.
 
 ## 21.4 Required-write checker
 
-40. one written result accepted;
-41. one duplicate result accepted;
-42. empty result rejected;
-43. written and skipped together rejected;
-44. multiple written rejected;
-45. multiple skipped rejected;
-46. skipped candidate mismatch rejected;
-46. blank written memory ID rejected.
+44. one written result accepted;
+45. one duplicate result accepted;
+46. empty result rejected;
+47. written and skipped together rejected;
+48. multiple written rejected;
+49. multiple skipped rejected;
+50. skipped candidate mismatch rejected;
+51. blank written memory ID rejected.
 
 ## 21.5 Runtime
 
-48. missing operation fails before client;
-49. local backend fails before client;
-50. none backend fails before client;
-51. local-store fail-on-access sentinel untouched;
-52. planner not invoked;
-53. ToolExecutor not invoked;
-54. retrieval not invoked;
-55. best-effort `_write_memory` not invoked;
-56. written outcome completes with safe message;
-57. duplicate outcome completes with duplicate message;
-58. timeout fails with no saved claim;
-59. network/5xx fails;
-60. idempotency conflict fails;
-61. malformed response fails;
-62. inconsistent response fails;
-63. unexpected exception logs and returns safe failure;
-64. terminal state triggers zero second write;
-65. request ID passed from operation unchanged;
-66. task/session/user correlation passed correctly.
+52. missing operation fails before client;
+53. local backend fails before client;
+54. none backend fails before client;
+55. local-store fail-on-access sentinel untouched;
+56. planner not invoked;
+57. ToolExecutor not invoked;
+58. retrieval not invoked;
+59. best-effort `_write_memory` not invoked;
+60. written outcome completes with safe message;
+61. duplicate outcome completes with duplicate message;
+62. timeout fails with no saved claim;
+63. network/5xx fails;
+64. idempotency conflict fails;
+65. malformed response fails;
+66. inconsistent response fails;
+67. unexpected exception logs and returns safe failure;
+68. terminal state triggers zero second write;
+69. request ID passed from operation unchanged;
+70. task/session/user correlation passed correctly.
 
 ## 21.6 SessionRuntime and CLI
 
-67. dedicated run creates a new AgentState;
-68. fixed safe goal does not contain decision content;
-69. operation not added to TurnRecord;
-70. evidence not added to TurnRecord;
-71. failed TurnRecord has `final_answer=None`;
-72. successful TurnRecord has safe final answer;
-73. planned actions empty;
-74. persistent session uses persist-before-mutate;
-75. persistence failure leaves live SessionState unchanged;
-76. session resume creates zero additional write calls;
-77. CLI command intercepted before `handle_turn`;
-78. negative confirmation produces zero operation/write;
-79. positive confirmation generates IDs in application layer;
-80. ordinary natural-language message cannot trigger the path;
-81. re-running CLI command produces a new confirmation/request ID.
+71. dedicated run creates a new AgentState;
+72. fixed safe goal does not contain decision content;
+73. operation not added to TurnRecord;
+74. evidence not added to TurnRecord;
+75. failed TurnRecord has `final_answer=None`;
+76. successful TurnRecord has safe final answer;
+77. planned actions empty;
+78. persistent session uses persist-before-mutate;
+79. persistence failure leaves live SessionState unchanged;
+80. session resume creates zero additional write calls;
+81. CLI command intercepted before `handle_turn`;
+82. negative confirmation produces zero operation/write;
+83. positive confirmation generates IDs in application layer;
+84. ordinary natural-language message cannot trigger the path;
+85. re-running CLI command produces a new confirmation/request ID.
 
 ## 21.7 Isolation and regression
 
-82. zero M7 confirmation imports in planner;
-83. zero M7 confirmation imports in skills;
-84. zero M7 persistence imports in tools;
-85. remote local-durable tools remain disabled;
-86. `AgentState` existing constructor behavior remains compatible;
-87. SessionState/TurnRecord serializers retain exact field sets;
-88. Memory wire DTO field sets unchanged;
-89. all pre-M7 tests pass.
+86. zero M7 confirmation imports in planner;
+87. zero M7 confirmation imports in skills;
+88. zero M7 persistence imports in tools;
+89. remote local-durable tools remain disabled;
+90. `AgentState` existing constructor behavior remains compatible;
+91. SessionState/TurnRecord serializers retain exact field sets;
+92. Memory wire DTO field sets unchanged;
+93. all pre-M7 tests pass.
 
 ## 21.8 Supplemental preflight corrections
 
-90. `RuntimeAgent` has no `RemoteMemoryClient` import or concrete type check;
-91. protocol capability is false for Local/Null and true for Remote;
-92. every production factory returns a client with the expected capability without passing a separate runtime flag;
-93. manually constructed `RuntimeAgent` + `LocalMemoryClient` fails before client/store access;
-94. manually constructed `RuntimeAgent` + `NullMemoryClient` fails before client access;
-95. M7-A candidate uses exact metadata key `"candidate_id"` and never falls back to an index ID;
-96. response request ID mismatch is rejected;
-97. response project ID mismatch is rejected;
-98. response user ID mismatch is rejected;
-99. response session ID mismatch is rejected;
-100. `main.py` passes application-owned user ID into `SessionRuntime`;
-101. confirmed save rejects missing/blank application user ID before client access;
-102. FAILED in-memory state contains only the fixed safe message while persisted TurnRecord contains `final_answer=None`;
-103. COMPLETED TurnRecord intentionally contains only deterministic output and safe provenance, not decision content or request ID;
-104. logs and state diagnostics exclude decision content, evidence content, full payload and secrets;
-105. same frozen operation produces byte-equivalent request identity/candidate payload under mock transport;
-106. no M7-A test claims real TOMTIT-Memory stored-response replay;
-107. inventory report custody SHA matches the value recorded in this specification.
+94. `RuntimeAgent` has no `RemoteMemoryClient` import or concrete type check;
+95. protocol capability is false for Local/Null and true for Remote;
+96. every production factory returns a client with the expected capability without passing a separate runtime flag;
+97. manually constructed `RuntimeAgent` + `LocalMemoryClient` fails before client/store access;
+98. manually constructed `RuntimeAgent` + `NullMemoryClient` fails before client access;
+99. M7-A candidate uses exact metadata key `"candidate_id"` and never falls back to an index ID;
+100. response request ID mismatch is rejected;
+101. response project ID mismatch is rejected;
+102. response user ID mismatch is rejected;
+103. response session ID mismatch is rejected;
+104. `main.py` passes application-owned user ID into `SessionRuntime`;
+105. confirmed save rejects missing/blank application user ID before client access;
+106. FAILED in-memory state contains only the fixed safe message while persisted TurnRecord contains `final_answer=None`;
+107. COMPLETED TurnRecord intentionally contains only deterministic output and safe provenance, not decision content or request ID;
+108. logs and state diagnostics exclude decision content, evidence content, full payload and secrets;
+109. same frozen operation produces byte-equivalent request identity/candidate payload under mock transport;
+110. no M7-A test claims real TOMTIT-Memory stored-response replay;
+111. inventory report custody SHA matches the value recorded in this specification.
 
 
 ---
-
 # 22. Acceptance criteria
 
 ## AC-M7A-01 — Structured confirmation only
@@ -1613,7 +1653,7 @@ The confirmed-save run invokes no retrieval, planner, skill, Step, ToolExecutor 
 
 ## AC-M7A-14 — Required-write failure
 
-Every transport, Memory error, schema, empty, extra, mismatch or consistency failure produces FAILED and no saved claim.
+Every transport, Memory error, schema, empty, extra, mismatch or consistency failure produces FAILED and no saved claim. Remote-client failures retain the most specific typed taxonomy defined in §10.2, and any confirmed-write wrapper preserves the original exception as `__cause__`.
 
 ## AC-M7A-15 — Safe user output and failure masking
 
@@ -1699,7 +1739,8 @@ planner/skill/tool isolation greps
 remote-only sentinel proof
 replay-stable request-construction proof
 duplicate-outcome handling proof
-required-write failure matrix
+required-write failure and typed-error taxonomy matrix
+canonical inventory-report path, artifact SHA and commit custody
 working-tree cleanliness
 ```
 
@@ -1733,7 +1774,11 @@ Implementation must stop and request architect review when any of these occurs:
 22. IDEMPOTENCY_CONFLICT is returned as a successful write status;
 23. verification evidence conflates replay-stable request construction with real server replay;
 24. application-owned `user_id` cannot be supplied explicitly to the save-run AgentState;
-25. the M7-A candidate would log decision/evidence content or full request payloads.
+25. the M7-A candidate would log decision/evidence content or full request payloads;
+26. response schema/correlation failures would be collapsed into a generic write error and lose `RemoteMemoryContractError`;
+27. a confirmed-write wrapper would not preserve the original remote error as `__cause__`;
+28. the canonical inventory report is absent, has the wrong SHA, or has no recorded custody commit;
+29. implementation begins from the suspended v1.2 authorization instead of a new frozen v1.3 authorization.
 
 ---
 
@@ -1757,31 +1802,43 @@ Risk: previously tolerated malformed server responses now fail.
 
 Mitigation: this is desired contract hardening; tests must show valid current fixtures remain accepted.
 
-## 25.4 Runtime path duplication
+## 25.4 Typed error classification
+
+Risk: contract/correlation defects could be collapsed into a generic write failure, weakening diagnostics and observability.
+
+Mitigation: §10.2 owns the exact classification; response schema/correlation failures raise `RemoteMemoryContractError`, operational write failures retain `RemoteMemoryWriteError`, and wrappers preserve `__cause__`.
+
+## 25.5 Inventory evidence custody
+
+Risk: an exact artifact SHA without a canonical committed path proves byte identity but not long-term repository availability.
+
+Mitigation: the report must exist under `docs/reports/`, match the recorded SHA and have its containing commit recorded before v1.3 freeze.
+
+## 25.6 Runtime path duplication
 
 Risk: normal run and confirmed-save run have separate control flows.
 
 Mitigation: separate because their side-effect semantics differ; share only terminal/session-record helpers, not best-effort persistence.
 
-## 25.5 CLI coupling
+## 25.7 CLI coupling
 
 Risk: first application boundary is CLI-specific.
 
 Mitigation: domain operation and SessionRuntime API remain UI-independent; future GUI/API can create the same frozen operation.
 
-## 25.6 Application identity propagation
+## 25.8 Application identity propagation
 
 Risk: SessionRuntime currently has no application user identity.
 
 Mitigation: add an optional constructor parameter, pass the same configured user ID from `main.py`, and require it for confirmed saves. Do not infer it from content or hidden adapter state.
 
-## 25.7 Diagnostic data leakage
+## 25.9 Diagnostic data leakage
 
 Risk: errors or logs could expose decision content or full payloads.
 
 Mitigation: preserve typed causes while logging only IDs, category, latency and stack trace without request/response bodies.
 
-## 25.8 Cross-repo idempotency details
+## 25.10 Cross-repo idempotency details
 
 Risk: exact TOMTIT-Memory HTTP status for idempotency conflict remains externally verified later.
 
@@ -1817,7 +1874,7 @@ The following remain outside this specification:
 M7-A is complete only when:
 
 1. all AC-M7A-01 through AC-M7A-22 are PASS;
-2. the inventory evidence custody requirement in §0 is satisfied;
+2. the canonical inventory report exists, matches the recorded artifact SHA and has its custody commit recorded;
 3. M7-A evidence distinguishes replay-stable construction from M7-B server replay;
 4. no required criterion is UNVERIFIED;
 5. the candidate passes separate read-only verification;
@@ -1844,19 +1901,24 @@ That claim requires M7-B.
 Current document state:
 
 ```text
-SPEC v1.2-draft WRITTEN
-CAPABILITY-DRIFT PATCH APPLIED
+SPEC v1.3-draft WRITTEN
+V1.2 IMPLEMENTATION AUTHORIZATION SUSPENDED
+ERROR TAXONOMY CONTRADICTION RESOLVED
+INVENTORY CUSTODY CANONICALIZATION REQUIRED BEFORE FREEZE
 IMPLEMENTATION NOT AUTHORIZED
 ```
 
-Next required workflow:
+Required workflow:
 
 ```text
-spec review
-→ correction patch if needed
-→ approved spec freeze
-→ implementation instruction
+v1.3 delta review
+→ canonical inventory-report commit + custody verification
+→ approved v1.3 freeze
+→ merge frozen v1.3
+→ new implementation authorization citing frozen v1.3
 → implementation candidate
 → separate verification
 → human merge authorization
 ```
+
+The frozen v1.2 document remains historical evidence and must not be amended in place.
