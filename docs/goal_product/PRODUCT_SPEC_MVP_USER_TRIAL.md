@@ -1,14 +1,14 @@
 # TOMTIT-Agent — Product MVP for User Trial
 
-**Document:** `PRODUCT_SPEC_MVP_USER_TRIAL.md`  
-**Version:** `0.3-draft`  
-**Status:** `DRAFT FOR FINAL VERIFICATION`  
-**Primary milestone:** Memory Wedge Trial  
-**Secondary milestone:** Broader Agent Alpha  
-**Target:** 3–5 design partners; chưa phải production release  
+**Document:** `PRODUCT_SPEC_MVP_USER_TRIAL.md`<br>
+**Version:** `0.3`<br>
+**Status:** `ACCEPTED FOR MEMORY WEDGE TRIAL`<br>
+**Primary milestone:** Memory Wedge Trial<br>
+**Secondary milestone:** Broader Agent Alpha<br>
+**Target:** 3–5 design partners; chưa phải production release<br>
 
-> `DRAFT FOR FINAL VERIFICATION` có nghĩa các quyết định kiến trúc đã được thống nhất để kiểm tra tài liệu lần cuối.  
-> Nó không có nghĩa product spec đã được chấp nhận hoặc M7-A đã được phép implement.  
+> `DRAFT FOR FINAL VERIFICATION` có nghĩa các quyết định kiến trúc đã được thống nhất để kiểm tra tài liệu lần cuối.<br>
+> Nó không có nghĩa product spec đã được chấp nhận hoặc M7-A đã được phép implement.<br>
 > Tài liệu chỉ được nâng thành `Version 0.3 / ACCEPTED FOR MEMORY WEDGE TRIAL`
 > sau khi candidate docs-only được freeze, verified read-only và được human/architect phê duyệt.
 
@@ -153,8 +153,8 @@ The same editor must not silently promote the document to `ACCEPTED`.
 
 This section is informational and must not be treated as the source of truth for current Git HEAD.
 
-**Snapshot date:** `2026-06-19`  
-**Revision source of truth:** use the latest verification/status reports for both repositories; this product document does not freeze repository SHAs.  
+**Snapshot date:** `2026-06-19`<br>
+**Revision source of truth:** use the latest verification/status reports for both repositories; this product document does not freeze repository SHAs.<br>
 
 Known phase state at drafting time:
 
@@ -537,7 +537,7 @@ It must:
 - not manage tool execution;
 - not receive planner/model output.
 
-`project_id` remains configuration owned by composition/`RemoteMemoryClient`.  
+`project_id` remains configuration owned by composition/`RemoteMemoryClient`.<br>
 M7 must not add `project_id` to `AgentState`, `ConfirmedDecision` or `ConfirmedSaveOperation` only to satisfy Memory transport.
 
 Do not add memory persistence rules to the tool `PolicyEngine`.
