@@ -6,6 +6,11 @@ from agent_core.memory.contracts import ContextPack, MemoryCandidate, WriteRespo
 class NullMemoryClient:
     """No-op MemoryClientProtocol implementation for memory_backend=none."""
 
+    @property
+    def supports_required_write(self) -> bool:
+        # Fail-closed: the null backend cannot perform an M7-A required confirmed write.
+        return False
+
     def retrieve_context_pack(
         self,
         goal: str,
@@ -32,5 +37,6 @@ class NullMemoryClient:
         user_id: str | None = None,
         session_id: str | None = None,
         task_id: str | None = None,
+        request_id: str | None = None,
     ) -> WriteResponse:
         return WriteResponse()

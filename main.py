@@ -114,7 +114,15 @@ def main() -> None:
         print("Unable to create or load durable session", file=sys.stderr)
         sys.exit(1)
 
-    sr = SessionRuntime(agent, store, session=session_state, session_store=session_store)
+    # Pass the application-owned memory user identity (remote backend) into SessionRuntime
+    # so M7-A confirmed saves use an explicit identity, never one inferred at runtime.
+    sr = SessionRuntime(
+        agent,
+        store,
+        session=session_state,
+        session_store=session_store,
+        user_id=args.memory_user_id,
+    )
 
     # BOUNDARY 2 — run interactive session (after task)
     try:

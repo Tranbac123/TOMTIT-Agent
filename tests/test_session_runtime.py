@@ -745,3 +745,139 @@ def test_session_store_called_once_per_turn():
     assert len(capturing.saved_turns) == 2
     # Second save includes both turns (candidate is cumulative)
     assert len(capturing.saved_turns[1]) == 2
+
+
+# ---------------------------------------------------------------------------
+# M7-A — dedicated confirmed-decision save boundary (SPEC §15)
+# ---------------------------------------------------------------------------
+
+from agent_core.confirmation.evidence_factory import make_confirmation_evidence
+from agent_core.confirmation.models import ConfirmedDecision, ConfirmedSaveOperation
+from agent_core.memory.contracts import MemoryCandidate
+from agent_core.memory.errors import RemoteMemoryWriteError
+
+
+class _ExplodingPlanner:
+    def make_plan(self, state):  # pragma: no cover
+        raise AssertionError("planner must not run during confirmed save")
+
+
+class _RemoteSpyClient:
+    def __init__(self, *, response=None, raise_exc=None):
+        self._response = response if response is not None else WriteResponse(written_ids=["mem_1"], skipped=[])
+        self._raise_exc = raise_exc
+        self.write_calls = 0
+
+    @property
+    def supports_required_write(self) -> bool:
+        return True
+
+    def retrieve_context_pack(self, goal, **kw):  # pragma: no cover
+        return ContextPack()
+
+    def write_memory_candidates(self, candidates, *, user_id=None, session_id=None, task_id=None, request_id=None):
+        self.write_calls += 1
+        if self._raise_exc is not None:
+            raise self._raise_exc
+        return self._response
+
+
+def _confirmed_session(client, *, user_id="user-1", session=None, session_store=None):
+    agent = RuntimeAgent(planner=_ExplodingPlanner(), tools={}, memory_client=client)
+    store = InMemoryStore()
+    return SessionRuntime(agent, store, session=session, session_store=session_store, user_id=user_id)
+
+
+def _operation_for(sr, *, content="use postgres", confirmation_id="conf-1", task_id="task-1"):
+    decision = ConfirmedDecision(
+        confirmation_id=confirmation_id,
+        content=content,
+        confirmation_evidence=make_confirmation_evidence(
+            task_id=task_id, confirmation_id=confirmation_id, content=content
+        ),
+    )
+    return ConfirmedSaveOperation(
+        request_id=f"memory-write:{confirmation_id}",
+        task_id=task_id,
+        session_id=sr.session_id,
+        decision=decision,
+    )
+
+
+def test_confirmed_save_written_creates_completed_turn():
+    sr = _confirmed_session(_RemoteSpyClient())
+    state = sr.run_confirmed_decision_save(_operation_for(sr))
+    assert state.status is AgentStatus.COMPLETED
+    history = sr.get_history()
+    assert len(history) == 1
+    rec = history[-1]
+    assert rec.goal == "Persist confirmed project decision"
+    assert rec.planned_actions == ()
+    assert rec.final_answer is not None
+    assert "use postgres" not in rec.final_answer  # decision content not echoed
+    assert "Decision saved." in rec.final_answer
+
+
+def test_confirmed_save_failed_turn_masks_final_answer():
+    sr = _confirmed_session(_RemoteSpyClient(raise_exc=RemoteMemoryWriteError("down")))
+    state = sr.run_confirmed_decision_save(_operation_for(sr))
+    assert state.status is AgentStatus.FAILED
+    # in-memory state carries the safe message...
+    assert state.final_answer == "Decision was not saved."
+    # ...but the persisted TurnRecord masks it to None
+    rec = sr.get_history()[-1]
+    assert rec.final_answer is None
+
+
+def test_confirmed_save_requires_user_id():
+    sr = _confirmed_session(_RemoteSpyClient(), user_id=None)
+    with pytest.raises(ValueError):
+        sr.run_confirmed_decision_save(_operation_for(sr))
+
+
+def test_confirmed_save_rejects_session_mismatch():
+    sr = _confirmed_session(_RemoteSpyClient())
+    decision = ConfirmedDecision(
+        confirmation_id="conf-1",
+        content="x",
+        confirmation_evidence=make_confirmation_evidence(task_id="task-1", confirmation_id="conf-1", content="x"),
+    )
+    bad_op = ConfirmedSaveOperation(
+        request_id="memory-write:conf-1", task_id="task-1", session_id="OTHER-SESSION", decision=decision
+    )
+    with pytest.raises(ValueError):
+        sr.run_confirmed_decision_save(bad_op)
+
+
+def test_session_blank_user_id_rejected():
+    agent = RuntimeAgent(planner=_ExplodingPlanner(), tools={}, memory_client=_RemoteSpyClient())
+    with pytest.raises(ValueError):
+        SessionRuntime(agent, InMemoryStore(), user_id="   ")
+
+
+def test_confirmed_save_turnrecord_has_no_operation_fields():
+    import dataclasses as _dc
+    from agent_core.state.session_state import TurnRecord
+    sr = _confirmed_session(_RemoteSpyClient())
+    sr.run_confirmed_decision_save(_operation_for(sr))
+    names = {f.name for f in _dc.fields(TurnRecord)}
+    # TurnRecord schema unchanged: no operation/evidence/request fields leaked in
+    assert "confirmed_save_operation" not in names
+    assert "request_id" not in names
+    assert "confirmation_evidence" not in names
+
+
+def test_confirmed_save_persist_before_mutate(tmp_path):
+    from datetime import datetime, timezone
+    from agent_core.session_persistence import FileSessionStore
+    from agent_core.state.session_state import SessionState
+
+    now = datetime.now(timezone.utc)
+    session = SessionState(session_id="11111111-1111-1111-1111-111111111111", created_at=now, updated_at=now)
+    store = FileSessionStore(str(tmp_path))
+    sr = _confirmed_session(_RemoteSpyClient(), session=session, session_store=store)
+    sr.run_confirmed_decision_save(_operation_for(sr))
+    loaded = store.load(session.session_id)
+    assert loaded is not None
+    assert len(loaded.turns) == 1
+    assert loaded.turns[-1].status is AgentStatus.COMPLETED

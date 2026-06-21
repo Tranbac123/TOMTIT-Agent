@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
+    from agent_core.confirmation.models import ConfirmedSaveOperation
     from agent_core.memory.contracts import ContextPack
 from uuid import uuid4
 
@@ -75,6 +76,10 @@ class AgentState:
 
     approved_tools: set[ToolName] = field(default_factory=set)
     read_only: bool = False
+
+    # M7-A run-only input: one confirmed-decision save operation. Additive, default None.
+    # Not placed in slots; not serialized into TurnRecord/SessionState; not restored on resume.
+    confirmed_save_operation: "ConfirmedSaveOperation | None" = None
 
     def add_observation(self, obs: Observation) -> None:
         self.observations.append(obs)

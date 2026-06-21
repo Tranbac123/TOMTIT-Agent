@@ -132,3 +132,19 @@ def test_session_state_schema_unchanged_by_backend_activation():
         "disclosure_reasons",
         "completed_at",
     }
+
+
+def test_backend_client_required_write_capability_values():
+    from agent_core.memory.local_client import LocalMemoryClient
+    from agent_core.memory.null_client import NullMemoryClient
+    from agent_core.memory.in_memory_store import InMemoryStore
+
+    assert LocalMemoryClient(InMemoryStore()).supports_required_write is False
+    assert NullMemoryClient().supports_required_write is False
+
+
+def test_null_client_write_accepts_request_id_kwarg():
+    from agent_core.memory.null_client import NullMemoryClient
+
+    resp = NullMemoryClient().write_memory_candidates([], request_id="memory-write:conf-1")
+    assert resp.written_ids == []

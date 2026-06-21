@@ -12,6 +12,7 @@ from agent_core.state.enums import AgentStatus
 from agent_core.state.session_state import SessionState, SessionStatusView, TurnRecord
 
 if TYPE_CHECKING:
+    from agent_core.confirmation.models import ConfirmedSaveOperation
     from agent_core.session_persistence.base import SessionStoreProtocol
 
 
@@ -36,12 +37,20 @@ class SessionRuntime:
         *,
         session: SessionState | None = None,
         session_store: SessionStoreProtocol | None = None,
+        user_id: str | None = None,
     ) -> None:
         if session is None and session_store is not None:
             raise ValueError(
                 "session_store requires an explicit session object. "
                 "Pass session= when constructing SessionRuntime with a store."
             )
+        # Application-owned identity for M7-A confirmed saves. Optional (defaults None) so
+        # existing natural-language callers stay compatible; blank non-None is rejected.
+        if user_id is not None:
+            if not isinstance(user_id, str) or not user_id.strip():
+                raise ValueError("user_id must be None or a nonblank string")
+            user_id = user_id.strip()
+        self._user_id = user_id
         self._agent = agent
         self._store = store
         self._session_store = session_store
@@ -70,10 +79,58 @@ class SessionRuntime:
             raise RuntimeError(
                 f"run() returned non-terminal state: {state.status}"
             )
+        self._record_terminal_state(state)          # SR2/SR3 persist-before-mutate
+        return state
+
+    def run_confirmed_decision_save(
+        self,
+        operation: "ConfirmedSaveOperation",
+    ) -> AgentState:
+        """M7-A dedicated structured save run (SPEC §15.2). Not a natural-language turn.
+
+        Builds a run-only AgentState carrying the frozen operation and delegates the
+        required write to ``RuntimeAgent.run_confirmed_save``. Identity is application-owned;
+        it is never recovered from decision text, evidence metadata or a hidden client default.
+        """
+        if not self._user_id:
+            raise ValueError(
+                "run_confirmed_decision_save requires an application-owned user_id"
+            )
+        session_id = self._session.session_id
+        if (
+            operation.session_id is None
+            or not operation.session_id.strip()
+            or operation.session_id != session_id
+        ):
+            raise ValueError(
+                "operation session_id must be nonblank and equal the current session id"
+            )
+
+        state = AgentState(
+            goal="Persist confirmed project decision",
+            task_id=operation.task_id,
+            user_id=self._user_id,
+            session_id=session_id,
+            memory=self._store,
+            confirmed_save_operation=operation,
+        )
+        state = self._agent.run_confirmed_save(state)  # raise → no append (fail-closed history)
+        if not state.is_terminal():
+            raise RuntimeError(
+                f"run_confirmed_save returned non-terminal state: {state.status}"
+            )
+        self._record_terminal_state(state)
+        return state
+
+    def _record_terminal_state(self, state: AgentState) -> None:
+        """Build a TurnRecord and persist-before-mutate. Shared by NL and confirmed-save paths.
+
+        FAILED → final_answer masked to None (anti-leak, QĐ-SR2-C). The confirmed operation,
+        evidence object, decision content and request payload are never serialized as fields.
+        """
         record = TurnRecord(
             task_id=state.task_id,
             goal=state.goal,
-            # FAILED → None: chống rò raw exception text qua final_answer (QĐ-SR2-C)
             final_answer=(
                 state.final_answer if state.status == AgentStatus.COMPLETED else None
             ),
@@ -95,7 +152,6 @@ class SessionRuntime:
             self._session_store.save(candidate)  # SessionPersistenceError → propagate
 
         self._session.append_turn(record)          # only after successful save
-        return state
 
     def get_status(self) -> SessionStatusView:
         return self._session.status_view()

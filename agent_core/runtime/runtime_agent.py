@@ -4,8 +4,19 @@ import logging
 from collections.abc import Mapping
 from typing import Any
 
+from agent_core.confirmation.errors import (
+    ConfirmedWriteValidationError,
+    RequiredWriteConsistencyError,
+    wrap_backend_error,
+)
+from agent_core.confirmation.required_write import (
+    RequiredWriteStatus,
+    validate_required_write_response,
+)
+from agent_core.confirmation.write_policy import ConfirmedMemoryWritePolicy
 from agent_core.memory.client import MemoryClientProtocol
 from agent_core.memory.contracts import MemoryCandidate
+from agent_core.memory.errors import RemoteMemoryError
 from agent_core.output.final_composer import DefaultFinalComposer, FinalComposer
 from agent_core.planning.plan_validator import validate_plan
 from agent_core.planning.rule_based_planner import RuleBasedPlanner, build_rule_based_planner
@@ -32,6 +43,9 @@ _MEMORY_ACTIONS = frozenset({
 # P4: ANSWER_FROM_CONTEXT reads state.context_pack (which came from memory retrieval) →
 # degraded MUST disclose even when context_consumed=False (empty/multi-item branch).
 _MEMORY_PLAN_ACTIONS = _MEMORY_ACTIONS | frozenset({ToolName.READ_NOTE, ToolName.ANSWER_FROM_CONTEXT})
+
+# M7-A: deterministic safe failure message; never contains raw backend/transport text.
+_CONFIRMED_SAVE_FAILED_MESSAGE = "Decision was not saved."
 
 _DISCLOSURE_TEXT: dict[str, str] = {
     "memory_degraded": (
@@ -74,6 +88,7 @@ class RuntimeAgent:
         self.final_composer = final_composer or DefaultFinalComposer()
         self.lifecycle = lifecycle or RuntimeLifecycle()
         self.memory_client = memory_client  # None → retrieve/write no-op
+        self._confirmed_write_policy = ConfirmedMemoryWritePolicy()
 
     def run(self, state: AgentState) -> AgentState:
         self._retrieve_memory(state)      # before plan (SPEC §3b)
@@ -88,6 +103,102 @@ class RuntimeAgent:
 
         self._execute_plan(state)
         self._finalize_run(state)         # ONE finalize point (QĐ-1)
+        return state
+
+    # ------------------------------------------------------------------
+    # M7-A — dedicated confirmed-decision save (separate from run())
+    # ------------------------------------------------------------------
+
+    def run_confirmed_save(self, state: AgentState) -> AgentState:
+        """Required-write path for one explicitly user-confirmed decision (SPEC §14).
+
+        This path is deliberately isolated: it never retrieves memory, plans, builds Steps,
+        invokes ToolExecutor, runs the best-effort `_write_memory()`/`_collect_candidates()`,
+        or composes via the model. It is the sole completion authority for this run.
+        """
+        # Consume-once: a terminal state must never write again (M7A-D12).
+        if state.done or state.status != AgentStatus.CREATED:
+            return state
+
+        operation = state.confirmed_save_operation
+        if operation is None:
+            state.errors.append("confirmed_write:missing_operation")
+            state.fail(_CONFIRMED_SAVE_FAILED_MESSAGE)
+            return state
+
+        # Remote-only capability gate — transport-neutral, no isinstance (SPEC §17.2).
+        # No client write or local-store access occurs when the gate fails.
+        if self.memory_client is None or not self.memory_client.supports_required_write:
+            state.errors.append("confirmed_write:backend_not_capable")
+            state.fail(_CONFIRMED_SAVE_FAILED_MESSAGE)
+            return state
+
+        try:
+            candidate = self._confirmed_write_policy.to_candidate(
+                operation=operation,
+                state=state,
+            )
+        except ConfirmedWriteValidationError as exc:
+            # Policy rejects before any client access → no write attempted.
+            state.errors.append(f"confirmed_write:{type(exc).__name__}")
+            state.fail(_CONFIRMED_SAVE_FAILED_MESSAGE)
+            return state
+
+        try:
+            response = self.memory_client.write_memory_candidates(
+                [candidate],
+                user_id=state.user_id,
+                session_id=state.session_id,
+                task_id=state.task_id,
+                request_id=operation.request_id,
+            )
+            outcome = validate_required_write_response(
+                response,
+                expected_candidate_id=operation.decision.confirmation_id,
+            )
+        except RequiredWriteConsistencyError as exc:
+            # A client write was attempted; response validation failed.
+            state.memory_write_failed = True
+            state.errors.append(f"confirmed_write:{type(exc).__name__}")
+            _logger.warning(
+                "confirmed write response inconsistent for task %s", state.task_id
+            )
+            state.fail(_CONFIRMED_SAVE_FAILED_MESSAGE)
+            return state
+        except RemoteMemoryError as exc:
+            state.memory_write_failed = True
+            state.errors.append(f"confirmed_write:{type(exc).__name__}")
+            # Preserve the original typed cause for diagnostics without exposing payloads.
+            backend_error = wrap_backend_error("confirmed write backend error", exc)
+            _logger.warning(
+                "confirmed write failed for task %s: %s",
+                state.task_id,
+                type(exc).__name__,
+                exc_info=backend_error,
+            )
+            state.fail(_CONFIRMED_SAVE_FAILED_MESSAGE)
+            return state
+        except Exception as exc:  # unexpected — convert to the same safe FAILED outcome
+            state.memory_write_failed = True
+            state.errors.append(f"confirmed_write:{type(exc).__name__}")
+            _logger.warning(
+                "confirmed write unexpected error for task %s", state.task_id, exc_info=True
+            )
+            state.fail(_CONFIRMED_SAVE_FAILED_MESSAGE)
+            return state
+
+        source_ref = operation.decision.confirmation_evidence.source_ref
+        if outcome.status is RequiredWriteStatus.WRITTEN:
+            state.complete(
+                "Decision saved.\n"
+                f"Memory ID: {outcome.memory_id}\n"
+                f"Provenance: {source_ref}"
+            )
+        else:  # SKIPPED_DUPLICATE
+            state.complete(
+                "Decision already existed.\n"
+                f"Provenance: {source_ref}"
+            )
         return state
 
     # ------------------------------------------------------------------

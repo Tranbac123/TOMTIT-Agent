@@ -192,3 +192,17 @@ def test_local_item_explicit_kwargs_counterfactual():
     # trust_level which has the same default and is still explicitly set
     assert pack.items[0].trust_level is TrustLevel.UNTRUSTED_EVIDENCE
     assert pack.items[0].source_type is SourceType.MEMORY
+
+
+def test_local_client_supports_required_write_false():
+    assert LocalMemoryClient(InMemoryStore()).supports_required_write is False
+
+
+def test_local_client_write_accepts_request_id_kwarg():
+    client = LocalMemoryClient(InMemoryStore())
+    resp = client.write_memory_candidates(
+        [MemoryCandidate(type=MemoryType.DECISION, content="x", evidence_ref="e")],
+        task_id="t",
+        request_id="memory-write:conf-1",
+    )
+    assert len(resp.written_ids) == 1

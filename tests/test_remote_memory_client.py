@@ -140,6 +140,8 @@ def test_write_success_exact_route_payload_and_mapping():
         captured["payload"] = json.loads(request.content)
         payload = _fixture("write_response.json")
         payload["request_id"] = "req-write"
+        # Response envelope must correlate with the request (SPEC §10.2).
+        payload["session_id"] = "sess-1"
         return httpx.Response(200, json=payload)
 
     client = _client(handler, request_id="req-write")
@@ -251,7 +253,8 @@ def test_write_contract_status_raises_no_duplicate_mapping(status_code: int):
 def test_write_malformed_success_response_raises():
     client = _client(lambda request: httpx.Response(200, json={"schema_version": "wrong"}))
 
-    with pytest.raises(RemoteMemoryWriteError):
+    # Malformed/schema-invalid success payload is a contract failure (SPEC §10.2).
+    with pytest.raises(RemoteMemoryContractError):
         client.write_memory_candidates(
             [
                 MemoryCandidate(
@@ -304,3 +307,159 @@ def test_remote_wire_isolation():
     sha = hashlib.sha256(fixture_path.read_bytes()).hexdigest()
     # SHA frozen at SF1 implementation baseline — wire must not change
     assert sha == "9f7ab7e561cf43b0dd5399a31d0f12072448a849a3f6235bf59a16ebabe73186"
+
+
+# ---------------------------------------------------------------------------
+# M7-A — required-write capability, caller request_id, response correlation
+# ---------------------------------------------------------------------------
+
+_HASH = "a" * 64
+
+
+def _decision_candidate(candidate_id: str = "conf-1"):
+    return MemoryCandidate(
+        type=MemoryType.DECISION,
+        content="use postgres",
+        tags=[],
+        importance=0.5,
+        confidence=1.0,
+        evidence_ref="user-explicit:task-1:" + candidate_id,
+        metadata={"candidate_id": candidate_id},
+    )
+
+
+def _ok_results(candidate_id: str = "conf-1"):
+    return [
+        {
+            "candidate_id": candidate_id,
+            "status": "written",
+            "memory_id": "mem_1",
+            "content_hash": _HASH,
+            "reason": None,
+        }
+    ]
+
+
+def _ok_response(*, request_id="memory-write:conf-1", session_id="sess-1", results=None, written=1, skipped=0):
+    return {
+        "schema_version": "memory-contract-v1",
+        "request_id": request_id,
+        "project_id": "tomtit-agent",
+        "user_id": "local-user",
+        "session_id": session_id,
+        "results": results if results is not None else _ok_results(),
+        "written_count": written,
+        "skipped_count": skipped,
+    }
+
+
+def test_remote_supports_required_write_true():
+    client = _client(lambda r: httpx.Response(200, json=_ok_response()))
+    assert client.supports_required_write is True
+
+
+def test_caller_request_id_used_unchanged():
+    captured = {}
+
+    def handler(request):
+        captured["payload"] = json.loads(request.content)
+        return httpx.Response(200, json=_ok_response(request_id="memory-write:conf-1"))
+
+    # factory would return "req-FACTORY"; caller request_id must win.
+    client = _client(handler, request_id="req-FACTORY")
+    client.write_memory_candidates(
+        [_decision_candidate("conf-1")],
+        session_id="sess-1",
+        task_id="task-1",
+        request_id="memory-write:conf-1",
+    )
+    assert captured["payload"]["request_id"] == "memory-write:conf-1"
+
+
+def test_request_id_factory_fallback_when_absent():
+    captured = {}
+
+    def handler(request):
+        captured["payload"] = json.loads(request.content)
+        return httpx.Response(200, json=_ok_response(request_id="req-FACTORY"))
+
+    client = _client(handler, request_id="req-FACTORY")
+    client.write_memory_candidates(
+        [_decision_candidate("conf-1")], session_id="sess-1", task_id="task-1"
+    )
+    assert captured["payload"]["request_id"] == "req-FACTORY"
+
+
+def _expect_contract_error(response_json):
+    client = _client(lambda r: httpx.Response(200, json=response_json), request_id="memory-write:conf-1")
+    with pytest.raises(RemoteMemoryContractError):
+        client.write_memory_candidates(
+            [_decision_candidate("conf-1")],
+            session_id="sess-1",
+            task_id="task-1",
+            request_id="memory-write:conf-1",
+        )
+
+
+def test_response_request_id_mismatch_rejected():
+    _expect_contract_error(_ok_response(request_id="memory-write:WRONG"))
+
+
+def test_response_session_id_mismatch_rejected():
+    _expect_contract_error(_ok_response(session_id="sess-OTHER"))
+
+
+def test_response_project_id_mismatch_rejected():
+    resp = _ok_response()
+    resp["project_id"] = "other-project"
+    _expect_contract_error(resp)
+
+
+def test_response_user_id_mismatch_rejected():
+    resp = _ok_response()
+    resp["user_id"] = "other-user"
+    _expect_contract_error(resp)
+
+
+def test_response_zero_result_rejected():
+    _expect_contract_error(_ok_response(results=[], written=0, skipped=0))
+
+
+def test_response_extra_result_rejected():
+    extra = _ok_results("conf-1") + [
+        {"candidate_id": "conf-2", "status": "written", "memory_id": "mem_2", "content_hash": _HASH, "reason": None}
+    ]
+    _expect_contract_error(_ok_response(results=extra, written=2, skipped=0))
+
+
+def test_response_candidate_mismatch_rejected():
+    wrong = [
+        {"candidate_id": "WRONG", "status": "written", "memory_id": "mem_1", "content_hash": _HASH, "reason": None}
+    ]
+    _expect_contract_error(_ok_response(results=wrong))
+
+
+def test_response_duplicate_result_rejected():
+    dup = [
+        {"candidate_id": "conf-1", "status": "written", "memory_id": "mem_1", "content_hash": _HASH, "reason": None},
+        {"candidate_id": "conf-1", "status": "written", "memory_id": "mem_2", "content_hash": _HASH, "reason": None},
+    ]
+    _expect_contract_error(_ok_response(results=dup, written=2, skipped=0))
+
+
+def test_response_skipped_duplicate_success():
+    skipped_results = [
+        {"candidate_id": "conf-1", "status": "skipped_duplicate", "memory_id": "mem_x", "content_hash": _HASH, "reason": "duplicate_content"}
+    ]
+    client = _client(
+        lambda r: httpx.Response(200, json=_ok_response(results=skipped_results, written=0, skipped=1)),
+        request_id="memory-write:conf-1",
+    )
+    resp = client.write_memory_candidates(
+        [_decision_candidate("conf-1")],
+        session_id="sess-1",
+        task_id="task-1",
+        request_id="memory-write:conf-1",
+    )
+    assert resp.written_ids == []
+    assert resp.skipped == ["conf-1"]

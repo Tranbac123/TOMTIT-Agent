@@ -11,6 +11,15 @@ class MemoryClientProtocol(Protocol):
     Runtime tự rút user_id/session_id/task_id từ state và truyền vào. Giảm coupling,
     dễ test, remote client không kéo theo cả runtime state."""
 
+    @property
+    def supports_required_write(self) -> bool:
+        """True only for backends that can perform an M7-A required confirmed write.
+
+        Read-only and fail-closed by implementation: remote durable backends report
+        True; local/null backends report False. RuntimeAgent checks this property
+        instead of inspecting concrete client types (no isinstance gate)."""
+        ...
+
     def retrieve_context_pack(
         self,
         goal: str,
@@ -28,4 +37,5 @@ class MemoryClientProtocol(Protocol):
         user_id: str | None = None,
         session_id: str | None = None,
         task_id: str | None = None,
+        request_id: str | None = None,
     ) -> WriteResponse: ...

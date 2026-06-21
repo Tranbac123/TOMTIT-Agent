@@ -55,6 +55,11 @@ class RemoteMemoryClient:
             transport=transport,
         )
 
+    @property
+    def supports_required_write(self) -> bool:
+        # Remote durable backend can perform an M7-A required confirmed write.
+        return True
+
     def close(self) -> None:
         if self._owns_client:
             self._client.close()
@@ -112,18 +117,27 @@ class RemoteMemoryClient:
         user_id: str | None = None,
         session_id: str | None = None,
         task_id: str | None = None,
+        request_id: str | None = None,
     ) -> WriteResponse:
         if not candidates:
             return WriteResponse()
         resolved_user_id = self._resolve_user(user_id)
         resolved_task_id = self._required(task_id, "task_id")
+        # Caller-controlled request_id (M7-A deterministic replay-stable identity) takes
+        # precedence; when absent, preserve the existing per-call factory behavior.
+        resolved_request_id = (
+            self._required(request_id, "request_id")
+            if request_id is not None
+            else self._new_request_id()
+        )
+        wire_candidates = self._to_write_candidates(candidates)
         request = WriteRequestV1(
-            request_id=self._new_request_id(),
+            request_id=resolved_request_id,
             project_id=self.project_id,
             user_id=resolved_user_id,
             session_id=session_id,
             task_id=resolved_task_id,
-            candidates=self._to_write_candidates(candidates),
+            candidates=wire_candidates,
         )
         try:
             response = self._client.post(
@@ -142,8 +156,54 @@ class RemoteMemoryClient:
             payload = response.json()
             parsed = WriteResponseV1.model_validate(payload)
         except (ValueError, ValidationError) as exc:
-            raise RemoteMemoryWriteError("invalid write response") from exc
+            # Malformed/schema-invalid success payload is a contract failure, not a
+            # generic write failure (SPEC §10.2).
+            raise RemoteMemoryContractError("invalid write response") from exc
+        self._verify_write_correlation(parsed, request)
         return self._to_write_response(parsed)
+
+    def _verify_write_correlation(
+        self,
+        parsed: WriteResponseV1,
+        request: WriteRequestV1,
+    ) -> None:
+        """Verify the success response envelope correlates exactly with the request.
+
+        Any mismatch is a contract failure (SPEC §10.2): no failed validation may
+        return a domain success response.
+        """
+        if parsed.request_id != request.request_id:
+            raise RemoteMemoryContractError("write response request_id mismatch")
+        if parsed.project_id != request.project_id:
+            raise RemoteMemoryContractError("write response project_id mismatch")
+        if parsed.user_id != request.user_id:
+            raise RemoteMemoryContractError("write response user_id mismatch")
+        if parsed.session_id != request.session_id:
+            raise RemoteMemoryContractError("write response session_id mismatch")
+
+        expected_ids = [candidate.candidate_id for candidate in request.candidates]
+        result_ids = [result.candidate_id for result in parsed.results]
+
+        if len(result_ids) != len(expected_ids):
+            raise RemoteMemoryContractError("write response result count mismatch")
+        if len(set(result_ids)) != len(result_ids):
+            raise RemoteMemoryContractError("write response has duplicate candidate ids")
+        if set(result_ids) != set(expected_ids):
+            raise RemoteMemoryContractError(
+                "write response candidate ids do not match the request"
+            )
+
+        for result in parsed.results:
+            if result.status == "written":
+                if not result.memory_id or not result.memory_id.strip():
+                    raise RemoteMemoryContractError(
+                        "written result is missing a memory id"
+                    )
+            elif result.status == "skipped_duplicate":
+                if result.reason != "duplicate_content":
+                    raise RemoteMemoryContractError(
+                        "skipped_duplicate result has an invalid reason"
+                    )
 
     def _to_write_candidates(self, candidates: list[MemoryCandidate]) -> list[WriteCandidateV1]:
         result: list[WriteCandidateV1] = []

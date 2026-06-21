@@ -36,6 +36,10 @@ def test_literal_rejects_typo():
 
 def test_protocol_conformance():
     class StubClient:
+        @property
+        def supports_required_write(self) -> bool:
+            return False
+
         def retrieve_context_pack(
             self,
             goal: str,
@@ -54,6 +58,7 @@ def test_protocol_conformance():
             user_id: str | None = None,
             session_id: str | None = None,
             task_id: str | None = None,
+            request_id: str | None = None,
         ) -> WriteResponse:
             return WriteResponse()
 

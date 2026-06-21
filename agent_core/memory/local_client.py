@@ -31,6 +31,11 @@ class LocalMemoryClient:
         self._store = store
         self._tokens = token_counter or ApproxTokenCounter()
 
+    @property
+    def supports_required_write(self) -> bool:
+        # Fail-closed: local fallback cannot perform an M7-A required confirmed write.
+        return False
+
     def retrieve_context_pack(
         self,
         goal: str,
@@ -83,7 +88,10 @@ class LocalMemoryClient:
         user_id: str | None = None,
         session_id: str | None = None,
         task_id: str | None = None,
+        request_id: str | None = None,
     ) -> WriteResponse:
+        # request_id accepted for protocol conformance; local store has no idempotency
+        # semantics and M7-A rejects this backend before this method is called.
         written: list[str] = []
         for cand in candidates:
             rec = MemoryRecord(
