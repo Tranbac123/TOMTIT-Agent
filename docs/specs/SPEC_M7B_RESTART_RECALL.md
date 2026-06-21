@@ -1,7 +1,7 @@
 # SPEC_M7B_RESTART_RECALL
 
-**Version:** `0.1-draft`
-**Status:** `DRAFT FOR ARCHITECT REVIEW — IMPLEMENTATION NOT AUTHORIZED`
+**Version:** `1.0`
+**Status:** `FROZEN FOR IMPLEMENTATION AUTHORIZATION REVIEW — IMPLEMENTATION NOT AUTHORIZED`
 **Authoritative baseline:** `main@3737ca4d58fd516633013efc05d30106f0a1493a`
 **Depends on:** `M7-A confirmed-decision write @ 3737ca4d58fd516633013efc05d30106f0a1493a`
 **Preflight evidence:** `docs/reports/REPORT_M7B_RESTART_RECALL_PREFLIGHT.md`
@@ -9,6 +9,10 @@
 **Preflight artifact lines:** `194`
 **Preflight source verdict:** `M7-B RESTART RECALL PREFLIGHT: GO — READY FOR M7-B SPEC DRAFT`
 **TOMTIT-Memory evidence revision:** `d4d879d29a9fe5d10bae128b2675ae256354ca87`
+**Spec draft review evidence:** `docs/reports/REPORT_M7B_SPEC_DRAFT_REVIEW_VERIFIED.md`
+**Spec draft review artifact SHA-256:** `d83b0db2d2e9c2b1998b3fa6c68726ee470e8335f5b18843b58861e9235a069a`
+**Spec draft review artifact line count:** `165`
+**Freeze authorization:** `SPEC ONLY — IMPLEMENTATION NOT AUTHORIZED`
 **Implementation authorization:** `NOT AUTHORIZED`
 
 ---
