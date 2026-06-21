@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Mapping
+import time
+from collections.abc import Callable, Mapping
 from typing import Any
 
 from agent_core.confirmation.errors import (
@@ -15,7 +16,7 @@ from agent_core.confirmation.required_write import (
 )
 from agent_core.confirmation.write_policy import ConfirmedMemoryWritePolicy
 from agent_core.memory.client import MemoryClientProtocol
-from agent_core.memory.contracts import MemoryCandidate
+from agent_core.memory.contracts import ContextPack, MemoryCandidate
 from agent_core.memory.errors import RemoteMemoryError
 from agent_core.output.final_composer import DefaultFinalComposer, FinalComposer
 from agent_core.planning.plan_validator import validate_plan
@@ -47,6 +48,17 @@ _MEMORY_PLAN_ACTIONS = _MEMORY_ACTIONS | frozenset({ToolName.READ_NOTE, ToolName
 # M7-A: deterministic safe failure message; never contains raw backend/transport text.
 _CONFIRMED_SAVE_FAILED_MESSAGE = "Decision was not saved."
 
+# M7-B: deterministic safe recall messages (SPEC_M7B §11.2). No raw backend text.
+_RECALL_NO_RESULT_MESSAGE = "No matching project decision found."
+_RECALL_FAILED_MESSAGE = "Decision recall failed."
+_RECALL_TOKEN_BUDGET = 1500
+_RECALL_MAX_ITEMS = 20
+# Bounded same-tick FTS stabilization defaults (SPEC_M7B §10). NOT a generic retry/circuit
+# breaker: retries ONLY a non-degraded empty pack (index-visibility timing), stops on the
+# first hit, never retries a remote failure, never fabricates a hit.
+_RECALL_DEFAULT_MAX_ATTEMPTS = 1
+_RECALL_RETRY_DELAY_SECONDS = 0.15
+
 _DISCLOSURE_TEXT: dict[str, str] = {
     "memory_degraded": (
         "(Lưu ý: đang chạy ở chế độ memory rút gọn — ngữ cảnh dự án dài hạn có thể thiếu.)"
@@ -64,6 +76,28 @@ def append_disclosures(draft: str, reasons: list[str]) -> str:
         return draft
     lines = [_DISCLOSURE_TEXT[r] for r in reasons if r in _DISCLOSURE_TEXT]
     return draft + ("\n\n" + "\n".join(lines) if lines else "")
+
+
+def _format_recall_output(pack: ContextPack) -> str:
+    """Build safe recall output from ContextPack/ContextItem only (SPEC_M7B §8).
+
+    Surfaces decision content plus provenance (memory_id / evidence_ref / source_task_id)
+    ONLY when the item carries it — never fabricates provenance, never claims project resume,
+    never includes raw backend text."""
+    blocks: list[str] = []
+    for item in pack.items:
+        lines = [item.content]
+        memory_id = item.metadata.get("memory_id") or item.source_ref
+        evidence_ref = item.metadata.get("evidence_ref")
+        source_task_id = item.metadata.get("source_task_id")
+        if memory_id:
+            lines.append(f"Memory ID: {memory_id}")
+        if evidence_ref:
+            lines.append(f"Provenance: {evidence_ref}")
+        if source_task_id:
+            lines.append(f"Source task: {source_task_id}")
+        blocks.append("\n".join(lines))
+    return "\n\n".join(blocks)
 
 
 class RuntimeAgent:
@@ -200,6 +234,81 @@ class RuntimeAgent:
                 f"Provenance: {source_ref}"
             )
         return state
+
+    # ------------------------------------------------------------------
+    # M7-B — dedicated cross-process recall (separate from run())
+    # ------------------------------------------------------------------
+
+    def run_memory_recall(
+        self,
+        state: AgentState,
+        *,
+        max_attempts: int = _RECALL_DEFAULT_MAX_ATTEMPTS,
+        retry_delay_seconds: float = _RECALL_RETRY_DELAY_SECONDS,
+        sleep_fn: Callable[[float], None] = time.sleep,
+    ) -> AgentState:
+        """Read-only recall of a previously confirmed decision (SPEC_M7B §11).
+
+        Deliberately isolated like ``run_confirmed_save``: it never plans, builds Steps,
+        invokes the ToolExecutor/skills, reads ``confirmed_save_operation``, nor falls back
+        to any local store. It uses only the existing ``retrieve_context_pack`` remote path
+        and is the sole completion authority for this run. Raw backend text is never surfaced.
+
+        ``max_attempts``>1 enables the bounded same-tick FTS stabilization (§10): it retries
+        ONLY a non-degraded empty pack (index-visibility timing), stops on the first hit, and
+        never retries a remote failure or fabricates a result.
+        """
+        # Consume-once: a terminal state must never recall again.
+        if state.done or state.status != AgentStatus.CREATED:
+            return state
+
+        # Remote retrieval primitive is required; there is no local fallback.
+        if self.memory_client is None:
+            state.errors.append("memory_recall:no_client")
+            state.fail(_RECALL_FAILED_MESSAGE)
+            return state
+
+        attempt = 0
+        while True:
+            attempt += 1
+            try:
+                pack = self.memory_client.retrieve_context_pack(
+                    state.goal,
+                    user_id=state.user_id,
+                    session_id=state.session_id,
+                    token_budget=_RECALL_TOKEN_BUDGET,
+                    max_items=_RECALL_MAX_ITEMS,
+                )
+            except Exception as exc:  # any backend/transport/contract error → safe failure
+                state.errors.append(f"memory_recall:{type(exc).__name__}")
+                _logger.warning(
+                    "memory recall failed for session %s: %s",
+                    state.session_id,
+                    type(exc).__name__,
+                )
+                state.fail(_RECALL_FAILED_MESSAGE)
+                return state
+
+            # A degraded pack means remote unavailable/5xx/transport — fail safely, never
+            # "no result", and never retry (retrying a down server would be a circuit breaker).
+            if pack.degraded:
+                state.memory_degraded = True
+                state.errors.append("memory_recall:degraded")
+                state.fail(_RECALL_FAILED_MESSAGE)
+                return state
+
+            if pack.items:                              # stop immediately on first valid hit
+                state.context_pack = pack
+                state.complete(_format_recall_output(pack))
+                return state
+
+            # Non-degraded empty pack: same-tick FTS visibility nuance (§9). Retry within the
+            # bound; if still empty after the bound, report the deterministic no-result.
+            if attempt >= max_attempts:
+                state.context_pack = pack
+                state.complete(_RECALL_NO_RESULT_MESSAGE)
+                return state
+            sleep_fn(retry_delay_seconds)
 
     # ------------------------------------------------------------------
     # Memory retrieve

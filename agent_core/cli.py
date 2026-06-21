@@ -12,6 +12,8 @@ from agent_core.confirmation.models import (
 
 _SAVE_DECISION_COMMAND = "/memory save-decision"
 _SAVE_FAILED_MESSAGE = "Decision was not saved."
+_RECALL_COMMAND = "/memory recall"
+_RECALL_FAILED_MESSAGE = "Decision recall failed."
 
 
 def should_exit(user_input: str) -> bool:
@@ -72,6 +74,35 @@ def handle_save_decision(
     output_fn(state.final_answer if state.final_answer else _SAVE_FAILED_MESSAGE)
 
 
+def handle_recall(
+    session,
+    input_fn: Callable[[str], str] = input,
+    output_fn: Callable[[str], None] = print,
+    *,
+    inline_query: str | None = None,
+) -> None:
+    """Structured cross-process recall boundary (SPEC_M7B §11.1).
+
+    Read-only and application-owned: intercepted before ``handle_turn`` so it never enters
+    the planner/tools/skills. Prompts for one nonblank query (interactive primary shape) or
+    uses an inline query; a blank query cancels with zero remote call. Only the deterministic
+    safe message is shown — never raw backend text."""
+    query = inline_query
+    if query is None or not query.strip():
+        try:
+            query = input_fn("Recall query: ")
+        except (EOFError, KeyboardInterrupt):
+            output_fn("Đã hủy recall.")
+            return
+
+    if not query or not query.strip():
+        output_fn("Đã hủy recall: truy vấn trống.")
+        return
+
+    state = session.run_memory_recall(query.strip())
+    output_fn(state.final_answer if state.final_answer else _RECALL_FAILED_MESSAGE)
+
+
 def run_interactive(
     session,
     input_fn: Callable[[str], str] = input,
@@ -90,6 +121,13 @@ def run_interactive(
         stripped = user_input.strip()
         if stripped == _SAVE_DECISION_COMMAND:       # structured save — never enters planner
             handle_save_decision(session, input_fn, output_fn)
+            continue
+        if stripped == _RECALL_COMMAND:              # structured recall — never enters planner
+            handle_recall(session, input_fn, output_fn)
+            continue
+        if stripped.startswith(_RECALL_COMMAND + " "):  # inline convenience form
+            inline = stripped[len(_RECALL_COMMAND):].strip()
+            handle_recall(session, input_fn, output_fn, inline_query=inline)
             continue
         if stripped == "/status":                   # meta-command — chặn trước handle_turn
             view = session.get_status()

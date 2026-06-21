@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import dataclasses
+import time
+from collections.abc import Callable
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 from uuid import uuid4
@@ -14,6 +16,10 @@ from agent_core.state.session_state import SessionState, SessionStatusView, Turn
 if TYPE_CHECKING:
     from agent_core.confirmation.models import ConfirmedSaveOperation
     from agent_core.session_persistence.base import SessionStoreProtocol
+
+# Real recall (CLI) enables the bounded same-tick FTS stabilization (SPEC_M7B §10): at most
+# 5 attempts, stop on first hit, never retry a remote failure. Tests override this.
+_RECALL_MAX_ATTEMPTS = 5
 
 
 class SessionRuntime:
@@ -118,6 +124,40 @@ class SessionRuntime:
         if not state.is_terminal():
             raise RuntimeError(
                 f"run_confirmed_save returned non-terminal state: {state.status}"
+            )
+        self._record_terminal_state(state)
+        return state
+
+    def run_memory_recall(
+        self,
+        query: str,
+        *,
+        max_attempts: int = _RECALL_MAX_ATTEMPTS,
+        sleep_fn: Callable[[float], None] = time.sleep,
+    ) -> AgentState:
+        """M7-B dedicated cross-process recall run (SPEC_M7B §11). Not a natural-language turn.
+
+        Builds a run-only AgentState for THIS session (a fresh session_id relative to the
+        writing session does not block recall — retrieval is scoped by project_id + user_id,
+        not session_id) and delegates to ``RuntimeAgent.run_memory_recall``. Identity is the
+        application-owned ``user_id`` (same source as M7-A); it is never recovered from the
+        query. The recall never reads ``confirmed_save_operation`` and never uses a local store.
+        """
+        if not query or not query.strip():
+            raise ValueError("recall query must be a nonblank string")
+
+        state = AgentState(
+            goal=query.strip(),
+            user_id=self._user_id,
+            session_id=self._session.session_id,
+            memory=self._store,
+        )
+        state = self._agent.run_memory_recall(
+            state, max_attempts=max_attempts, sleep_fn=sleep_fn
+        )
+        if not state.is_terminal():
+            raise RuntimeError(
+                f"run_memory_recall returned non-terminal state: {state.status}"
             )
         self._record_terminal_state(state)
         return state
