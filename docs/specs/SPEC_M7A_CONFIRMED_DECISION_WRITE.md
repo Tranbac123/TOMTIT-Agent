@@ -1,7 +1,7 @@
 # SPEC_M7A_CONFIRMED_DECISION_WRITE
 
-**Version:** `1.3-draft`
-**Status:** `DRAFT FOR ARCHITECT REVIEW — IMPLEMENTATION NOT AUTHORIZED`
+**Version:** `1.3`
+**Status:** `FROZEN FOR IMPLEMENTATION AUTHORIZATION REVIEW`
 **Repository:** `TOMTIT-Agent`
 **Authoritative baseline:** `main@bf967b88ee1040d769d44a5f8f7500ee8f46ad08`
 **Verification process:** `docs/standards/VERIFICATION_GATE.md`
