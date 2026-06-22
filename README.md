@@ -32,23 +32,24 @@ TOMTIT-Agent has completed its local MVP through P4.
 | P5    | TOMTIT-Memory HTTP server                   | Closed      |
 | P6    | `RemoteMemoryClient` and backend factory    | Closed      |
 
-M6 verification status:
+M6/M7 milestone status:
 
 ```text
 M6-0: COMPLETE
 M6-A: COMPLETE
 M6-B: COMPLETE
-M6: WAITING FOR ARCHITECT REVIEW
-M7: BLOCKED
+M6: COMPLETE
+M7-A: CLOSED ON MAIN (confirmed-decision remote write)
+M7-B: CLOSED ON MAIN (restart + cross-process recall) @ 41c2d92
 ```
 
 Current test suite:
 
 ```text
-298 passed
+586 passed
 ```
 
-Feature development is currently paused for user validation. P5 and P6 are not automatic next steps.
+M7-B is closed on `main`. The next phase (SF2 safety/trust boundary vs M8 retrieval/hybrid/vector) is undecided and requires a separate instruction.
 
 ---
 
@@ -67,13 +68,19 @@ The P4 project-context workflow proves that `ANSWER_FROM_CONTEXT` reads from `Co
 
 This is a proof of the **memory-consumption path**.
 
-It does not yet prove:
+Additionally proven via the remote TOMTIT-Memory backend (M7-A confirmed write + M7-B restart recall):
 
-- durable recall after process restart;
-- save-then-recall across independent runs;
-- semantic relevance retrieval;
-- remote or shared memory;
+- a user-confirmed project decision is written remotely with deterministic provenance (M7-A);
+- durable recall after process restart, through the remote `retrieve_context_pack` path, with provenance preserved (M7-B);
+- save-then-recall across independent Agent sessions/processes, scoped by `project_id` + `user_id` (M7-B);
+- remote/shared memory durable across a TOMTIT-Memory server restart on the same SQLite DB (M7-B real smoke).
+
+It does not yet prove (out of scope for M7-B):
+
+- semantic / vector relevance retrieval (M7-B uses lexical FTS context);
+- whole-project resume;
 - automatic memory extraction;
+- prompt-injection-safe recall (SF2);
 - long-term self-improvement.
 
 ---
