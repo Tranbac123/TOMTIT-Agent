@@ -29,6 +29,9 @@ class IntentPlanner:
         if parsed.intent == IntentName.PROJECT_CONTEXT_QUERY:
             return self._project_context_query_plan(parsed)
 
+        if parsed.intent == IntentName.GREETING:
+            return self._greeting_plan(parsed)
+
         return self._unknown_plan()
 
     def _clarification_plan(self, parsed: ParsedIntent) -> list[Step]:
@@ -96,14 +99,32 @@ class IntentPlanner:
             ),
         ]
 
-    def _unknown_plan(self) -> list[Step]:
+    def _greeting_plan(self, parsed: ParsedIntent) -> list[Step]:
         return [
             Step(
-                thought="Không hiểu rõ task nên kết thúc an toàn",
+                thought="Chào hỏi người dùng và giới thiệu khả năng hiện có",
                 action=ToolName.FINISH,
                 args={
                     "answer": (
-                        "Tôi chưa biết xử lý task này trong bản agent đơn giản này."
+                        'Chào bạn! Tôi là TomTit Agent. '
+                        'Bạn có thể thử: "Tính 1 + 1", "calculate 2 + 2", '
+                        '"Tìm Python tutorials", "Lưu ghi chú [tên] [nội dung]", '
+                        'hoặc "Đọc ghi chú [tên]".'
+                    )
+                },
+            )
+        ]
+
+    def _unknown_plan(self) -> list[Step]:
+        return [
+            Step(
+                thought="Không hiểu rõ task nên kết thúc an toàn với gợi ý",
+                action=ToolName.FINISH,
+                args={
+                    "answer": (
+                        "Tôi chưa xử lý được yêu cầu này trong bản rule-based MVP hiện tại. "
+                        'Bạn có thể thử: "Tính 1 + 1", "calculate 2 + 2", '
+                        '"Tìm Python tutorials", "Lưu ghi chú ...", hoặc "Đọc ghi chú ...".'
                     )
                 },
             )

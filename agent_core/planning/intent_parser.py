@@ -14,6 +14,20 @@ _PROJECT_QUERY_CUE = re.compile(
     r'dùng\s+cơ\s+chế\s+nào|context|ngữ\s+cảnh)',
     re.IGNORECASE,
 )
+# B.8: English calc prefix — "calculate 2+2", "calc 3*4"
+_CALC_PREFIX = re.compile(r'^calc(?:ulate)?\s+', re.IGNORECASE)
+# B.8: Vietnamese natural-language math suffix — "1+1 bằng mấy", "2*3 là bao nhiêu"
+_VIET_MATH_SUFFIX = re.compile(
+    r'\s+(?:bằng\s+(?:mấy|bao\s+nhiêu)|là\s+bao\s+nhiêu)\s*\??\s*$',
+    re.IGNORECASE,
+)
+# B.8: Bare math — starts with digit or '(', contains only safe arithmetic chars
+_BARE_MATH_ONLY = re.compile(r'^[0-9(][0-9\s.()+\-*/%=]*$')
+# B.8: Simple greeting words
+_GREETING_WORDS = re.compile(
+    r'^(?:hi|hello|hey|xin\s+chào|chào(?:\s+bạn)?)\s*[!?.]*\s*$',
+    re.IGNORECASE,
+)
 
 
 class RuleBasedIntentParser:
@@ -40,6 +54,24 @@ class RuleBasedIntentParser:
         # Chèn sau ^Tìm (không đụng) và trước fallthrough _unknown.
         if re.match(r'^Dự\s+án\b', text, re.IGNORECASE) and _PROJECT_QUERY_CUE.search(text):
             return self._parse_project_context_query(text)
+
+        # B.8: simple greeting — must check before bare-math to avoid "hi" hitting digit check
+        if _GREETING_WORDS.match(text):
+            return self._parse_greeting(text)
+
+        # B.8: English "calculate ..." / "calc ..." prefix
+        if _CALC_PREFIX.match(text):
+            rest = _CALC_PREFIX.sub('', text)
+            return self._parse_as_calculate(text, rest)
+
+        # B.8: Vietnamese natural-language math suffix ("bằng mấy", "là bao nhiêu")
+        if _VIET_MATH_SUFFIX.search(text):
+            expr_text = _VIET_MATH_SUFFIX.sub('', text).strip()
+            return self._parse_as_calculate(text, expr_text)
+
+        # B.8: bare arithmetic expression (safe chars only, must start with digit or '(')
+        if _BARE_MATH_ONLY.match(text):
+            return self._parse_as_calculate(text, text.rstrip('= '))
 
         return self._unknown(text)
 
@@ -176,6 +208,29 @@ class RuleBasedIntentParser:
         return ParsedIntent(
             intent=IntentName.UNKNOWN,
             confidence=0.0,
+            source="rule",
+            raw_text=text,
+        )
+
+    def _parse_as_calculate(self, original: str, expr_text: str) -> ParsedIntent:
+        """Shared helper for English-calc, bare-math, and Vietnamese-suffix branches."""
+        expression = self._extract_expr(expr_text)
+        missing: list[str] = []
+        if expression is None:
+            missing.append("expression")
+        return ParsedIntent(
+            intent=IntentName.CALCULATE,
+            confidence=0.9,
+            source="rule",
+            raw_text=original,
+            expression=expression,
+            missing_slots=tuple(missing),
+        )
+
+    def _parse_greeting(self, text: str) -> ParsedIntent:
+        return ParsedIntent(
+            intent=IntentName.GREETING,
+            confidence=0.85,
             source="rule",
             raw_text=text,
         )

@@ -76,3 +76,162 @@ def test_unknown_returns_safe_finish():
 
     assert len(plan) == 1
     assert plan[0].action == ToolName.FINISH
+
+
+# ---------------------------------------------------------------------------
+# B.8 — English calculate trigger
+# ---------------------------------------------------------------------------
+
+def test_parse_english_calculate():
+    parsed = RuleBasedIntentParser().parse("calculate 2 + 2")
+
+    assert parsed.intent == IntentName.CALCULATE
+    assert parsed.expression == "2+2"
+
+
+def test_parse_calc_shorthand():
+    parsed = RuleBasedIntentParser().parse("calc 3 * 4")
+
+    assert parsed.intent == IntentName.CALCULATE
+    assert parsed.expression == "3*4"
+
+
+def test_parse_calc_case_insensitive():
+    parsed = RuleBasedIntentParser().parse("Calculate 10 / 2")
+
+    assert parsed.intent == IntentName.CALCULATE
+    assert parsed.expression == "10/2"
+
+
+# ---------------------------------------------------------------------------
+# B.8 — Bare math trigger
+# ---------------------------------------------------------------------------
+
+def test_parse_bare_math_with_trailing_equals():
+    parsed = RuleBasedIntentParser().parse("1 + 1 =")
+
+    assert parsed.intent == IntentName.CALCULATE
+    assert parsed.expression == "1+1"
+
+
+def test_parse_bare_math_simple():
+    parsed = RuleBasedIntentParser().parse("1 + 1")
+
+    assert parsed.intent == IntentName.CALCULATE
+    assert parsed.expression == "1+1"
+
+
+def test_parse_bare_math_parentheses():
+    parsed = RuleBasedIntentParser().parse("(4 + 5) / 3")
+
+    assert parsed.intent == IntentName.CALCULATE
+    assert parsed.expression == "(4+5)/3"
+
+
+# ---------------------------------------------------------------------------
+# B.8 — Vietnamese natural math suffix
+# ---------------------------------------------------------------------------
+
+def test_parse_viet_math_bang_may():
+    parsed = RuleBasedIntentParser().parse("1 + 1 bằng mấy")
+
+    assert parsed.intent == IntentName.CALCULATE
+    assert parsed.expression == "1+1"
+
+
+def test_parse_viet_math_bang_bao_nhieu():
+    parsed = RuleBasedIntentParser().parse("1 + 1 bằng bao nhiêu")
+
+    assert parsed.intent == IntentName.CALCULATE
+    assert parsed.expression == "1+1"
+
+
+def test_parse_viet_math_la_bao_nhieu():
+    parsed = RuleBasedIntentParser().parse("2 * 3 là bao nhiêu")
+
+    assert parsed.intent == IntentName.CALCULATE
+    assert parsed.expression == "2*3"
+
+
+# ---------------------------------------------------------------------------
+# B.8 — Existing Vietnamese calculate regression guard
+# ---------------------------------------------------------------------------
+
+def test_parse_viet_tinh_still_works():
+    parsed = RuleBasedIntentParser().parse("Tính 1 + 1")
+
+    assert parsed.intent == IntentName.CALCULATE
+    assert parsed.expression == "1+1"
+
+
+def test_parse_viet_tinh_lowercase_still_works():
+    parsed = RuleBasedIntentParser().parse("tính 2 * 3")
+
+    assert parsed.intent == IntentName.CALCULATE
+    assert parsed.expression == "2*3"
+
+
+# ---------------------------------------------------------------------------
+# B.8 — Greeting handling
+# ---------------------------------------------------------------------------
+
+def test_parse_greeting_hi():
+    parsed = RuleBasedIntentParser().parse("hi")
+
+    assert parsed.intent == IntentName.GREETING
+
+
+def test_parse_greeting_hello():
+    parsed = RuleBasedIntentParser().parse("hello")
+
+    assert parsed.intent == IntentName.GREETING
+
+
+def test_parse_greeting_xin_chao():
+    parsed = RuleBasedIntentParser().parse("xin chào")
+
+    assert parsed.intent == IntentName.GREETING
+
+
+def test_parse_greeting_chao():
+    parsed = RuleBasedIntentParser().parse("chào")
+
+    assert parsed.intent == IntentName.GREETING
+
+
+def test_greeting_plan_is_finish_with_helpful_text():
+    plan = RuleBasedPlanner().make_plan(AgentState(goal="hi"))
+
+    assert len(plan) == 1
+    assert plan[0].action == ToolName.FINISH
+    assert "TomTit" in plan[0].args["answer"]
+
+
+# ---------------------------------------------------------------------------
+# B.8 — Improved UNKNOWN fallback message
+# ---------------------------------------------------------------------------
+
+def test_unknown_fallback_message_is_helpful():
+    plan = RuleBasedPlanner().make_plan(AgentState(goal="random unsupported request"))
+
+    assert plan[0].action == ToolName.FINISH
+    answer = plan[0].args["answer"]
+    assert "Tính" in answer or "calculate" in answer
+
+
+# ---------------------------------------------------------------------------
+# B.8 — End-to-end planner steps
+# ---------------------------------------------------------------------------
+
+def test_planner_english_calculate_steps():
+    plan = RuleBasedPlanner().make_plan(AgentState(goal="calculate 2 + 2"))
+
+    assert [s.action for s in plan] == [ToolName.CALCULATE, ToolName.FINISH]
+    assert plan[0].args["expression"] == "2+2"
+
+
+def test_planner_bare_math_steps():
+    plan = RuleBasedPlanner().make_plan(AgentState(goal="1 + 1 ="))
+
+    assert [s.action for s in plan] == [ToolName.CALCULATE, ToolName.FINISH]
+    assert plan[0].args["expression"] == "1+1"
