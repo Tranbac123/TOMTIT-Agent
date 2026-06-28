@@ -1,5 +1,7 @@
 # WEB_CHAT_UI_SPEC.md
 
+Repository Decision: Web UI lives inside TOMTIT-Agent repo for this phase; do not create a separate TOMTIT-WEBUI repo.
+
 Status: Active
 Version: 1.0.0
 Scope: TOMTIT-Agent Web UI + HTTP API Adapter

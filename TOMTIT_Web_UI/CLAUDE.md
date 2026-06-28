@@ -1,5 +1,7 @@
 # CLAUDE.md — TOMTIT Web UI Build Instructions
 
+Repository Decision: Web UI lives inside TOMTIT-Agent repo for this phase; do not create a separate TOMTIT-WEBUI repo.
+
 ## 0. Project Identity
 
 This repository is for **TOMTIT-Agent Web UI**, a local developer web interface over the existing TOMTIT-Agent runtime.

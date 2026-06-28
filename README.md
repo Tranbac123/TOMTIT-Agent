@@ -589,3 +589,61 @@ TOMTIT-Agent can currently be described as:
 It should not yet be described as:
 
 > A production-ready autonomous co-worker with complete long-term memory.
+
+---
+
+## Web Chat UI
+
+A local developer web interface over TOMTIT-Agent runtime.
+
+### What it is
+
+A dark, TomTit-branded UI that lets you send chat messages to the existing TOMTIT-Agent runtime, run memory recall queries, and view provenance from responses — all through a FastAPI HTTP adapter without modifying the core runtime.
+
+### How to run the backend
+
+```bash
+uvicorn agent_core.web_api.app:app --reload --port 8000
+```
+
+The backend starts at `http://localhost:8000`. API docs at `http://localhost:8000/docs`.
+
+### How to run the frontend
+
+```bash
+cd web
+npm install
+npm run dev
+```
+
+The frontend starts at `http://localhost:5173`.
+
+### How to configure user_id / project_id / API base URL
+
+Open the UI, click **Settings** (≡) in the sidebar.
+
+| Setting | Default | Notes |
+| ------- | ------- | ----- |
+| user_id | local-user | Identity passed to the runtime |
+| project_id | local-project | Must match `TOMTIT_MEMORY_PROJECT_ID` if using remote backend |
+| Backend API base URL | http://localhost:8000 | Change if backend runs on a different port or host |
+
+Settings are persisted in `localStorage`. The selected session survives page reload.
+
+### Remote memory backend (optional)
+
+```bash
+TOMTIT_MEMORY_BACKEND=remote \
+TOMTIT_MEMORY_BASE_URL=http://your-memory-service \
+TOMTIT_MEMORY_PROJECT_ID=your-project \
+TOMTIT_MEMORY_USER_ID=your-user \
+uvicorn agent_core.web_api.app:app --reload --port 8000
+```
+
+### Current limitations
+
+- Sessions are in-memory only. Restarting the backend loses session history.
+- The backend runs in single-project mode. For the remote backend, `project_id` is set at startup via `TOMTIT_MEMORY_PROJECT_ID` and cannot vary per session.
+- REST JSON only; streaming is not implemented.
+- No production authentication or multi-user support.
+- CORS allows `localhost:5173` and `localhost:3000` only.
