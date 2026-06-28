@@ -1,0 +1,17 @@
+<svg width="72" height="40" viewBox="0 0 72 40" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- Body: orange segmented pill -->
+  <rect x="12" y="13" width="48" height="14" rx="7" fill="#e85a1b"/>
+  <!-- Segment dividers -->
+  <path d="M26 13V27M36 13V27M46 13V27" stroke="#c04010" stroke-width="0.8" opacity="0.4"/>
+  <!-- Head: teal, overlaps left end of body -->
+  <ellipse cx="12" cy="20" rx="7" ry="7.5" fill="#0fb8a0"/>
+  <!-- Eye -->
+  <circle cx="10" cy="18" r="2.5" fill="#e8f5f2"/>
+  <circle cx="10.5" cy="18" r="1.1" fill="#0a1a14"/>
+  <!-- Antennae -->
+  <path d="M9 15L5 9M12 14L10 8" stroke="#e85a1b" stroke-width="1.3" stroke-linecap="round"/>
+  <!-- Tail fan -->
+  <path d="M57 17L66 13M58 20L67 20M57 23L66 27" stroke="#e85a1b" stroke-width="2" stroke-linecap="round"/>
+  <!-- Swimmerets -->
+  <path d="M20 27L18 32M30 27L28 32M40 27L38 32M50 27L48 32" stroke="#c04010" stroke-width="1.1" stroke-linecap="round" opacity="0.5"/>
+</svg>
