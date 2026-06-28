@@ -1,0 +1,535 @@
+version: 1
+suite: CONV-P0 Basic Conversation Experience
+status: DRAFT
+baseline: "92adb97fc139def9e02d497cc05dff629be9a3cc"
+implementation_authorized: false
+# current_status ∈ {ALREADY_IMPLEMENTED_FIRST_PASS, SPEC_REQUIRED_NOT_IMPLEMENTED,
+#                   SPEC_REQUIRED_PARTIAL, OUT_OF_SCOPE_FOR_CONV_P0}
+# Data-only in this task; a runner is future work (spec §20 P0-1).
+cases:
+  # --- Greeting / identity / capability ---
+  - id: greeting_001_xin_chao
+    group: greeting_identity
+    input: "Xin chào"
+    expected_intent: "GREETING"
+    expected_handling: "DIRECT_RESPONSE"
+    current_status: "ALREADY_IMPLEMENTED_FIRST_PASS"
+    must_include_any: ["Chào", "TomTit", "giúp"]
+    must_not_include: ["UNKNOWN", "Tôi chưa xử lý được"]
+    requires_memory: false
+    requires_tool: false
+    requires_llm: false
+    notes: "Vietnamese greeting; planner _greeting_plan returns capability blurb."
+
+  - id: greeting_002_chao_buoi_sang
+    group: greeting_identity
+    input: "Chào buổi sáng"
+    expected_intent: "GREETING"
+    expected_handling: "DIRECT_RESPONSE"
+    current_status: "SPEC_REQUIRED_PARTIAL"
+    must_include_any: ["Chào", "buổi sáng", "giúp"]
+    must_not_include: ["UNKNOWN"]
+    requires_memory: false
+    requires_tool: false
+    requires_llm: false
+    notes: "Greeting regex matches 'chào'; 'buổi sáng' nuance not specifically handled yet."
+
+  - id: greeting_003_hi
+    group: greeting_identity
+    input: "Hi"
+    expected_intent: "GREETING"
+    expected_handling: "DIRECT_RESPONSE"
+    current_status: "ALREADY_IMPLEMENTED_FIRST_PASS"
+    must_include_any: ["Chào", "TomTit", "giúp"]
+    must_not_include: ["UNKNOWN"]
+    requires_memory: false
+    requires_tool: false
+    requires_llm: false
+    notes: "English short greeting matched by _GREETING_WORDS."
+
+  - id: identity_001_ban_la_ai
+    group: greeting_identity
+    input: "Bạn là ai?"
+    expected_intent: "IDENTITY_QUERY"
+    expected_handling: "DIRECT_RESPONSE"
+    current_status: "SPEC_REQUIRED_NOT_IMPLEMENTED"
+    must_include_any: ["TOMTIT", "TomTit", "AI Agent", "trợ lý"]
+    must_not_include: ["tự động làm mọi thứ", "không có giới hạn"]
+    requires_memory: false
+    requires_tool: false
+    requires_llm: false
+    notes: "Identity must be clear and non-exaggerated."
+
+  - id: capability_001_ban_lam_duoc_gi
+    group: greeting_identity
+    input: "Bạn làm được gì?"
+    expected_intent: "CAPABILITY_QUERY"
+    expected_handling: "DIRECT_RESPONSE"
+    current_status: "SPEC_REQUIRED_NOT_IMPLEMENTED"
+    must_include_any: ["tính", "memory", "ghi chú", "review", "lập kế hoạch"]
+    must_not_include: ["làm được mọi thứ", "không giới hạn"]
+    requires_memory: false
+    requires_tool: false
+    requires_llm: false
+    notes: "Capability menu without over-claim."
+
+  - id: capability_002_khac_chatbot
+    group: greeting_identity
+    input: "Bạn khác chatbot thường ở đâu?"
+    expected_intent: "CAPABILITY_QUERY"
+    expected_handling: "DIRECT_RESPONSE"
+    current_status: "SPEC_REQUIRED_NOT_IMPLEMENTED"
+    must_include_any: ["memory", "runtime", "tool", "giới hạn", "kiểm soát"]
+    must_not_include: ["hoàn toàn tự động", "không cần kiểm soát"]
+    requires_memory: false
+    requires_tool: false
+    requires_llm: false
+    notes: "Difference explained without exaggeration."
+
+  - id: capability_003_dung_nhu_the_nao
+    group: greeting_identity
+    input: "Tôi nên dùng bạn như thế nào?"
+    expected_intent: "CAPABILITY_QUERY"
+    expected_handling: "DIRECT_RESPONSE"
+    current_status: "SPEC_REQUIRED_NOT_IMPLEMENTED"
+    must_include_any: ["ví dụ", "tính", "ghi chú", "review"]
+    must_not_include: ["UNKNOWN"]
+    requires_memory: false
+    requires_tool: false
+    requires_llm: false
+    notes: "Concrete usage examples."
+
+  - id: capability_004_gioi_han
+    group: greeting_identity
+    input: "Bạn có giới hạn gì?"
+    expected_intent: "CAPABILITY_QUERY"
+    expected_handling: "DIRECT_RESPONSE"
+    current_status: "SPEC_REQUIRED_NOT_IMPLEMENTED"
+    must_include_any: ["giới hạn", "cần xác nhận", "có thể sai", "không tự ý"]
+    must_not_include: ["không có giới hạn"]
+    requires_memory: false
+    requires_tool: false
+    requires_llm: false
+    notes: "Must state limitations."
+
+  # --- Memory ---
+  - id: memory_001_ban_dang_nho_gi
+    group: memory
+    input: "Bạn đang nhớ gì về tôi?"
+    expected_intent: "MEMORY_READ"
+    expected_handling: "MEMORY_FLOW"
+    current_status: "SPEC_REQUIRED_NOT_IMPLEMENTED"
+    must_include_any: ["memory", "nhớ", "chưa có", "theo thông tin"]
+    must_not_include: ["bịa", "chắc chắn 100%"]
+    requires_memory: true
+    requires_tool: false
+    requires_llm: false
+    notes: "Read via M7-B run_memory_recall; no fabrication."
+
+  - id: memory_002_muc_tieu_hien_tai
+    group: memory
+    input: "Bạn biết mục tiêu hiện tại của tôi không?"
+    expected_intent: "MEMORY_READ"
+    expected_handling: "MEMORY_FLOW"
+    current_status: "SPEC_REQUIRED_NOT_IMPLEMENTED"
+    must_include_any: ["mục tiêu", "memory", "nếu đúng", "theo thông tin"]
+    must_not_include: ["chắc chắn 100%"]
+    requires_memory: true
+    requires_tool: false
+    requires_llm: false
+    notes: "Distinguish confirmed vs assumption."
+
+  - id: memory_003_hay_nho_tomtit
+    group: memory
+    input: "Hãy nhớ rằng tôi đang build TOMTIT Agent"
+    expected_intent: "MEMORY_WRITE_REQUEST"
+    expected_handling: "MEMORY_FLOW"
+    current_status: "SPEC_REQUIRED_NOT_IMPLEMENTED"
+    must_include_any: ["xác nhận", "ghi nhớ", "lưu"]
+    must_not_include: ["đã lưu tự động"]
+    requires_memory: true
+    requires_tool: false
+    requires_llm: false
+    notes: "Reuse M7-A confirmed write with confirmation UX; never silent persist."
+
+  - id: memory_004_hay_quen_thong_tin_do
+    group: memory
+    input: "Hãy quên thông tin đó"
+    expected_intent: "MEMORY_DELETE_REQUEST"
+    expected_handling: "MEMORY_FLOW"
+    current_status: "SPEC_REQUIRED_NOT_IMPLEMENTED"
+    must_include_any: ["thông tin nào", "cần chỉ rõ", "quên"]
+    must_not_include: ["đã xóa tất cả"]
+    requires_memory: true
+    requires_tool: false
+    requires_llm: false
+    notes: "Ambiguous forget clarifies target; v1 wire has no delete contract (spec stop condition)."
+
+  - id: memory_005_dung_dung_memory_turn_nay
+    group: memory
+    input: "Đừng dùng memory trong câu trả lời này"
+    expected_intent: "MEMORY_DISABLE_FOR_TURN"
+    expected_handling: "DIRECT_RESPONSE"
+    current_status: "SPEC_REQUIRED_NOT_IMPLEMENTED"
+    must_include_any: ["không dùng memory", "câu trả lời này"]
+    must_not_include: ["tôi nhớ rằng"]
+    requires_memory: false
+    requires_tool: false
+    requires_llm: false
+    notes: "Per-turn memory suppression."
+
+  - id: memory_006_thong_tin_nao_la_assumption
+    group: memory
+    input: "Thông tin nào về tôi là assumption?"
+    expected_intent: "MEMORY_READ"
+    expected_handling: "MEMORY_FLOW"
+    current_status: "SPEC_REQUIRED_NOT_IMPLEMENTED"
+    must_include_any: ["assumption", "giả định", "confirmed", "chưa chắc"]
+    must_not_include: ["tất cả đều chắc chắn"]
+    requires_memory: true
+    requires_tool: false
+    requires_llm: false
+    notes: "Expose uncertainty."
+
+  # --- Planning ---
+  - id: planning_001_hoc_ai_agent
+    group: planning
+    input: "Lên kế hoạch cho tôi để học AI Agent"
+    expected_intent: "PLANNING_REQUEST"
+    expected_handling: "LLM_RESPONDER"
+    current_status: "SPEC_REQUIRED_NOT_IMPLEMENTED"
+    must_include_any: ["mục tiêu", "bước", "tuần", "next step"]
+    must_not_include: ["UNKNOWN"]
+    requires_memory: false
+    requires_tool: false
+    requires_llm: true
+    notes: "LLMResponder, not LLMPlanner."
+
+  - id: planning_002_2_tieng_hom_nay
+    group: planning
+    input: "Tôi có 2 tiếng hôm nay, nên làm gì?"
+    expected_intent: "PLANNING_REQUEST"
+    expected_handling: "LLM_RESPONDER"
+    current_status: "SPEC_REQUIRED_NOT_IMPLEMENTED"
+    must_include_any: ["2 tiếng", "ưu tiên", "việc quan trọng"]
+    must_not_include: ["không biết"]
+    requires_memory: false
+    requires_tool: false
+    requires_llm: true
+    notes: "Time-boxed planning."
+
+  - id: planning_003_chia_thanh_checklist
+    group: planning
+    input: "Chia việc này thành checklist"
+    expected_intent: "PLANNING_REQUEST"
+    expected_handling: "CLARIFICATION"
+    current_status: "SPEC_REQUIRED_NOT_IMPLEMENTED"
+    must_include_any: ["việc nào", "gửi nội dung", "checklist"]
+    must_not_include: ["tôi sẽ tự đoán"]
+    requires_memory: false
+    requires_tool: false
+    requires_llm: false
+    notes: "Missing task content → clarify."
+
+  - id: planning_004_uu_tien_task
+    group: planning
+    input: "Ưu tiên các task này giúp tôi"
+    expected_intent: "PLANNING_REQUEST"
+    expected_handling: "CLARIFICATION"
+    current_status: "SPEC_REQUIRED_NOT_IMPLEMENTED"
+    must_include_any: ["task", "gửi danh sách", "ưu tiên"]
+    must_not_include: ["UNKNOWN"]
+    requires_memory: false
+    requires_tool: false
+    requires_llm: false
+    notes: "Missing task list → clarify."
+
+  - id: planning_005_roadmap_30_ngay
+    group: planning
+    input: "Tạo roadmap 30 ngày"
+    expected_intent: "PLANNING_REQUEST"
+    expected_handling: "LLM_RESPONDER"
+    current_status: "SPEC_REQUIRED_NOT_IMPLEMENTED"
+    must_include_any: ["30 ngày", "tuần", "mục tiêu"]
+    must_not_include: ["UNKNOWN"]
+    requires_memory: false
+    requires_tool: false
+    requires_llm: true
+    notes: "Generic roadmap with stated assumptions."
+
+  - id: planning_006_qua_tai_focus
+    group: planning
+    input: "Tôi đang bị quá tải, hãy giúp tôi focus"
+    expected_intent: "PLANNING_REQUEST"
+    expected_handling: "LLM_RESPONDER"
+    current_status: "SPEC_REQUIRED_NOT_IMPLEMENTED"
+    must_include_any: ["focus", "ưu tiên", "việc quan trọng"]
+    must_not_include: ["cứ làm hết"]
+    requires_memory: false
+    requires_tool: false
+    requires_llm: true
+    notes: "Focus and prioritization."
+
+  # --- Product / startup ---
+  - id: product_001_y_tuong_dang_lam
+    group: product_startup
+    input: "Ý tưởng này có đáng làm không?"
+    expected_intent: "PRODUCT_ANALYSIS_REQUEST"
+    expected_handling: "CLARIFICATION"
+    current_status: "SPEC_REQUIRED_NOT_IMPLEMENTED"
+    must_include_any: ["ý tưởng", "mô tả", "đánh giá"]
+    must_not_include: ["chắc chắn đáng làm"]
+    requires_memory: false
+    requires_tool: false
+    requires_llm: false
+    notes: "Missing idea content → clarify."
+
+  - id: product_002_mvp_gom_gi
+    group: product_startup
+    input: "MVP nên gồm những gì?"
+    expected_intent: "PRODUCT_ANALYSIS_REQUEST"
+    expected_handling: "CLARIFICATION"
+    current_status: "SPEC_REQUIRED_NOT_IMPLEMENTED"
+    must_include_any: ["sản phẩm", "user", "MVP", "bối cảnh"]
+    must_not_include: ["UNKNOWN"]
+    requires_memory: false
+    requires_tool: false
+    requires_llm: false
+    notes: "Needs product context."
+
+  - id: product_003_rui_ro_lon_nhat
+    group: product_startup
+    input: "Rủi ro lớn nhất là gì?"
+    expected_intent: "PRODUCT_ANALYSIS_REQUEST"
+    expected_handling: "CLARIFICATION"
+    current_status: "SPEC_REQUIRED_NOT_IMPLEMENTED"
+    must_include_any: ["rủi ro", "bối cảnh", "sản phẩm"]
+    must_not_include: ["rủi ro lớn nhất chắc chắn là"]
+    requires_memory: false
+    requires_tool: false
+    requires_llm: false
+    notes: "No context → clarify."
+
+  - id: product_004_validate_idea
+    group: product_startup
+    input: "Làm sao validate idea này?"
+    expected_intent: "PRODUCT_ANALYSIS_REQUEST"
+    expected_handling: "CLARIFICATION"
+    current_status: "SPEC_REQUIRED_NOT_IMPLEMENTED"
+    must_include_any: ["idea", "mô tả", "phỏng vấn", "validate"]
+    must_not_include: ["UNKNOWN"]
+    requires_memory: false
+    requires_tool: false
+    requires_llm: false
+    notes: "Ask for idea or give generic skeleton with assumptions."
+
+  - id: product_005_user_dau_tien
+    group: product_startup
+    input: "Ai là user đầu tiên nên phỏng vấn?"
+    expected_intent: "PRODUCT_ANALYSIS_REQUEST"
+    expected_handling: "CLARIFICATION"
+    current_status: "SPEC_REQUIRED_NOT_IMPLEMENTED"
+    must_include_any: ["sản phẩm", "vấn đề", "user", "phỏng vấn"]
+    must_not_include: ["chắc chắn là"]
+    requires_memory: false
+    requires_tool: false
+    requires_llm: false
+    notes: "Needs product context."
+
+  # --- Writing ---
+  - id: writing_001_viet_lai_tu_nhien
+    group: writing
+    input: "Viết lại đoạn này tự nhiên hơn"
+    expected_intent: "WRITING_REQUEST"
+    expected_handling: "CLARIFICATION"
+    current_status: "SPEC_REQUIRED_NOT_IMPLEMENTED"
+    must_include_any: ["gửi đoạn", "viết lại", "tự nhiên"]
+    must_not_include: ["UNKNOWN"]
+    requires_memory: false
+    requires_tool: false
+    requires_llm: false
+    notes: "Missing content → clarify."
+
+  - id: writing_002_tom_tat_3_y
+    group: writing
+    input: "Tóm tắt đoạn này thành 3 ý"
+    expected_intent: "SUMMARIZATION_REQUEST"
+    expected_handling: "CLARIFICATION"
+    current_status: "SPEC_REQUIRED_NOT_IMPLEMENTED"
+    must_include_any: ["gửi đoạn", "tóm tắt", "3 ý"]
+    must_not_include: ["UNKNOWN"]
+    requires_memory: false
+    requires_tool: false
+    requires_llm: false
+    notes: "Missing content → clarify."
+
+  - id: writing_003_dich_sang_tieng_anh
+    group: writing
+    input: "Dịch đoạn này sang tiếng Anh"
+    expected_intent: "TRANSLATION_REQUEST"
+    expected_handling: "CLARIFICATION"
+    current_status: "SPEC_REQUIRED_NOT_IMPLEMENTED"
+    must_include_any: ["gửi đoạn", "dịch", "tiếng Anh"]
+    must_not_include: ["UNKNOWN"]
+    requires_memory: false
+    requires_tool: false
+    requires_llm: false
+    notes: "Missing content → clarify."
+
+  - id: writing_004_viet_email_ngan
+    group: writing
+    input: "Viết email ngắn cho tôi"
+    expected_intent: "WRITING_REQUEST"
+    expected_handling: "CLARIFICATION"
+    current_status: "SPEC_REQUIRED_NOT_IMPLEMENTED"
+    must_include_any: ["email", "người nhận", "mục đích", "nội dung"]
+    must_not_include: ["UNKNOWN"]
+    requires_memory: false
+    requires_tool: false
+    requires_llm: false
+    notes: "Email needs context."
+
+  - id: writing_005_viet_readme
+    group: writing
+    input: "Viết README cho project này"
+    expected_intent: "WRITING_REQUEST"
+    expected_handling: "CLARIFICATION"
+    current_status: "SPEC_REQUIRED_NOT_IMPLEMENTED"
+    must_include_any: ["project", "README", "mô tả"]
+    must_not_include: ["UNKNOWN"]
+    requires_memory: false
+    requires_tool: false
+    requires_llm: false
+    notes: "Needs project details."
+
+  # --- Code / technical ---
+  - id: code_001_review_code
+    group: code_technical
+    input: "Review đoạn code này"
+    expected_intent: "CODE_REVIEW_REQUEST"
+    expected_handling: "CLARIFICATION"
+    current_status: "SPEC_REQUIRED_NOT_IMPLEMENTED"
+    must_include_any: ["gửi code", "review", "đoạn code"]
+    must_not_include: ["UNKNOWN"]
+    requires_memory: false
+    requires_tool: false
+    requires_llm: false
+    notes: "Missing code → clarify, never hallucinate review."
+
+  - id: code_002_tim_bug
+    group: code_technical
+    input: "Tìm bug trong code này"
+    expected_intent: "CODE_REVIEW_REQUEST"
+    expected_handling: "CLARIFICATION"
+    current_status: "SPEC_REQUIRED_NOT_IMPLEMENTED"
+    must_include_any: ["gửi code", "bug", "lỗi"]
+    must_not_include: ["UNKNOWN"]
+    requires_memory: false
+    requires_tool: false
+    requires_llm: false
+    notes: "Missing code → clarify."
+
+  - id: code_003_viet_test_function
+    group: code_technical
+    input: "Viết test cho function này"
+    expected_intent: "CODE_REVIEW_REQUEST"
+    expected_handling: "CLARIFICATION"
+    current_status: "SPEC_REQUIRED_NOT_IMPLEMENTED"
+    must_include_any: ["function", "code", "test", "gửi"]
+    must_not_include: ["UNKNOWN"]
+    requires_memory: false
+    requires_tool: false
+    requires_llm: false
+    notes: "Needs function code."
+
+  - id: code_004_architecture_ai_agent_don_gian
+    group: code_technical
+    input: "Thiết kế architecture cho AI Agent đơn giản"
+    expected_intent: "TECHNICAL_EXPLANATION_REQUEST"
+    expected_handling: "LLM_RESPONDER"
+    current_status: "SPEC_REQUIRED_NOT_IMPLEMENTED"
+    must_include_any: ["AgentState", "Runtime", "Tool", "Memory", "Safety"]
+    must_not_include: ["UNKNOWN"]
+    requires_memory: false
+    requires_tool: false
+    requires_llm: true
+    notes: "Generic technical answer allowed."
+
+  - id: code_005_giai_thich_planner_runtime_tool_memory
+    group: code_technical
+    input: "Giải thích Planner, Runtime, Tool, Memory khác nhau thế nào"
+    expected_intent: "TECHNICAL_EXPLANATION_REQUEST"
+    expected_handling: "LLM_RESPONDER"
+    current_status: "SPEC_REQUIRED_NOT_IMPLEMENTED"
+    must_include_any: ["Planner", "Runtime", "Tool", "Memory"]
+    must_not_include: ["UNKNOWN"]
+    requires_memory: false
+    requires_tool: false
+    requires_llm: true
+    notes: "Technical explanation."
+
+  # --- Fallback / calculation ---
+  - id: fallback_001_1_plus_1
+    group: fallback_calculation
+    input: "1 + 1 ="
+    expected_intent: "CALCULATION_REQUEST"
+    expected_handling: "SIMPLE_TOOL_OR_CALCULATION"
+    current_status: "ALREADY_IMPLEMENTED_FIRST_PASS"
+    must_include_any: ["2"]
+    must_not_include: ["UNKNOWN", "không biết"]
+    requires_memory: false
+    requires_tool: true
+    requires_llm: false
+    notes: "Bare math handled by _parse_as_calculate → CALCULATE plan."
+
+  - id: fallback_002_calculate_2_plus_2
+    group: fallback_calculation
+    input: "calculate 2 + 2"
+    expected_intent: "CALCULATION_REQUEST"
+    expected_handling: "SIMPLE_TOOL_OR_CALCULATION"
+    current_status: "ALREADY_IMPLEMENTED_FIRST_PASS"
+    must_include_any: ["4"]
+    must_not_include: ["UNKNOWN", "không xử lý"]
+    requires_memory: false
+    requires_tool: true
+    requires_llm: false
+    notes: "English calc prefix handled."
+
+  - id: fallback_003_tiep_tuc
+    group: fallback_calculation
+    input: "tiếp tục"
+    expected_intent: "CONTINUE_REQUEST"
+    expected_handling: "CLARIFICATION"
+    current_status: "SPEC_REQUIRED_NOT_IMPLEMENTED"
+    must_include_any: ["tiếp tục", "việc nào", "ngữ cảnh"]
+    must_not_include: ["UNKNOWN"]
+    requires_memory: false
+    requires_tool: false
+    requires_llm: false
+    notes: "No prior task → ask what to continue. Currently falls into recoverable UNKNOWN."
+
+  - id: fallback_004_lam_cai_do_di
+    group: fallback_calculation
+    input: "làm cái đó đi"
+    expected_intent: "CLARIFICATION_REQUEST"
+    expected_handling: "CLARIFICATION"
+    current_status: "SPEC_REQUIRED_NOT_IMPLEMENTED"
+    must_include_any: ["cái đó", "việc nào", "nói rõ"]
+    must_not_include: ["UNKNOWN"]
+    requires_memory: false
+    requires_tool: false
+    requires_llm: false
+    notes: "Ambiguous reference. Currently falls into recoverable UNKNOWN."
+
+  - id: fallback_005_unknown_question_marks
+    group: fallback_calculation
+    input: "???"
+    expected_intent: "UNKNOWN_RECOVERABLE"
+    expected_handling: "CLARIFICATION"
+    current_status: "ALREADY_IMPLEMENTED_FIRST_PASS"
+    must_include_any: ["chưa", "ngữ cảnh", "Bạn có thể thử", "giải thích", "tính"]
+    must_not_include: ["traceback", "Tôi chưa biết xử lý task này"]
+    requires_memory: false
+    requires_tool: false
+    requires_llm: false
+    notes: "Recoverable fallback via _unknown_plan (helpful suggestions)."
