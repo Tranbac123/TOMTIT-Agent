@@ -1,8 +1,12 @@
 # SPEC_CONV_P0_BASIC_CONVERSATION
 
-**Status:** `DRAFT — IMPLEMENTATION NOT AUTHORIZED`
+**Status:** `FROZEN — IMPLEMENTATION NOT AUTHORIZED`
 **Baseline:** `origin/main @ 92adb97fc139def9e02d497cc05dff629be9a3cc`
 **Supersedes:** the earlier (greenfield) CONV-P0 draft attempt, which was baseline-blocked.
+**Freeze baseline:** `origin/main @ 92adb97fc139def9e02d497cc05dff629be9a3cc`
+**Frozen candidate commit:** `bc0d083df2ac9a694a2c464e9244631128e88e38`
+**Acceptance dataset:** `tests/acceptance/conversation_p0_cases.yaml`
+**Implementation authorized:** `false`
 
 ---
 
