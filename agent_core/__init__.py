@@ -4,7 +4,6 @@ from agent_core.memory.in_memory_store import InMemoryStore
 from agent_core.memory.in_memory_store import InMemoryStore as MemoryStore
 from agent_core.memory.memory_agent import MemoryAgent
 from agent_core.memory.memory_records import MemoryQuery, MemoryRecord
-from agent_core.planning.hybrid_planner import HybridPlanner
 from agent_core.planning.plan_validator import validate_plan
 from agent_core.planning.extractors import GoalExtractor, normalize_vi
 from agent_core.planning.rule_based_planner import RuleBasedPlanner
@@ -59,4 +58,15 @@ from agent_core.tools.schemas import (
     WriteNoteOutput,
 )
 
-__all__ = [name for name in globals() if not name.startswith("_")]
+__all__ = [name for name in globals() if not name.startswith("_")] + ["HybridPlanner"]
+
+
+def __getattr__(name: str):
+    # PEP 562 lazy export. Keep ``agent_core.HybridPlanner`` importable on demand
+    # without eagerly loading the dormant ``agent_core.planning.hybrid_planner`` at
+    # package import (so importing agent_core stays free of the dormant planner).
+    if name == "HybridPlanner":
+        from agent_core.planning.hybrid_planner import HybridPlanner
+
+        return HybridPlanner
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
