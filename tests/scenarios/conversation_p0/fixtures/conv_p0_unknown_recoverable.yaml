@@ -1,0 +1,36 @@
+id: conv_p0_unknown_recoverable
+description: UNKNOWN/ambiguous user input should become recoverable clarification/direct safe response in P0-3.
+turns:
+  - user: "Làm cái đó đi"
+    expect:
+      intent: UNKNOWN
+      route: CLARIFICATION
+      state_status_any:
+        - completed
+        - waiting_user
+      side_effects:
+        planner_calls: 0
+        tool_calls: 0
+        memory_reads: 0
+        memory_writes: 0
+      response:
+        must_include_any:
+          - "bạn muốn"
+          - "ý bạn"
+          - "thông tin"
+        must_not_include_any:
+          - "đã thực hiện"
+          - "đã lưu"
+          - "đang gọi tool"
+      trace:
+        must_include_meanings:
+          - request_received
+          - intent_classified
+          - route_selected
+          - response_generated
+          - state_finalized
+        must_not_include_meanings:
+          - planner_called
+          - tool_called
+          - memory_read_called
+          - memory_write_called

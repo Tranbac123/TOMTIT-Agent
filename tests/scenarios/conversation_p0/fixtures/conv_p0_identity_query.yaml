@@ -1,0 +1,36 @@
+id: conv_p0_identity_query
+description: IDENTITY_QUERY should become DIRECT_RESPONSE in P0-3.
+turns:
+  - user: "Bạn là ai?"
+    expect:
+      intent: IDENTITY_QUERY
+      route: DIRECT_RESPONSE
+      state_status_any:
+        - completed
+        - waiting_user
+      side_effects:
+        planner_calls: 0
+        tool_calls: 0
+        memory_reads: 0
+        memory_writes: 0
+      response:
+        must_include_any:
+          - "TOMTIT"
+          - "trợ lý"
+          - "Agent"
+        must_not_include_any:
+          - "tôi đã lưu"
+          - "tôi nhớ bạn"
+          - "API key"
+      trace:
+        must_include_meanings:
+          - request_received
+          - intent_classified
+          - route_selected
+          - response_generated
+          - state_finalized
+        must_not_include_meanings:
+          - planner_called
+          - tool_called
+          - memory_read_called
+          - memory_write_called

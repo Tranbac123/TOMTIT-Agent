@@ -1,0 +1,31 @@
+id: invalid_missing_expected_route
+description: Invalid fixture missing expect.route.
+turns:
+  - user: "Xin chào"
+    expect:
+      intent: GREETING
+      state_status_any:
+        - completed
+        - waiting_user
+      side_effects:
+        planner_calls: 0
+        tool_calls: 0
+        memory_reads: 0
+        memory_writes: 0
+      response:
+        must_include_any:
+          - "chào"
+        must_not_include_any:
+          - "đã lưu"
+      trace:
+        must_include_meanings:
+          - request_received
+          - intent_classified
+          - route_selected
+          - response_generated
+          - state_finalized
+        must_not_include_meanings:
+          - planner_called
+          - tool_called
+          - memory_read_called
+          - memory_write_called
