@@ -121,6 +121,52 @@ def test_invalid_missing_expected_route_fixture_fails() -> None:
         load_scenario(FIXTURES_DIR / "invalid_missing_expected_route.yaml")
 
 
+def test_route_literals_are_minimal_and_strict() -> None:
+    def scenario_with_route(route: str) -> dict:
+        return {
+            "id": "route_literal_check",
+            "description": "Route literal contract check.",
+            "turns": [
+                {
+                    "user": "Xin chào",
+                    "expect": {
+                        "intent": "GREETING",
+                        "route": route,
+                        "state_status_any": ["completed"],
+                        "side_effects": {
+                            "planner_calls": 0,
+                            "tool_calls": 0,
+                            "memory_reads": 0,
+                            "memory_writes": 0,
+                        },
+                        "response": {
+                            "must_include_any": ["chào"],
+                            "must_not_include_any": [],
+                        },
+                        "trace": {
+                            "must_include_meanings": ["request_received"],
+                            "must_not_include_meanings": [],
+                        },
+                    },
+                }
+            ],
+        }
+
+    for route in ["DIRECT_RESPONSE", "CLARIFICATION", "RUNTIME_FALLBACK"]:
+        scenario = Scenario.model_validate(scenario_with_route(route))
+        assert scenario.turns[0].expect.route == route
+
+    for route in [
+        "MEMORY_FLOW",
+        "LLM_RESPONSE",
+        "TOOL_FLOW",
+        "RUNTIME",
+        "UNKNOWN_RECOVERABLE",
+    ]:
+        with pytest.raises(ValidationError):
+            Scenario.model_validate(scenario_with_route(route))
+
+
 def test_unknown_side_effect_key_is_rejected() -> None:
     invalid_scenario = {
         "id": "invalid_unknown_side_effect_key",

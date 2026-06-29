@@ -10,10 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 Route = Literal[
     "DIRECT_RESPONSE",
     "CLARIFICATION",
-    "RUNTIME",
-    "MEMORY_FLOW",
-    "LLM_RESPONSE",
-    "UNKNOWN_RECOVERABLE",
+    "RUNTIME_FALLBACK",
 ]
 
 TraceMeaning = Literal[
