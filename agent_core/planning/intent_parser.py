@@ -23,9 +23,63 @@ _VIET_MATH_SUFFIX = re.compile(
 )
 # B.8: Bare math — starts with digit or '(', contains only safe arithmetic chars
 _BARE_MATH_ONLY = re.compile(r'^[0-9(][0-9\s.()+\-*/%=]*$')
-# B.8: Simple greeting words
+# B.8 / CONV-P0 P0-2: greeting — full-string hi/hello/chào, optionally with a
+# time-of-day or addressee tail ("Chào buổi sáng", "Chào bạn").
 _GREETING_WORDS = re.compile(
-    r'^(?:hi|hello|hey|xin\s+chào|chào(?:\s+bạn)?)\s*[!?.]*\s*$',
+    r'^(?:hi|hello|hey|xin\s+chào|chào)'
+    r'(?:\s+(?:bạn|mọi\s+người|anh|chị|em|buổi\s+(?:sáng|trưa|chiều|tối)))?'
+    r'\s*[!?.]*\s*$',
+    re.IGNORECASE,
+)
+
+# CONV-P0 P0-2 conversational cues (rule-based classification only). Order of use in
+# parse() matters; see the dispatch comments there.
+_IDENTITY_CUE = re.compile(
+    r'^(?:bạn\s+là\s+ai|bạn\s+tên\s+(?:là\s+)?gì|who\s+are\s+you|what\s+are\s+you)\b',
+    re.IGNORECASE,
+)
+_CAPABILITY_CUE = re.compile(
+    r'(?:làm\s+được\s+gì|làm\s+gì\s+được|có\s+thể\s+làm\s+(?:được\s+)?gì|'
+    r'khác\s+(?:gì\s+)?(?:so\s+với\s+)?chatbot|dùng\s+bạn|giới\s+hạn|'
+    r'what\s+can\s+you\s+do|^help\b)',
+    re.IGNORECASE,
+)
+_MEMORY_READ_CUE = re.compile(
+    r'(?:(?:đang\s+)?nhớ\s+gì|bạn\s+biết\s+.+\s+của\s+tôi|'
+    r'thông\s+tin\s+nào.*(?:assumption|giả\s+định)|'
+    r'what\s+do\s+you\s+remember|remember\s+about)',
+    re.IGNORECASE,
+)
+_MEMORY_WRITE_CUE = re.compile(
+    r'^(?:hãy\s+)?(?:nhớ|ghi\s+nhớ)\s+(?:rằng|là|giùm|giúp|cho)\b'
+    r'|^remember\s+that\b'
+    r'|(?:lưu|ghi)\s+[^\n]*?(?:vào\s+)?(?:memory|bộ\s+nhớ)\b'
+    r'|save\s+this\s+to\s+memory',
+    re.IGNORECASE,
+)
+_CODE_REVIEW_CUE = re.compile(
+    r'(?:review\s+.*code|review\s+đoạn\s+code|kiểm\s+tra\s+code|đoạn\s+code|'
+    r'tìm\s+bug|bug\s+trong\s+code|tìm\s+lỗi.*code|fix\s+bug|debug\b|'
+    r'test\s+cho\s+function|cho\s+function\s+này)',
+    re.IGNORECASE,
+)
+_PLANNING_CUE = re.compile(
+    r'(?:lên\s+kế\s+hoạch|lập\s+kế\s+hoạch|kế\s+hoạch|roadmap|checklist|'
+    r'ưu\s+tiên|nên\s+làm\s+gì|giúp\s+(?:tôi\s+)?focus|quá\s+tải|'
+    r'plan\s+for|create\s+a\s+plan|chia\s+.*\s+thành)',
+    re.IGNORECASE,
+)
+_SUMMARIZE_CUE = re.compile(r'(?:tóm\s+tắt|summari[sz]e)', re.IGNORECASE)
+_TRANSLATE_CUE = re.compile(r'(?:(?:^|\b)dịch\b|translate)', re.IGNORECASE)
+_TECHNICAL_CUE = re.compile(
+    r'(?:giải\s+thích|explain|phân\s+tích|analy[sz]e|'
+    r'thiết\s+kế\s+architecture|architecture)',
+    re.IGNORECASE,
+)
+_WRITING_CUE = re.compile(r'(?:^|\b)(?:viết|soạn|draft|write)\b', re.IGNORECASE)
+_CLARIFICATION_CUE = re.compile(
+    r'(?:^làm\s+cái\s+(?:đó|này)|cái\s+(?:đó|này)\s+đi|'
+    r'cần\s+thêm\s+thông\s+tin)',
     re.IGNORECASE,
 )
 
@@ -38,26 +92,58 @@ class RuleBasedIntentParser:
     def parse(self, goal: str) -> ParsedIntent:
         text = goal.strip()
 
+        # --- CONV-P0 P0-2 conversational taxonomy (classification only) ---
+        # Greeting first (also guards bare-math from grabbing "hi"); broadened to
+        # accept time-of-day tails like "Chào buổi sáng".
+        if _GREETING_WORDS.match(text):
+            return self._parse_greeting(text)
+        if _IDENTITY_CUE.search(text):
+            return self._conv_intent(IntentName.IDENTITY_QUERY, text)
+        if _CAPABILITY_CUE.search(text):
+            return self._conv_intent(IntentName.CAPABILITY_QUERY, text)
+        if _MEMORY_READ_CUE.search(text):
+            return self._conv_intent(IntentName.MEMORY_READ, text)
+        # memory-write must precede the ^Lưu|Ghi write-note dispatch ("ghi nhớ rằng",
+        # "lưu ... vào memory"); its cue requires nhớ/memory so it never steals "ghi chú".
+        if _MEMORY_WRITE_CUE.search(text):
+            return self._conv_intent(IntentName.MEMORY_WRITE_REQUEST, text)
+
+        # --- existing rule-based verb-prefix dispatch (precedence preserved) ---
         if re.match(r'^Tính\b', text, re.IGNORECASE):
             return self._parse_calculate(text)
 
+        # ^Đọc ghi chú must precede summarization so "...rồi tóm tắt" stays READ_NOTE_THEN_SUMMARIZE.
         if re.match(r'^Đọc\s+ghi\s+chú\b', text, re.IGNORECASE):
             return self._parse_read_note(text)
 
         if re.match(r'^(?:Lưu|Ghi)\s+', text, re.IGNORECASE):
             return self._parse_write_note(text)
 
+        # code-review must precede ^Tìm ("Tìm bug trong code này") and writing ("Viết test
+        # cho function này"), per the frozen acceptance dataset.
+        if _CODE_REVIEW_CUE.search(text):
+            return self._conv_intent(IntentName.CODE_REVIEW_REQUEST, text)
+
         if re.match(r'^Tìm\b', text, re.IGNORECASE):
             return self._parse_web_search(text)
 
         # P4: project-context query — hẹp: ^Dự án AND cue hỏi-quyết-định.
-        # Chèn sau ^Tìm (không đụng) và trước fallthrough _unknown.
         if re.match(r'^Dự\s+án\b', text, re.IGNORECASE) and _PROJECT_QUERY_CUE.search(text):
             return self._parse_project_context_query(text)
 
-        # B.8: simple greeting — must check before bare-math to avoid "hi" hitting digit check
-        if _GREETING_WORDS.match(text):
-            return self._parse_greeting(text)
+        # --- remaining CONV-P0 P0-2 conversational intents ---
+        if _PLANNING_CUE.search(text):
+            return self._conv_intent(IntentName.PLANNING_REQUEST, text)
+        if _SUMMARIZE_CUE.search(text):   # after ^Đọc ghi chú dispatch above
+            return self._conv_intent(IntentName.SUMMARIZATION_REQUEST, text)
+        if _TRANSLATE_CUE.search(text):
+            return self._conv_intent(IntentName.TRANSLATION_REQUEST, text)
+        if _TECHNICAL_CUE.search(text):
+            return self._conv_intent(IntentName.TECHNICAL_EXPLANATION_REQUEST, text)
+        if _WRITING_CUE.search(text):     # after code-review so "Viết test ..." → CODE_REVIEW
+            return self._conv_intent(IntentName.WRITING_REQUEST, text)
+        if _CLARIFICATION_CUE.search(text):
+            return self._conv_intent(IntentName.CLARIFICATION_REQUEST, text)
 
         # B.8: English "calculate ..." / "calc ..." prefix
         if _CALC_PREFIX.match(text):
@@ -74,6 +160,16 @@ class RuleBasedIntentParser:
             return self._parse_as_calculate(text, text.rstrip('= '))
 
         return self._unknown(text)
+
+    def _conv_intent(self, intent: IntentName, text: str) -> ParsedIntent:
+        """CONV-P0 P0-2 conversational classification result. No slots (avoids the
+        planner clarification branch); user-facing responses are P0-3/P0-5/P0-6."""
+        return ParsedIntent(
+            intent=intent,
+            confidence=0.8,
+            source="rule",
+            raw_text=text,
+        )
 
     def _parse_calculate(self, text: str) -> ParsedIntent:
         rest = re.sub(r'^Tính\s+', '', text, flags=re.IGNORECASE)

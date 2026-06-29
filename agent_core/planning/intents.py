@@ -15,6 +15,19 @@ class IntentName(str, Enum):
     WEB_SEARCH_THEN_SAVE_NOTE = "web_search_then_save_note"
     PROJECT_CONTEXT_QUERY = "project_context_query"  # P4: reads ContextPack
     GREETING = "greeting"                            # B.8: simple hi/hello/chào
+    # CONV-P0 P0-2: conversational taxonomy (rule-based classification only;
+    # user-facing response handling is P0-3/P0-5/P0-6, not implemented here).
+    IDENTITY_QUERY = "identity_query"
+    CAPABILITY_QUERY = "capability_query"
+    MEMORY_READ = "memory_read"
+    MEMORY_WRITE_REQUEST = "memory_write_request"
+    PLANNING_REQUEST = "planning_request"
+    WRITING_REQUEST = "writing_request"
+    SUMMARIZATION_REQUEST = "summarization_request"
+    TRANSLATION_REQUEST = "translation_request"
+    TECHNICAL_EXPLANATION_REQUEST = "technical_explanation_request"
+    CODE_REVIEW_REQUEST = "code_review_request"
+    CLARIFICATION_REQUEST = "clarification_request"
     UNKNOWN = "unknown"
 
 
