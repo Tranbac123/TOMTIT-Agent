@@ -34,6 +34,15 @@ _CLARIFICATION = (
     "Bạn có thể nói rõ hơn giúp tôi."
 )
 
+# P0-4A: honest unsupported-utility response for date/time/weather. Never fakes a
+# date/time/weather answer, never claims a tool/memory was called or that it executed.
+_UNSUPPORTED_UTILITY = (
+    "Hiện tại trong runtime này tôi chưa hỗ trợ trả lời thời gian/ngày/thời tiết trực tiếp, "
+    "nên chưa thể trả lời chính xác yêu cầu này. Tôi chưa gọi tool hay tra cứu dữ liệu nào cho việc này. "
+    "Bạn có thể thử các năng lực hiện có: \"Tính 1 + 1\", \"calculate 2 + 2\", "
+    "\"Lưu ghi chú [tên] [nội dung]\", hoặc \"Đọc ghi chú [tên]\"."
+)
+
 _DIRECT_TEXT: dict[IntentName, str] = {
     IntentName.GREETING: _GREETING,
     IntentName.IDENTITY_QUERY: _IDENTITY,
@@ -50,3 +59,6 @@ class ResponseComposer:
 
     def compose_clarification(self, intent: IntentName) -> str:
         return _CLARIFICATION
+
+    def compose_unsupported_utility(self) -> str:
+        return _UNSUPPORTED_UTILITY

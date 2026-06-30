@@ -16,6 +16,8 @@ CLARIFICATION_REQUEST and is the P0-3 clarification target.
 """
 from __future__ import annotations
 
+import re
+
 from agent_core.conversation.models import ConversationRoute, RouteResult, TraceMeaning
 from agent_core.conversation.response_composer import ResponseComposer
 from agent_core.planning.intent_parser import RuleBasedIntentParser
@@ -26,6 +28,16 @@ _DIRECT_INTENTS = frozenset(
     {IntentName.GREETING, IntentName.IDENTITY_QUERY, IntentName.CAPABILITY_QUERY}
 )
 _CLARIFICATION_INTENTS = frozenset({IntentName.CLARIFICATION_REQUEST})
+
+# P0-4A: unsupported date/time/weather utilities. Handled via the existing CLARIFICATION
+# route (NO new route literal) with a specific honest "not supported" response, instead of
+# the generic fallback. Detected at the conversation layer because the rule parser returns
+# UNKNOWN for these.
+_UNSUPPORTED_UTILITY = re.compile(
+    r'(?:thời\s+tiết|mấy\s+giờ|giờ\s+rồi|'
+    r'ngày\s+(?:bao\s+nhiêu|mấy)|hôm\s+nay.*ngày|hôm\s+nào.*ngày)',
+    re.IGNORECASE,
+)
 
 
 class ConversationRouter:
@@ -48,6 +60,11 @@ class ConversationRouter:
         elif intent in _CLARIFICATION_INTENTS:
             route = ConversationRoute.CLARIFICATION
             response_text = self._composer.compose_clarification(intent)
+        elif _UNSUPPORTED_UTILITY.search(state.goal):
+            # P0-4A: date/time/weather not supported — honest specific response via the
+            # existing CLARIFICATION route (no new route literal).
+            route = ConversationRoute.CLARIFICATION
+            response_text = self._composer.compose_unsupported_utility()
         else:
             route = ConversationRoute.RUNTIME_FALLBACK
             response_text = None

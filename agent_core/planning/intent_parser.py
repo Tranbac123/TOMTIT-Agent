@@ -23,6 +23,9 @@ _VIET_MATH_SUFFIX = re.compile(
 )
 # B.8: Bare math — starts with digit or '(', contains only safe arithmetic chars
 _BARE_MATH_ONLY = re.compile(r'^[0-9(][0-9\s.()+\-*/%=]*$')
+# P0-4A: arithmetic variants — also allow 'x'/'×' (multiplication) and a trailing
+# '=' / '?' ("100 x 10", "100 * 10 = ?"). Normalized to safe arithmetic before eval.
+_ARITH_ONLY = re.compile(r'^[0-9(][0-9\s.()+\-*/%=xX×?]*$')
 # B.8 / CONV-P0 P0-2: greeting — full-string hi/hello/chào, optionally with a
 # time-of-day or addressee tail ("Chào buổi sáng", "Chào bạn").
 _GREETING_WORDS = re.compile(
@@ -34,12 +37,20 @@ _GREETING_WORDS = re.compile(
 
 # CONV-P0 P0-2 conversational cues (rule-based classification only). Order of use in
 # parse() matters; see the dispatch comments there.
+# P0-4A: identity variants — subject (bạn/mày/tomtit), "là ai|là gì|tên (là) gì",
+# rough wording ("mày") allowed; "gì|gi" (accent-optional). Word boundaries keep "là"
+# from matching "làm" (capability).
 _IDENTITY_CUE = re.compile(
-    r'^(?:bạn\s+là\s+ai|bạn\s+tên\s+(?:là\s+)?gì|who\s+are\s+you|what\s+are\s+you)\b',
+    r'(?:^|\b)(?:bạn|mày|tomtit)\s+(?:là\s+ai|là\s+g[ìi]|tên\s+(?:là\s+)?g[ìi]|tên\s+g[ìi])\b'
+    r'|tên\s+(?:bạn|mày)\s+(?:là\s+)?g[ìi]\b'
+    r'|who\s+are\s+you|what\s+are\s+you',
     re.IGNORECASE,
 )
+# P0-4A: capability variants — làm/giúp/hỗ trợ (được) (những) gì, "có thể ...", chatbot
+# diff, "dùng bạn", "giới hạn"; "gì|gi" accent-optional.
 _CAPABILITY_CUE = re.compile(
-    r'(?:làm\s+được\s+gì|làm\s+gì\s+được|có\s+thể\s+làm\s+(?:được\s+)?gì|'
+    r'(?:(?:làm|giúp|hỗ\s+trợ)\s+được\s+(?:những\s+)?g[ìi]|làm\s+gì\s+được|'
+    r'có\s+thể\s+(?:làm|giúp|hỗ\s+trợ)\s+(?:được\s+)?(?:những\s+)?g[ìi]|'
     r'khác\s+(?:gì\s+)?(?:so\s+với\s+)?chatbot|dùng\s+bạn|giới\s+hạn|'
     r'what\s+can\s+you\s+do|^help\b)',
     re.IGNORECASE,
@@ -148,18 +159,28 @@ class RuleBasedIntentParser:
         # B.8: English "calculate ..." / "calc ..." prefix
         if _CALC_PREFIX.match(text):
             rest = _CALC_PREFIX.sub('', text)
-            return self._parse_as_calculate(text, rest)
+            return self._parse_as_calculate(text, self._normalize_arith(rest))
 
         # B.8: Vietnamese natural-language math suffix ("bằng mấy", "là bao nhiêu")
         if _VIET_MATH_SUFFIX.search(text):
             expr_text = _VIET_MATH_SUFFIX.sub('', text).strip()
-            return self._parse_as_calculate(text, expr_text)
+            return self._parse_as_calculate(text, self._normalize_arith(expr_text))
 
-        # B.8: bare arithmetic expression (safe chars only, must start with digit or '(')
-        if _BARE_MATH_ONLY.match(text):
-            return self._parse_as_calculate(text, text.rstrip('= '))
+        # B.8 / P0-4A: bare arithmetic expression (safe chars only; also 'x'/'×' and a
+        # trailing '='/'?'). Normalized to safe arithmetic; evaluated by safe_eval (no eval).
+        if _ARITH_ONLY.match(text):
+            return self._parse_as_calculate(text, self._normalize_arith(text))
 
         return self._unknown(text)
+
+    @staticmethod
+    def _normalize_arith(expr_text: str) -> str:
+        """Normalize an already-arithmetic-only string: 'x'/'×' -> '*', drop trailing
+        '='/'?'. Safe — never introduces non-arithmetic tokens; safe_eval still parses."""
+        normalized = expr_text.strip()
+        normalized = re.sub(r'[=?\s]+$', '', normalized)        # trailing '= ?', '=', '?'
+        normalized = normalized.replace('×', '*').replace('x', '*').replace('X', '*')
+        return normalized
 
     def _conv_intent(self, intent: IntentName, text: str) -> ParsedIntent:
         """CONV-P0 P0-2 conversational classification result. No slots (avoids the
