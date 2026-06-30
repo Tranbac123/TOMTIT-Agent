@@ -7,7 +7,9 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
+from agent_core.conversation.llm_responder import LLMResponderRequest, TextLLMResponder
 from agent_core.conversation.models import ConversationRoute
+from agent_core.conversation.response_composer import ResponseComposer
 from agent_core.conversation.router import ConversationRouter
 from agent_core.memory.base import MemoryStoreProtocol
 from agent_core.runtime.runtime_agent import RuntimeAgent
@@ -52,6 +54,7 @@ class SessionRuntime:
         session_store: SessionStoreProtocol | None = None,
         user_id: str | None = None,
         conversation_router: ConversationRouter | None = None,
+        llm_responder: TextLLMResponder | None = None,
     ) -> None:
         if session is None and session_store is not None:
             raise ValueError(
@@ -70,6 +73,8 @@ class SessionRuntime:
         self._session_store = session_store
         # CONV-P0 P0-3: conversation layer at the handle_turn seam (default minimal router).
         self._conversation_router = conversation_router or ConversationRouter()
+        self._response_composer = ResponseComposer()
+        self._llm_responder = llm_responder
         if session is not None:
             self._session = session
         else:
@@ -100,6 +105,39 @@ class SessionRuntime:
             state.complete(route_result.response_text or "")
             state.history.append(_CONV_TRACE_PREFIX + "state_finalized")
             self._record_terminal_state(state)      # reuse SR2/SR3 persist-before-mutate
+            return state
+
+        if route_result.route is ConversationRoute.LLM_RESPONSE:
+            for meaning in route_result.trace:
+                state.history.append(_CONV_TRACE_PREFIX + meaning.value)
+
+            if self._llm_responder is None:
+                state.history.append(_CONV_TRACE_PREFIX + "llm_response_unconfigured")
+                state.complete(self._response_composer.compose_llm_unconfigured())
+            else:
+                state.history.append(_CONV_TRACE_PREFIX + "llm_response_requested")
+                try:
+                    result = self._llm_responder.generate(
+                        LLMResponderRequest(
+                            user_text=state.goal,
+                            intent=route_result.intent,
+                            route=route_result.route.value,
+                            session_id=state.session_id,
+                            task_id=state.task_id,
+                        )
+                    )
+                    answer = result.text.strip()
+                    if not answer:
+                        raise ValueError("empty LLMResponder text")
+                    state.history.append(_CONV_TRACE_PREFIX + "llm_response_generated")
+                    state.complete(answer)
+                except Exception as exc:
+                    state.errors.append(f"llm_response:{type(exc).__name__}")
+                    state.history.append(_CONV_TRACE_PREFIX + "llm_response_failed")
+                    state.complete(self._response_composer.compose_llm_failed())
+
+            state.history.append(_CONV_TRACE_PREFIX + "state_finalized")
+            self._record_terminal_state(state)
             return state
 
         state = self._agent.run(state)              # raise → không tới append (QĐ-SR2-E case 2)

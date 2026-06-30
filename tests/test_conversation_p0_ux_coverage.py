@@ -4,12 +4,12 @@ Covers real-user conversation variants discovered by manual Web regression:
   - natural help/capability variants ("bạn có giúp gì được tôi không?")
   - user-memory/self-knowledge queries ("tôi là ai?", "Bạn nhớ được gì về tôi?")
   - bot meta/provenance questions ("ai tạo ra bạn?", "bạn biết nói không?")
-  - general explanation request unsupported ("bạn hãy giải thích cho tôi về AI?")
+  - general explanation request routes to the text-only LLM_RESPONSE lane
   - ambiguous user-self action ("tôi có thể làm gì?")
   - full manual Web regression set
 
-All deterministic, rule-based, no LLM, no memory calls, no new route literals, no eval.
-Direct/clarification routes keep the P0-3/P0-4A zero-side-effect guarantee.
+All deterministic, rule-based, no provider calls, no memory calls, no eval.
+Direct/clarification and unconfigured LLM routes keep the zero-side-effect guarantee.
 """
 from __future__ import annotations
 
@@ -174,7 +174,7 @@ def test_bot_provenance_questions_get_direct_response(text):
 
 
 # ---------------------------------------------------------------------------
-# §9 — General explanation request unsupported
+# §9 — General explanation request LLM lane
 # ---------------------------------------------------------------------------
 
 _EXPLANATION_REQUESTS = [
@@ -186,13 +186,12 @@ _EXPLANATION_REQUESTS = [
 
 
 @pytest.mark.parametrize("text", _EXPLANATION_REQUESTS)
-def test_general_explanation_request_gets_specific_unsupported_response(text):
-    state = _assert_conv_zero_side_effects(text, ConversationRoute.CLARIFICATION)
+def test_general_explanation_request_uses_safe_unconfigured_llm_lane(text):
+    state = _assert_conv_zero_side_effects(text, ConversationRoute.LLM_RESPONSE)
     answer = state.final_answer.lower()
-    # honest: says not supported; does not pretend to explain; does not claim LLM
-    assert "chưa hỗ trợ" in answer or "chưa thể" in answer, (text, answer)
-    assert "llm" not in answer, (text, answer)
-    assert "chatbot đầy đủ" in answer or "giải thích nội dung mở" in answer or "năng lực" in answer, (text, answer)
+    assert "llmresponder chưa được cấu hình" in answer, (text, answer)
+    assert "chưa gọi tool" in answer, (text, answer)
+    assert "memory" in answer, (text, answer)
 
 
 # ---------------------------------------------------------------------------
@@ -220,6 +219,7 @@ def test_latest_manual_web_regression_cases():
 
     DIRECT = ConversationRoute.DIRECT_RESPONSE
     CLARIF = ConversationRoute.CLARIFICATION
+    LLM = ConversationRoute.LLM_RESPONSE
     FALLBK = ConversationRoute.RUNTIME_FALLBACK
 
     cases = [
@@ -236,7 +236,7 @@ def test_latest_manual_web_regression_cases():
         ("bạn tên là gì?",                        DIRECT),
         ("mày là ai?",                            DIRECT),
         # edge cases
-        ("???",                                   FALLBK),
+        ("???",                                   CLARIF),
         ("who are you?",                          DIRECT),
         ("hello?",                                DIRECT),
         # arithmetic (existing, must still pass via runtime)
@@ -247,8 +247,8 @@ def test_latest_manual_web_regression_cases():
         ("hôm này thời tiết HCM thế nào?",        CLARIF),
         # P0-4B: bot meta / provenance
         ("bạn biết nói không?",                   DIRECT),
-        # P0-4B: explanation unsupported
-        ("bạn hãy giải thích cho tôi về AI?",     CLARIF),
+        # P0-5B: explanation goes to safe text-only LLM lane
+        ("bạn hãy giải thích cho tôi về AI?",     LLM),
         # P0-4B: provenance
         ("Ai tạo ra bạn?",                        DIRECT),
         # P0-4B: ambiguous user-self
@@ -276,7 +276,7 @@ def test_latest_manual_web_regression_cases():
 
 
 # ---------------------------------------------------------------------------
-# §12 — Route literal minimality (still exactly 3)
+# §12 — Route literal contract (P0-5B adds LLM_RESPONSE only)
 # ---------------------------------------------------------------------------
 
 def test_route_literals_still_minimal_after_p0_4b():
@@ -284,6 +284,7 @@ def test_route_literals_still_minimal_after_p0_4b():
     assert {r.value for r in ConversationRoute} == {
         "DIRECT_RESPONSE",
         "CLARIFICATION",
+        "LLM_RESPONSE",
         "RUNTIME_FALLBACK",
     }
 

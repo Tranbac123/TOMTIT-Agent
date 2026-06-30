@@ -2,8 +2,8 @@
 
 Covers real-user conversation variants (capability/identity/greeting), safe arithmetic
 variants, and honest unsupported date/time/weather responses — all rule-based, no LLM,
-no memory, no new route literal, no eval. Direct/clarification routes keep the P0-3
-zero-side-effect guarantee; arithmetic flows through the existing safe runtime calculator.
+no memory, no eval. Direct/clarification routes keep the P0-3 zero-side-effect guarantee;
+arithmetic flows through the existing safe runtime calculator.
 """
 from __future__ import annotations
 
@@ -195,9 +195,9 @@ def test_manual_web_regression_cases():
 
 
 def test_route_literals_still_minimal():
-    # only the three approved route literals exist on the enum.
+    # only the four approved route literals exist on the enum.
     assert {r.value for r in ConversationRoute} == {
-        "DIRECT_RESPONSE", "CLARIFICATION", "RUNTIME_FALLBACK",
+        "DIRECT_RESPONSE", "CLARIFICATION", "LLM_RESPONSE", "RUNTIME_FALLBACK",
     }
 
 

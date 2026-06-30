@@ -7,6 +7,7 @@ parses it, and (for direct/clarification) composes deterministic text.
 Routing (deliberately narrow for P0-3):
   GREETING / IDENTITY_QUERY / CAPABILITY_QUERY -> DIRECT_RESPONSE
   CLARIFICATION_REQUEST                        -> CLARIFICATION
+  selected open text                           -> LLM_RESPONSE
   everything else (incl. bare UNKNOWN)         -> RUNTIME_FALLBACK
 
 Bare UNKNOWN stays RUNTIME_FALLBACK so arbitrary input continues through the existing
@@ -60,6 +61,23 @@ _USER_SELF_ACTION_CUE = re.compile(
     re.IGNORECASE,
 )
 
+_PUNCTUATION_OR_ACK = re.compile(r'^(?:ok|okay|[?？]+)\s*$', re.IGNORECASE)
+
+_VAGUE_PLANNING_CUE = re.compile(
+    r'^(?:hãy\s+)?(?:lập|lên)\s+kế\s+hoạch\s+cho\s+tôi\s*\??\s*$',
+    re.IGNORECASE,
+)
+
+_LOCATION_KNOWLEDGE_CUE = re.compile(r'\bnằm\s+ở\s+đâu\s*\??\s*$', re.IGNORECASE)
+
+_BOOLEAN_COMPARISON_CUE = re.compile(
+    r'^\s*\d+(?:\.\d+)?\s*(?:>=|<=|==|>|<|=)\s*\d+(?:\.\d+)?\s*\?\s*$'
+)
+
+_LLM_RESPONSE_INTENTS = frozenset(
+    {IntentName.TECHNICAL_EXPLANATION_REQUEST, IntentName.TRANSLATION_REQUEST}
+)
+
 
 class ConversationRouter:
     def __init__(
@@ -86,6 +104,9 @@ class ConversationRouter:
             # User asking what they themselves can do, not about TomTit's capabilities.
             route = ConversationRoute.CLARIFICATION
             response_text = self._composer.compose_user_self_action()
+        elif _PUNCTUATION_OR_ACK.match(goal) or _VAGUE_PLANNING_CUE.match(goal):
+            route = ConversationRoute.CLARIFICATION
+            response_text = self._composer.compose_clarification(intent)
         elif intent in _DIRECT_INTENTS:
             route = ConversationRoute.DIRECT_RESPONSE
             response_text = self._composer.compose_direct(intent)
@@ -97,17 +118,24 @@ class ConversationRouter:
             # existing CLARIFICATION route (no new route literal).
             route = ConversationRoute.CLARIFICATION
             response_text = self._composer.compose_unsupported_utility()
-        elif intent is IntentName.TECHNICAL_EXPLANATION_REQUEST:
-            # P0-4B: general open-ended explanation requests (AI, ML, etc.) that the
-            # rule-based runtime cannot fulfil — honest "not supported" via CLARIFICATION.
+        elif intent is IntentName.CODE_REVIEW_REQUEST:
             route = ConversationRoute.CLARIFICATION
-            response_text = self._composer.compose_explanation_unsupported()
+            response_text = self._composer.compose_clarification(intent)
+        elif intent in _LLM_RESPONSE_INTENTS:
+            route = ConversationRoute.LLM_RESPONSE
+            response_text = None
+        elif (
+            _LOCATION_KNOWLEDGE_CUE.search(goal)
+            or _BOOLEAN_COMPARISON_CUE.match(goal)
+        ):
+            route = ConversationRoute.LLM_RESPONSE
+            response_text = None
         else:
             route = ConversationRoute.RUNTIME_FALLBACK
             response_text = None
 
         trace.append(TraceMeaning.ROUTE_SELECTED)
-        if route is not ConversationRoute.RUNTIME_FALLBACK:
+        if route in (ConversationRoute.DIRECT_RESPONSE, ConversationRoute.CLARIFICATION):
             trace.append(TraceMeaning.RESPONSE_GENERATED)
 
         return RouteResult(

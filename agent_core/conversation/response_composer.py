@@ -69,6 +69,16 @@ _EXPLANATION_UNSUPPORTED = (
     "tính toán cơ bản và một số tác vụ ghi chú/runtime."
 )
 
+_LLM_RESPONSE_UNCONFIGURED = (
+    "Hiện tại trong runtime này LLMResponder chưa được cấu hình, nên tôi chưa thể trả lời yêu cầu mở này. "
+    "Tôi chưa gọi tool, memory hay thực hiện hành động nào."
+)
+
+_LLM_RESPONSE_FAILED = (
+    "Tôi chưa thể tạo câu trả lời LLM cho yêu cầu này lúc này. "
+    "Tôi chưa gọi tool, memory hay thực hiện hành động nào."
+)
+
 _DIRECT_TEXT: dict[IntentName, str] = {
     IntentName.GREETING: _GREETING,
     IntentName.IDENTITY_QUERY: _IDENTITY,
@@ -97,3 +107,9 @@ class ResponseComposer:
 
     def compose_explanation_unsupported(self) -> str:
         return _EXPLANATION_UNSUPPORTED
+
+    def compose_llm_unconfigured(self) -> str:
+        return _LLM_RESPONSE_UNCONFIGURED
+
+    def compose_llm_failed(self) -> str:
+        return _LLM_RESPONSE_FAILED
