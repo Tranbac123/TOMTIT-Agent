@@ -7,11 +7,18 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
+from agent_core.conversation.models import ConversationRoute
+from agent_core.conversation.router import ConversationRouter
 from agent_core.memory.base import MemoryStoreProtocol
 from agent_core.runtime.runtime_agent import RuntimeAgent
 from agent_core.state.agent_state import AgentState
 from agent_core.state.enums import AgentStatus
 from agent_core.state.session_state import SessionState, SessionStatusView, TurnRecord
+
+# CONV-P0 P0-3: conversation trace meanings recorded on state.history for direct/
+# clarification turns (prefix keeps them distinct from runtime plan/step history lines).
+_CONV_TRACE_PREFIX = "conv:"
+_CONV_DIRECT_ROUTES = (ConversationRoute.DIRECT_RESPONSE, ConversationRoute.CLARIFICATION)
 
 if TYPE_CHECKING:
     from agent_core.confirmation.models import ConfirmedSaveOperation
@@ -44,6 +51,7 @@ class SessionRuntime:
         session: SessionState | None = None,
         session_store: SessionStoreProtocol | None = None,
         user_id: str | None = None,
+        conversation_router: ConversationRouter | None = None,
     ) -> None:
         if session is None and session_store is not None:
             raise ValueError(
@@ -60,6 +68,8 @@ class SessionRuntime:
         self._agent = agent
         self._store = store
         self._session_store = session_store
+        # CONV-P0 P0-3: conversation layer at the handle_turn seam (default minimal router).
+        self._conversation_router = conversation_router or ConversationRouter()
         if session is not None:
             self._session = session
         else:
@@ -80,6 +90,18 @@ class SessionRuntime:
             memory=self._store,
             session_id=self._session.session_id,
         )
+
+        # CONV-P0 P0-3 seam: classify before runtime. Direct/clarification routes complete
+        # the state here WITHOUT planner/tool/memory; everything else falls through to run().
+        route_result = self._conversation_router.route(state)
+        if route_result.route in _CONV_DIRECT_ROUTES:
+            for meaning in route_result.trace:
+                state.history.append(_CONV_TRACE_PREFIX + meaning.value)
+            state.complete(route_result.response_text or "")
+            state.history.append(_CONV_TRACE_PREFIX + "state_finalized")
+            self._record_terminal_state(state)      # reuse SR2/SR3 persist-before-mutate
+            return state
+
         state = self._agent.run(state)              # raise → không tới append (QĐ-SR2-E case 2)
         if not state.is_terminal():                 # bug-guard (QĐ-SR2-E case 3)
             raise RuntimeError(

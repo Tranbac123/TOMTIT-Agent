@@ -721,7 +721,9 @@ def test_no_auto_retry_on_persistence_failure():
     )
 
     with pytest.raises(_SPError):
-        sr.handle_turn("hello")
+        # CONV-P0 P0-3: use a runtime-routed goal (not a greeting) so this persistence-
+        # failure test still exercises agent.run; greetings now route to a direct response.
+        sr.handle_turn("my goal")
 
     assert len(run_calls) == 1
     assert len(save_calls) == 1
