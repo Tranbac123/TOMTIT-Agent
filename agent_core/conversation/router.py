@@ -39,6 +39,27 @@ _UNSUPPORTED_UTILITY = re.compile(
     re.IGNORECASE,
 )
 
+# P0-4B: user-memory / user-self-identity queries. The user is asking about themselves
+# or what TomTit knows/remembers about them — honest "memory not supported" response via
+# the existing CLARIFICATION route (NO new route literal). Checked before intent dispatch
+# because MEMORY_READ intent (if matched by parser) would otherwise fall to RUNTIME_FALLBACK.
+_USER_MEMORY_CUE = re.compile(
+    r'(?:'
+    r'tôi\s+(?:là\s+ai|tên\s+(?:là\s+)?g[ìi])\b|'
+    r'bạn\s+(?:nhớ|biết)\s+(?:được\s+)?g[ìi]\s+(?:về\s+)?tôi|'
+    r'bạn\s+có\s+biết\s+tôi\s+(?:là\s+ai|tên)'
+    r')',
+    re.IGNORECASE,
+)
+
+# P0-4B: ambiguous user-self capability query ("tôi có thể làm gì?"). The user is asking
+# what THEY can do, not asking about TomTit's capabilities — needs clarification, not a
+# DIRECT_RESPONSE. Checked before intent dispatch to intercept the false capability match.
+_USER_SELF_ACTION_CUE = re.compile(
+    r'^tôi\s+có\s+thể\s+(?:làm|giúp|hỗ\s+trợ)\s+(?:được\s+)?(?:những\s+)?g[ìi]',
+    re.IGNORECASE,
+)
+
 
 class ConversationRouter:
     def __init__(
@@ -51,20 +72,36 @@ class ConversationRouter:
 
     def route(self, state: AgentState) -> RouteResult:
         trace: list[TraceMeaning] = [TraceMeaning.REQUEST_RECEIVED]
-        intent = self._parser.parse(state.goal).intent
+        goal = state.goal
+        intent = self._parser.parse(goal).intent
         trace.append(TraceMeaning.INTENT_CLASSIFIED)
 
-        if intent in _DIRECT_INTENTS:
+        # P0-4B: pre-dispatch intercepts for user-self patterns (before intent-based routing
+        # to prevent false capability/identity matches when subject is "tôi").
+        if _USER_MEMORY_CUE.search(goal):
+            # User asking about themselves or what TomTit knows about them.
+            route = ConversationRoute.CLARIFICATION
+            response_text: str | None = self._composer.compose_user_memory_unsupported()
+        elif _USER_SELF_ACTION_CUE.search(goal):
+            # User asking what they themselves can do, not about TomTit's capabilities.
+            route = ConversationRoute.CLARIFICATION
+            response_text = self._composer.compose_user_self_action()
+        elif intent in _DIRECT_INTENTS:
             route = ConversationRoute.DIRECT_RESPONSE
-            response_text: str | None = self._composer.compose_direct(intent)
+            response_text = self._composer.compose_direct(intent)
         elif intent in _CLARIFICATION_INTENTS:
             route = ConversationRoute.CLARIFICATION
             response_text = self._composer.compose_clarification(intent)
-        elif _UNSUPPORTED_UTILITY.search(state.goal):
+        elif _UNSUPPORTED_UTILITY.search(goal):
             # P0-4A: date/time/weather not supported — honest specific response via the
             # existing CLARIFICATION route (no new route literal).
             route = ConversationRoute.CLARIFICATION
             response_text = self._composer.compose_unsupported_utility()
+        elif intent is IntentName.TECHNICAL_EXPLANATION_REQUEST:
+            # P0-4B: general open-ended explanation requests (AI, ML, etc.) that the
+            # rule-based runtime cannot fulfil — honest "not supported" via CLARIFICATION.
+            route = ConversationRoute.CLARIFICATION
+            response_text = self._composer.compose_explanation_unsupported()
         else:
             route = ConversationRoute.RUNTIME_FALLBACK
             response_text = None

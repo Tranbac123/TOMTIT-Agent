@@ -40,19 +40,28 @@ _GREETING_WORDS = re.compile(
 # P0-4A: identity variants — subject (bạn/mày/tomtit), "là ai|là gì|tên (là) gì",
 # rough wording ("mày") allowed; "gì|gi" (accent-optional). Word boundaries keep "là"
 # from matching "làm" (capability).
+# P0-4B: provenance variants — "ai tạo ra bạn?", "tomtit do ai tạo ra?", "được tạo bởi ai?".
 _IDENTITY_CUE = re.compile(
     r'(?:^|\b)(?:bạn|mày|tomtit)\s+(?:là\s+ai|là\s+g[ìi]|tên\s+(?:là\s+)?g[ìi]|tên\s+g[ìi])\b'
     r'|tên\s+(?:bạn|mày)\s+(?:là\s+)?g[ìi]\b'
-    r'|who\s+are\s+you|what\s+are\s+you',
+    r'|who\s+are\s+you|what\s+are\s+you'
+    r'|ai\s+(?:tạo|xây\s+dựng)\s+(?:ra\s+)?(?:bạn|mày|tomtit)\b'
+    r'|(?:bạn|mày|tomtit)\s+do\s+ai\b'
+    r'|(?:bạn|mày|tomtit)\s+được\s+(?:tạo|xây\s+dựng)',
     re.IGNORECASE,
 )
-# P0-4A: capability variants — làm/giúp/hỗ trợ (được) (những) gì, "có thể ...", chatbot
-# diff, "dùng bạn", "giới hạn"; "gì|gi" accent-optional.
+# P0-4A/P0-4B: capability variants — làm/giúp/hỗ trợ (được) (những) gì, "có thể ...",
+# chatbot diff, "dùng bạn", "giới hạn"; "gì|gi" accent-optional. P0-4B extends with
+# variants where the beneficiary "tôi" is explicit ("giúp gì cho tôi", "giúp tôi được
+# gì") and bot-speech capability ("biết nói không").
 _CAPABILITY_CUE = re.compile(
     r'(?:(?:làm|giúp|hỗ\s+trợ)\s+được\s+(?:những\s+)?g[ìi]|làm\s+gì\s+được|'
     r'có\s+thể\s+(?:làm|giúp|hỗ\s+trợ)\s+(?:được\s+)?(?:những\s+)?g[ìi]|'
     r'khác\s+(?:gì\s+)?(?:so\s+với\s+)?chatbot|dùng\s+bạn|giới\s+hạn|'
-    r'what\s+can\s+you\s+do|^help\b)',
+    r'what\s+can\s+you\s+do|^help\b|'
+    r'(?:giúp|hỗ\s+trợ)\s+g[ìi]\s+(?:được\s+)?(?:cho\s+)?tôi\b|'
+    r'(?:giúp|hỗ\s+trợ)\s+tôi\s+được\s+g[ìi]|'
+    r'(?:có\s+)?biết\s+nói\s+không)',
     re.IGNORECASE,
 )
 _MEMORY_READ_CUE = re.compile(

@@ -43,6 +43,32 @@ _UNSUPPORTED_UTILITY = (
     "\"Lưu ghi chú [tên] [nội dung]\", hoặc \"Đọc ghi chú [tên]\"."
 )
 
+# P0-4B: honest response for user-memory / user-self-identity queries. Never fakes memory,
+# never claims a memory/tool call was made, never pretends to know the user's name/identity.
+_USER_MEMORY_UNSUPPORTED = (
+    "Hiện tại trong runtime này tôi chưa hỗ trợ memory hội thoại/user profile trực tiếp, "
+    "nên tôi chưa biết hoặc chưa nhớ bạn là ai hay tên bạn là gì. "
+    "Tôi cũng chưa gọi memory/tool nào cho việc này. "
+    "Bạn có thể dùng chức năng ghi chú nếu muốn lưu thông tin cụ thể."
+)
+
+# P0-4B: response for ambiguous user-self capability question ("tôi có thể làm gì?").
+# Clarifies that the user needs to specify what they want, not claiming TomTit's capability.
+_USER_SELF_ACTION = (
+    "Bạn đang hỏi bạn có thể làm gì với TomTit, hay muốn tôi gợi ý việc bạn nên làm tiếp? "
+    "Hiện tại tôi chưa đủ ngữ cảnh để trả lời chính xác. "
+    "Bạn có thể thử: \"bạn làm được gì?\", \"calculate 2 + 2\", \"Lưu ghi chú [tên] [nội dung]\"."
+)
+
+# P0-4B: honest response for open-ended explanation requests (AI, ML, etc.) that the
+# rule-based runtime cannot fulfil. Never claims LLMResponder exists or fakes an answer.
+_EXPLANATION_UNSUPPORTED = (
+    "Hiện tại trong runtime này tôi chưa hỗ trợ chế độ giải thích nội dung mở như một chatbot đầy đủ, "
+    "nên chưa thể trả lời tốt yêu cầu này. "
+    "Tôi có thể xử lý các năng lực đã được hiện thực như chào hỏi, giới thiệu năng lực, "
+    "tính toán cơ bản và một số tác vụ ghi chú/runtime."
+)
+
 _DIRECT_TEXT: dict[IntentName, str] = {
     IntentName.GREETING: _GREETING,
     IntentName.IDENTITY_QUERY: _IDENTITY,
@@ -62,3 +88,12 @@ class ResponseComposer:
 
     def compose_unsupported_utility(self) -> str:
         return _UNSUPPORTED_UTILITY
+
+    def compose_user_memory_unsupported(self) -> str:
+        return _USER_MEMORY_UNSUPPORTED
+
+    def compose_user_self_action(self) -> str:
+        return _USER_SELF_ACTION
+
+    def compose_explanation_unsupported(self) -> str:
+        return _EXPLANATION_UNSUPPORTED
