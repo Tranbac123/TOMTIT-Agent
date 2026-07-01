@@ -12,6 +12,7 @@ from agent_core.conversation.llm_responder import (
     TextLLMResponder,
 )
 from agent_core.conversation.models import ConversationRoute, RouteResult, TraceMeaning
+from agent_core.conversation.pending_state import PendingConversationState
 from agent_core.conversation.response_composer import ResponseComposer
 from agent_core.conversation.router import ConversationRouter
 
@@ -22,6 +23,7 @@ __all__ = [
     "ConversationRoute",
     "RouteResult",
     "TraceMeaning",
+    "PendingConversationState",
     "ResponseComposer",
     "ConversationRouter",
 ]

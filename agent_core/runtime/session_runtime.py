@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import dataclasses
+import re
 import time
 from collections.abc import Callable
 from datetime import datetime, timezone
@@ -9,12 +10,17 @@ from uuid import uuid4
 
 from agent_core.conversation.llm_responder import LLMResponderRequest, TextLLMResponder
 from agent_core.conversation.models import ConversationRoute
+from agent_core.conversation.pending_state import PendingConversationState
 from agent_core.conversation.response_composer import ResponseComposer
 from agent_core.conversation.router import ConversationRouter
 from agent_core.memory.base import MemoryStoreProtocol
+from agent_core.memory.memory_agent import MemoryAgent
+from agent_core.planning.intent_parser import RuleBasedIntentParser
+from agent_core.planning.intents import IntentName
+from agent_core.planning.slot_validator import SlotValidator
 from agent_core.runtime.runtime_agent import RuntimeAgent
 from agent_core.state.agent_state import AgentState
-from agent_core.state.enums import AgentStatus
+from agent_core.state.enums import AgentStatus, ToolName
 from agent_core.state.session_state import SessionState, SessionStatusView, TurnRecord
 
 # CONV-P0 P0-3: conversation trace meanings recorded on state.history for direct/
@@ -29,6 +35,28 @@ if TYPE_CHECKING:
 # Real recall (CLI) enables the bounded same-tick FTS stabilization (SPEC_M7B §10): at most
 # 5 attempts, stop on first hit, never retry a remote failure. Tests override this.
 _RECALL_MAX_ATTEMPTS = 5
+
+# CONV-P0 P0-6B: pending state helpers — narrow patterns, intentionally minimal.
+_PENDING_CANCEL = re.compile(
+    r'^(?:hủy|bỏ\s+qua|không|thôi|cancel)\s*[.!?]*\s*$',
+    re.IGNORECASE,
+)
+_PENDING_AMBIGUOUS_ACK = re.compile(
+    r'^(?:ok|okay|có|ừ|ừm|vâng|được)\s*[.!?]*\s*$',
+    re.IGNORECASE,
+)
+# Intents whose presence (with no missing slots) means the user has issued a new
+# complete command — clear pending and fall through to normal routing.
+_CLEAR_PENDING_ON_COMPLETE_INTENT = frozenset({
+    IntentName.CALCULATE,
+    IntentName.CALCULATE_THEN_SAVE_NOTE,
+    IntentName.READ_NOTE,
+    IntentName.READ_NOTE_THEN_SUMMARIZE,
+    IntentName.WRITE_NOTE,
+    IntentName.WEB_SEARCH,
+    IntentName.WEB_SEARCH_THEN_SAVE_NOTE,
+    IntentName.PROJECT_CONTEXT_QUERY,
+})
 
 
 class SessionRuntime:
@@ -75,6 +103,8 @@ class SessionRuntime:
         self._conversation_router = conversation_router or ConversationRouter()
         self._response_composer = ResponseComposer()
         self._llm_responder = llm_responder
+        # CONV-P0 P0-6B: short-term pending state for note slot continuation (session-local).
+        self._pending_conversation_state: PendingConversationState | None = None
         if session is not None:
             self._session = session
         else:
@@ -95,6 +125,18 @@ class SessionRuntime:
             memory=self._store,
             session_id=self._session.session_id,
         )
+
+        # CONV-P0 P0-6B: pending slot continuation — checked before conversation routing.
+        if self._pending_conversation_state is not None:
+            pending_result = self._try_handle_pending(user_message, state)
+            if pending_result is not None:
+                return pending_result
+            # None → pending cleared; fall through to normal routing with a fresh state.
+            state = AgentState(
+                goal=user_message,
+                memory=self._store,
+                session_id=self._session.session_id,
+            )
 
         # CONV-P0 P0-3 seam: classify before runtime. Direct/clarification routes complete
         # the state here WITHOUT planner/tool/memory; everything else falls through to run().
@@ -146,6 +188,8 @@ class SessionRuntime:
                 f"run() returned non-terminal state: {state.status}"
             )
         self._record_terminal_state(state)          # SR2/SR3 persist-before-mutate
+        # CONV-P0 P0-6B: after runtime, detect write_note clarification → set pending.
+        self._maybe_capture_pending(user_message, state)
         return state
 
     def run_confirmed_decision_save(
@@ -221,6 +265,116 @@ class SessionRuntime:
             )
         self._record_terminal_state(state)
         return state
+
+    # ------------------------------------------------------------------
+    # CONV-P0 P0-6B — pending note slot continuation
+    # ------------------------------------------------------------------
+
+    def _try_handle_pending(
+        self, user_message: str, state: AgentState
+    ) -> AgentState | None:
+        """Dispatch when a pending note-name clarification is active.
+
+        Returns a completed AgentState if the pending interaction was fully
+        handled, or None to fall through to normal routing (pending cleared).
+        """
+        pending = self._pending_conversation_state
+        assert pending is not None
+        text = user_message.strip()
+
+        # 1. Cancel → clear pending, return safe cancellation.
+        if _PENDING_CANCEL.match(text):
+            self._pending_conversation_state = None
+            state.history.append("conv:pending_note_cancelled")
+            state.complete("Đã hủy yêu cầu ghi chú. Tôi chưa lưu gì cả.")
+            state.history.append("conv:state_finalized")
+            self._record_terminal_state(state)
+            return state
+
+        # 2. Ambiguous ack (ok, có, ừ, …) → reprompt without writing.
+        # Must run BEFORE route classification: the router may classify "ok" as
+        # DIRECT_RESPONSE (a greeting/affirmation), which would incorrectly clear pending.
+        if _PENDING_AMBIGUOUS_ACK.match(text):
+            state.history.append("conv:pending_note_reprompt")
+            prompt = pending.prompt_text or "Bạn muốn dùng tên ghi chú là gì?"
+            state.complete(prompt)
+            state.history.append("conv:state_finalized")
+            self._record_terminal_state(state)
+            return state
+
+        # 3. High-confidence direct/clarification route (identity, greeting, …) → clear.
+        route_result = self._conversation_router.route(state)
+        if route_result.route in _CONV_DIRECT_ROUTES:
+            self._pending_conversation_state = None
+            return None  # fall through; normal routing handles the response
+
+        # 4. Complete runtime command (full write_note, calc, read_note, …) → clear.
+        parsed = SlotValidator().validate(RuleBasedIntentParser().parse(text))
+        if parsed.intent in _CLEAR_PENDING_ON_COMPLETE_INTENT and not parsed.missing_slots:
+            self._pending_conversation_state = None
+            return None
+
+        # 5. Expiration check — expire after `expires_after_turns` unresolved turns.
+        if len(self._session.turns) - pending.created_at_turn >= pending.expires_after_turns:
+            self._pending_conversation_state = None
+            return None
+
+        # 6. Treat remaining input as the note_name slot answer.
+        return self._resume_write_note(pending, note_name=text, state=state)
+
+    def _resume_write_note(
+        self,
+        pending: PendingConversationState,
+        note_name: str,
+        state: AgentState,
+    ) -> AgentState:
+        """Complete the write_note flow with the now-known note_name."""
+        self._pending_conversation_state = None
+        content = pending.collected_slots.get("content", "")
+        state.history.append("conv:pending_note_name_resolved")
+        try:
+            mem_agent = MemoryAgent(
+                self._store,
+                user_id=None,
+                session_id=state.session_id,
+            )
+            mem_agent.write_note(name=note_name, content=content, task_id=state.task_id)
+            state.complete(f'Đã lưu ghi chú "{note_name}": {content}.')
+        except Exception as exc:
+            state.errors.append(f"pending_write_note:{type(exc).__name__}")
+            state.complete(f'Không thể lưu ghi chú "{note_name}". Vui lòng thử lại.')
+        state.history.append("conv:state_finalized")
+        self._record_terminal_state(state)
+        return state
+
+    def _maybe_capture_pending(self, user_message: str, state: AgentState) -> None:
+        """After a runtime run, detect write_note clarification and store pending state.
+
+        Captures only when: WRITE_NOTE intent, note_name is missing, content is known,
+        and the plan was a single FINISH step (clarification plan shape).
+        """
+        if state.status != AgentStatus.COMPLETED:
+            return
+        if len(state.plan) != 1 or state.plan[0].action != ToolName.FINISH:
+            return
+        parsed = SlotValidator().validate(RuleBasedIntentParser().parse(user_message))
+        if parsed.intent is not IntentName.WRITE_NOTE:
+            return
+        if "note_name" not in parsed.missing_slots:
+            return
+        if not parsed.content:
+            return
+        self._pending_conversation_state = PendingConversationState(
+            kind="write_note_missing_note_name",
+            intent=parsed.intent.value,
+            original_goal=user_message,
+            missing_slots=("note_name",),
+            collected_slots={"content": str(parsed.content)},
+            prompt_text=state.final_answer or "",
+            source_route="RUNTIME_FALLBACK",
+            session_id=self.session_id,
+            created_at_turn=len(self._session.turns),
+        )
 
     def _record_terminal_state(self, state: AgentState) -> None:
         """Build a TurnRecord and persist-before-mutate. Shared by NL and confirmed-save paths.

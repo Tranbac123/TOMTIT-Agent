@@ -102,6 +102,13 @@ _CLARIFICATION_CUE = re.compile(
     r'cần\s+thêm\s+thông\s+tin)',
     re.IGNORECASE,
 )
+# P0-6B: narrow guard for "ghi chú về tôi: <content>" — catches the false positive where
+# "về" would be captured as note_name by the main write-note regex.  Also handles the
+# common typo "ghi chứ" (ứ instead of ú).  Kept narrow: only "về tôi / bản thân / mình".
+_ABOUT_ME_NOTE_GUARD = re.compile(
+    r'^(?:Lưu|Ghi)\s+(?:vào\s+)?ghi\s+(?:chú|chứ)\s+về\s+(?:tôi|bản\s+thân|mình)\s*:\s*(.+)',
+    re.IGNORECASE | re.DOTALL,
+)
 
 
 class RuleBasedIntentParser:
@@ -262,6 +269,24 @@ class RuleBasedIntentParser:
         )
 
     def _parse_write_note(self, text: str) -> ParsedIntent:
+        # P0-6B: "Lưu ghi chú về tôi: <content>" — "về" is NOT the note_name.
+        # Guard must run before the main regex so "về" is never captured as note_name.
+        about_me = _ABOUT_ME_NOTE_GUARD.match(text)
+        if about_me:
+            content: str | None = about_me.group(1).strip() or None
+            missing: list[str] = ["note_name"]
+            if not content:
+                missing.append("content")
+            return ParsedIntent(
+                intent=IntentName.WRITE_NOTE,
+                confidence=0.9,
+                source="rule",
+                raw_text=text,
+                note_name=None,
+                content=content,
+                missing_slots=tuple(missing),
+            )
+
         m = re.match(
             r'^(?:Lưu|Ghi)\s+(?:vào\s+)?ghi\s+chú\s+(\S+)(?:\s+(.+))?',
             text,
@@ -269,7 +294,7 @@ class RuleBasedIntentParser:
         )
         note_name = m.group(1) if m else None
         content = m.group(2) if m and m.group(2) else None
-        missing: list[str] = []
+        missing = []
         if not note_name:
             missing.append("note_name")
         if not content:
