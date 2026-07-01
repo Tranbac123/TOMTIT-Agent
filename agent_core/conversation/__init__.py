@@ -13,6 +13,11 @@ from agent_core.conversation.llm_responder import (
 )
 from agent_core.conversation.models import ConversationRoute, RouteResult, TraceMeaning
 from agent_core.conversation.pending_state import PendingConversationState
+from agent_core.conversation.profile_memory import (
+    PendingProfileConfirmationState,
+    ProfileFactCandidate,
+    ProfileQuery,
+)
 from agent_core.conversation.response_composer import ResponseComposer
 from agent_core.conversation.router import ConversationRouter
 
@@ -24,6 +29,9 @@ __all__ = [
     "RouteResult",
     "TraceMeaning",
     "PendingConversationState",
+    "PendingProfileConfirmationState",
+    "ProfileFactCandidate",
+    "ProfileQuery",
     "ResponseComposer",
     "ConversationRouter",
 ]

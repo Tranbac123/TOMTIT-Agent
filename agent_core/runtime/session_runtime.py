@@ -11,6 +11,17 @@ from uuid import uuid4
 from agent_core.conversation.llm_responder import LLMResponderRequest, TextLLMResponder
 from agent_core.conversation.models import ConversationRoute
 from agent_core.conversation.pending_state import PendingConversationState
+from agent_core.conversation.profile_memory import (
+    PROFILE_CANCEL,
+    PROFILE_CONFIRM,
+    PendingProfileConfirmationState,
+    ProfileFactCandidate,
+    answer_profile_query,
+    build_confirmation_prompt,
+    detect_profile_fact_candidate,
+    detect_profile_query,
+    save_confirmed_profile_fact,
+)
 from agent_core.conversation.response_composer import ResponseComposer
 from agent_core.conversation.router import ConversationRouter
 from agent_core.memory.base import MemoryStoreProtocol
@@ -105,6 +116,8 @@ class SessionRuntime:
         self._llm_responder = llm_responder
         # CONV-P0 P0-6B: short-term pending state for note slot continuation (session-local).
         self._pending_conversation_state: PendingConversationState | None = None
+        # CONV-P0 P0-7B: short-term pending state for profile fact confirmation (session-local).
+        self._pending_profile_confirmation: PendingProfileConfirmationState | None = None
         if session is not None:
             self._session = session
         else:
@@ -126,7 +139,18 @@ class SessionRuntime:
             session_id=self._session.session_id,
         )
 
-        # CONV-P0 P0-6B: pending slot continuation — checked before conversation routing.
+        # CONV-P0 P0-7B priority 1: profile fact confirmation pending.
+        if self._pending_profile_confirmation is not None:
+            result = self._try_handle_profile_confirmation(user_message, state)
+            if result is not None:
+                return result
+            state = AgentState(
+                goal=user_message,
+                memory=self._store,
+                session_id=self._session.session_id,
+            )
+
+        # CONV-P0 P0-6B priority 2: pending note slot continuation.
         if self._pending_conversation_state is not None:
             pending_result = self._try_handle_pending(user_message, state)
             if pending_result is not None:
@@ -137,6 +161,16 @@ class SessionRuntime:
                 memory=self._store,
                 session_id=self._session.session_id,
             )
+
+        # CONV-P0 P0-7B priority 3: profile query — answer from confirmed facts before router.
+        profile_answer = self._maybe_answer_profile_query(user_message, state)
+        if profile_answer is not None:
+            return profile_answer
+
+        # CONV-P0 P0-7B priority 4: profile fact candidate — ask confirmation.
+        profile_pending = self._maybe_start_profile_confirmation(user_message, state)
+        if profile_pending is not None:
+            return profile_pending
 
         # CONV-P0 P0-3 seam: classify before runtime. Direct/clarification routes complete
         # the state here WITHOUT planner/tool/memory; everything else falls through to run().
@@ -267,6 +301,106 @@ class SessionRuntime:
         return state
 
     # ------------------------------------------------------------------
+    # CONV-P0 P0-7B — user profile memory
+    # ------------------------------------------------------------------
+
+    def _try_handle_profile_confirmation(
+        self, user_message: str, state: AgentState
+    ) -> AgentState | None:
+        """Handle turns when a profile fact confirmation is pending.
+
+        Returns a completed AgentState if handled, or None to fall through.
+        """
+        pending = self._pending_profile_confirmation
+        assert pending is not None
+        text = user_message.strip()
+
+        if PROFILE_CANCEL.match(text):
+            self._pending_profile_confirmation = None
+            state.history.append("conv:profile_confirmation_cancelled")
+            state.complete("Đã hủy. Tôi sẽ không lưu thông tin này.")
+            state.history.append("conv:state_finalized")
+            self._record_terminal_state(state)
+            return state
+
+        if PROFILE_CONFIRM.match(text):
+            self._pending_profile_confirmation = None
+            state.history.append("conv:profile_confirmation_accepted")
+            ok = save_confirmed_profile_fact(
+                pending.candidate, self._store, state.session_id
+            )
+            if ok:
+                state.complete("Đã lưu.")
+            else:
+                state.errors.append("profile_save_failed")
+                state.complete("Không thể lưu thông tin. Vui lòng thử lại.")
+            state.history.append("conv:state_finalized")
+            self._record_terminal_state(state)
+            return state
+
+        # Clear on decisive non-profile direct/clarification routes (identity, greeting, …).
+        # Mirrors P0-6B _try_handle_pending step 3 logic.
+        route_result = self._conversation_router.route(state)
+        if route_result.route in _CONV_DIRECT_ROUTES:
+            self._pending_profile_confirmation = None
+            return None
+
+        # Clear on complete runtime commands (calc, read_note, …).
+        # Mirrors P0-6B _try_handle_pending step 4 logic.
+        parsed = SlotValidator().validate(RuleBasedIntentParser().parse(text))
+        if parsed.intent in _CLEAR_PENDING_ON_COMPLETE_INTENT and not parsed.missing_slots:
+            self._pending_profile_confirmation = None
+            return None
+
+        # Expiration
+        if len(self._session.turns) - pending.created_at_turn >= pending.expires_after_turns:
+            self._pending_profile_confirmation = None
+            return None
+
+        # Everything else: reprompt
+        state.history.append("conv:profile_confirmation_reprompt")
+        state.complete(pending.prompt_text)
+        state.history.append("conv:state_finalized")
+        self._record_terminal_state(state)
+        return state
+
+    def _maybe_answer_profile_query(
+        self, user_message: str, state: AgentState
+    ) -> AgentState | None:
+        """Return a completed AgentState if the message is a profile query with a known answer."""
+        query = detect_profile_query(user_message.strip())
+        if query is None:
+            return None
+        answer = answer_profile_query(query, self._store)
+        if answer is None:
+            return None
+        state.history.append("conv:profile_query_answered")
+        state.complete(answer)
+        state.history.append("conv:state_finalized")
+        self._record_terminal_state(state)
+        return state
+
+    def _maybe_start_profile_confirmation(
+        self, user_message: str, state: AgentState
+    ) -> AgentState | None:
+        """Detect a profile fact candidate and start a confirmation pending if found."""
+        candidate = detect_profile_fact_candidate(user_message.strip())
+        if candidate is None:
+            return None
+        prompt = build_confirmation_prompt(candidate)
+        self._pending_profile_confirmation = PendingProfileConfirmationState(
+            kind="profile_fact_confirmation",
+            candidate=candidate,
+            prompt_text=prompt,
+            session_id=self.session_id,
+            created_at_turn=len(self._session.turns),
+        )
+        state.history.append("conv:profile_candidate_detected")
+        state.complete(prompt)
+        state.history.append("conv:state_finalized")
+        self._record_terminal_state(state)
+        return state
+
     # CONV-P0 P0-6B — pending note slot continuation
     # ------------------------------------------------------------------
 
@@ -314,12 +448,17 @@ class SessionRuntime:
             self._pending_conversation_state = None
             return None
 
-        # 5. Expiration check — expire after `expires_after_turns` unresolved turns.
+        # 5. Profile query — clear note pending and fall through to profile query handler.
+        if detect_profile_query(text) is not None:
+            self._pending_conversation_state = None
+            return None
+
+        # 6. Expiration check — expire after `expires_after_turns` unresolved turns.
         if len(self._session.turns) - pending.created_at_turn >= pending.expires_after_turns:
             self._pending_conversation_state = None
             return None
 
-        # 6. Treat remaining input as the note_name slot answer.
+        # 7. Treat remaining input as the note_name slot answer.
         return self._resume_write_note(pending, note_name=text, state=state)
 
     def _resume_write_note(
