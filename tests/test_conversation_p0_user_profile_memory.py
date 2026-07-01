@@ -370,3 +370,215 @@ def test_existing_p0_6b_pending_note_flow_still_works():
 
     s3 = sr.handle_turn("Đọc ghi chú tamtrang")
     assert "hôm nay mình rất vui" in (s3.final_answer or "")
+
+
+# ===========================================================================
+# P0-7C tests — profile recall bugfix + relation synonyms + profile summary
+# ===========================================================================
+
+# ---------------------------------------------------------------------------
+# 1. self-identity query: exact "tôi là ai?" still works
+# ---------------------------------------------------------------------------
+
+def test_self_identity_query_accepts_exact_toi_la_ai_question():
+    sr = _make_sr()
+    _confirm_self_name(sr, "Bắc")
+
+    s = sr.handle_turn("tôi là ai?")
+    assert s.status == AgentStatus.COMPLETED
+    assert "Bắc" in (s.final_answer or "")
+
+
+# ---------------------------------------------------------------------------
+# 2. "tôi là AI enginer" must NOT trigger self-name recall (root bug)
+# ---------------------------------------------------------------------------
+
+def test_toi_la_ai_engineer_does_not_answer_self_name():
+    sr = _make_sr()
+    _confirm_self_name(sr, "Bắc")
+
+    s = sr.handle_turn("tôi là AI enginer")
+    assert s.status == AgentStatus.COMPLETED
+    assert "Bạn tên là Bắc" not in (s.final_answer or ""), (
+        "Self-name must not be returned for an occupational statement"
+    )
+
+
+# ---------------------------------------------------------------------------
+# 3. "note tôi là AI enginer" must NOT trigger self-name recall
+# ---------------------------------------------------------------------------
+
+def test_note_toi_la_ai_engineer_does_not_answer_self_name():
+    sr = _make_sr()
+    _confirm_self_name(sr, "Bắc")
+
+    s = sr.handle_turn("note tôi là AI enginer")
+    assert s.status == AgentStatus.COMPLETED
+    assert "Bạn tên là Bắc" not in (s.final_answer or ""), (
+        "Self-name must not be returned when note prefix is present"
+    )
+
+
+# ---------------------------------------------------------------------------
+# 4. "người yêu của tôi là ai" must NOT answer self-name (without relation fact)
+# ---------------------------------------------------------------------------
+
+def test_nguoi_yeu_cua_toi_la_ai_does_not_answer_self_name_without_relation_fact():
+    sr = _make_sr()
+    _confirm_self_name(sr, "Bắc")  # only self-name confirmed; no relation fact
+
+    s = sr.handle_turn("người yêu của tôi là ai")
+    assert s.status == AgentStatus.COMPLETED
+    assert "Bạn tên là Bắc" not in (s.final_answer or ""), (
+        "Relation query must not return self-name"
+    )
+
+
+# ---------------------------------------------------------------------------
+# 5. "người yêu của tôi là ai" answers from confirmed bạn gái fact
+# ---------------------------------------------------------------------------
+
+def test_nguoi_yeu_cua_toi_la_ai_answers_relation_after_ban_gai_confirmed():
+    sr = _make_sr()
+    sr.handle_turn("bạn gái tôi tên là Quý")
+    sr.handle_turn("có")
+
+    s = sr.handle_turn("người yêu của tôi là ai")
+    assert s.status == AgentStatus.COMPLETED
+    assert "Quý" in (s.final_answer or ""), (
+        "Synonym 'người yêu' query should resolve confirmed 'bạn gái' fact"
+    )
+
+
+# ---------------------------------------------------------------------------
+# 6. "người yêu tôi tên gì?" answers from confirmed bạn gái fact
+# ---------------------------------------------------------------------------
+
+def test_nguoi_yeu_toi_ten_gi_answers_relation_after_ban_gai_confirmed():
+    sr = _make_sr()
+    sr.handle_turn("bạn gái tôi tên là Quý")
+    sr.handle_turn("có")
+
+    s = sr.handle_turn("người yêu tôi tên gì?")
+    assert s.status == AgentStatus.COMPLETED
+    assert "Quý" in (s.final_answer or "")
+
+
+# ---------------------------------------------------------------------------
+# 7. "partner của tôi tên gì?" answers from confirmed bạn gái fact
+# ---------------------------------------------------------------------------
+
+def test_partner_query_answers_relation_after_ban_gai_confirmed():
+    sr = _make_sr()
+    sr.handle_turn("bạn gái tôi tên là Quý")
+    sr.handle_turn("có")
+
+    s = sr.handle_turn("partner của tôi tên gì?")
+    assert s.status == AgentStatus.COMPLETED
+    assert "Quý" in (s.final_answer or ""), (
+        "Synonym 'partner' query should resolve confirmed 'bạn gái' fact"
+    )
+
+
+# ---------------------------------------------------------------------------
+# 8. Profile summary — empty state
+# ---------------------------------------------------------------------------
+
+def test_profile_summary_empty_state():
+    sr = _make_sr()
+
+    s = sr.handle_turn("bạn biết gì về tôi?")
+    assert s.status == AgentStatus.COMPLETED
+    answer = s.final_answer or ""
+    assert "chưa" in answer.lower() or "không" in answer.lower() or len(answer) > 0
+    # Must not hallucinate any name
+    assert "Bắc" not in answer
+    assert "Quý" not in answer
+
+
+# ---------------------------------------------------------------------------
+# 9. Profile summary lists confirmed self-name and relation
+# ---------------------------------------------------------------------------
+
+def test_profile_summary_lists_confirmed_self_name_and_relation():
+    sr = _make_sr()
+    _confirm_self_name(sr, "Bắc")
+    sr.handle_turn("bạn gái tôi tên là Quý")
+    sr.handle_turn("có")
+
+    s = sr.handle_turn("bạn nhớ gì về tôi?")
+    assert s.status == AgentStatus.COMPLETED
+    answer = s.final_answer or ""
+    assert "Bắc" in answer
+    assert "Quý" in answer
+
+
+# ---------------------------------------------------------------------------
+# 10. Profile summary does NOT include note contents
+# ---------------------------------------------------------------------------
+
+def test_profile_summary_does_not_include_notes():
+    sr = _make_sr()
+    # Write a note via P0-6B flow
+    sr.handle_turn("Lưu ghi chú về mèo: mèo của tôi tên là Mimi")
+    sr.handle_turn("catname")  # provide note_name
+
+    s = sr.handle_turn("bạn lưu gì về tôi?")
+    assert s.status == AgentStatus.COMPLETED
+    assert "Mimi" not in (s.final_answer or ""), (
+        "Profile summary must not include note contents"
+    )
+
+
+# ---------------------------------------------------------------------------
+# 11. "tôi vừa hỏi gì bạn?" still not handled by profile memory (regression)
+# ---------------------------------------------------------------------------
+
+def test_toi_vua_hoi_gi_ban_still_not_profile_memory():
+    sr = _make_sr()
+    s = sr.handle_turn("tôi vừa hỏi gì bạn?")
+
+    assert s.status == AgentStatus.COMPLETED
+    assert "đã lưu" not in (s.final_answer or "").lower()
+    assert sr._pending_profile_confirmation is None
+
+
+# ---------------------------------------------------------------------------
+# 12. Existing P0-7B self-name and relation queries still work (regression)
+# ---------------------------------------------------------------------------
+
+def test_existing_p0_7b_self_name_and_relation_queries_still_work():
+    sr = _make_sr()
+    _confirm_self_name(sr, "Bắc")
+    sr.handle_turn("bạn gái tôi tên là Quý")
+    sr.handle_turn("có")
+
+    s_name = sr.handle_turn("tôi tên là gì?")
+    assert "Bắc" in (s_name.final_answer or "")
+
+    s_rel = sr.handle_turn("bạn gái tôi tên gì?")
+    assert "Quý" in (s_rel.final_answer or "")
+
+    s_inv = sr.handle_turn("Quý là ai?")
+    assert "Quý" in (s_inv.final_answer or "")
+    assert "bạn gái" in (s_inv.final_answer or "").lower()
+
+
+# ---------------------------------------------------------------------------
+# 13. P0-6B pending note flow still works (regression guard)
+# ---------------------------------------------------------------------------
+
+def test_p0_6b_flow_unaffected_by_p0_7c():
+    sr = _make_sr()
+    # Use "về tôi" form — same as test 23 which is known to trigger P0-6B pending.
+    s1 = sr.handle_turn("Lưu ghi chú về tôi: hoàn thành P0-7C hôm nay")
+    assert s1.status == AgentStatus.COMPLETED
+    assert sr._pending_conversation_state is not None, "P0-6B pending must be set"
+    assert sr._pending_profile_confirmation is None
+
+    s2 = sr.handle_turn("p07cwork")
+    assert s2.status == AgentStatus.COMPLETED
+    assert sr._pending_conversation_state is None
+
+    s3 = sr.handle_turn("Đọc ghi chú p07cwork")
+    assert "hoàn thành P0-7C hôm nay" in (s3.final_answer or "")

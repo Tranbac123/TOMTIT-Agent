@@ -1,7 +1,12 @@
-"""CONV-P0 P0-7B: Rule-based user profile fact detection and retrieval.
+"""CONV-P0 P0-7B/7C: Rule-based user profile fact detection and retrieval.
 
 Provider-free. Covers self-name and four close-relation-name facts.
 No LLM, no network, no TOMTIT-Memory changes.
+
+P0-7C adds:
+- anchored self-identity query (prevents "tôi là AI engineer" from triggering recall)
+- relation synonym queries: người yêu, partner → match bạn gái/bạn trai records
+- profile summary query: bạn biết/nhớ gì về tôi?
 """
 from __future__ import annotations
 
@@ -41,7 +46,10 @@ class PendingProfileConfirmationState:
 
 @dataclass(frozen=True)
 class ProfileQuery:
-    kind: Literal["self_name", "self_identity", "relation_name", "inverse_value"]
+    kind: Literal[
+        "self_name", "self_identity", "relation_name",
+        "inverse_value", "profile_summary",
+    ]
     value: str | None = None          # for inverse_value: the name to look up
     relation_label: str | None = None  # for relation_name
 
@@ -52,7 +60,12 @@ class ProfileQuery:
 
 _QUESTION_WORDS = frozenset({"ai", "gì", "đây", "đó", "thế", "sao", "vậy", "như_thế_nào"})
 
-_RELATIONS_PATTERN = r'(bạn\s+gái|bạn\s+trai|vợ|chồng)'
+# Storage-level relation labels (used in candidate detection and save).
+_RELATIONS_CANDIDATE_PATTERN = r'(bạn\s+gái|bạn\s+trai|vợ|chồng)'
+
+# Query-level relation labels: storage labels + P0-7C synonyms (người yêu, partner).
+# Order: longer matches first to avoid partial overlap.
+_RELATIONS_QUERY_PATTERN = r'(bạn\s+gái|bạn\s+trai|người\s+yêu|vợ|chồng|partner)'
 
 _RELATION_TAG_MAP: dict[str, str] = {
     "bạn gái": "ban_gai",
@@ -60,6 +73,21 @@ _RELATION_TAG_MAP: dict[str, str] = {
     "vợ": "vo",
     "chồng": "chong",
 }
+
+# P0-7C: synonym expansion for relation queries. Keys are query labels that should
+# match stored facts with any of the listed relation_label values.
+_RELATION_SYNONYM_MAP: dict[str, frozenset[str]] = {
+    "người yêu": frozenset({"bạn gái", "bạn trai", "người yêu", "partner"}),
+    "partner": frozenset({"bạn gái", "bạn trai", "người yêu", "partner"}),
+}
+
+
+def _get_lookup_labels(query_label: str | None) -> frozenset[str]:
+    """Expand a query relation label to the set of stored labels to search."""
+    if query_label is None:
+        return frozenset()
+    return _RELATION_SYNONYM_MAP.get(query_label, frozenset({query_label}))
+
 
 # --- Candidate detection ---
 
@@ -73,7 +101,7 @@ _RE_TEN_TOI_LA = re.compile(
     r'^tên\s+(?:tôi|mình)\s+là\s+([^\s.!?,]+)\s*[.!?]*\s*$',
     re.IGNORECASE | re.DOTALL,
 )
-# "lưu tên tôi là Bắc", "(lưu) tên tôi là Bắc"
+# "lưu tên tôi là Bắc"
 _RE_LUU_TEN_LA = re.compile(
     r'^lưu\s+tên\s+(?:tôi|mình)\s+là\s+([^\s.!?,]+)\s*[.!?]*\s*$',
     re.IGNORECASE | re.DOTALL,
@@ -83,31 +111,53 @@ _RE_SELF_IS = re.compile(
     r'^(?:tôi|mình)\s+là\s+([^\s.!?,]+)\s*[.!?]*\s*$',
     re.DOTALL,
 )
-# Relation-name: "bạn gái tôi tên là Quý"
+# Relation-name candidate: "bạn gái tôi tên là Quý"
 _RE_RELATION_NAME = re.compile(
-    r'^' + _RELATIONS_PATTERN + r'\s+(?:tôi|mình)\s+tên\s+là\s+([^\s.!?,]+)\s*[.!?]*\s*$',
+    r'^' + _RELATIONS_CANDIDATE_PATTERN + r'\s+(?:tôi|mình)\s+tên\s+là\s+([^\s.!?,]+)\s*[.!?]*\s*$',
     re.IGNORECASE | re.DOTALL,
 )
 
 # --- Query detection ---
 
+# Self-name queries — unanchored (.search) intentional for "bạn nhớ tôi tên gì không?"
 _RE_SELF_NAME_Q = re.compile(
     r'(?:tôi|mình|bạn)\s+tên\s+(?:là\s+)?g[ìi]\s*\??'
     r'|tên\s+(?:tôi|mình|bạn)\s+(?:là\s+)?g[ìi]\s*\??'
     r'|bạn\s+nhớ\s+(?:tôi|mình)\s+tên\s+g[ìi]',
     re.IGNORECASE,
 )
+
+# P0-7C FIX: fully anchored — prevents substring match inside
+# "tôi là AI engineer", "note tôi là AI engineer", "người yêu của tôi là ai".
 _RE_SELF_IDENTITY_Q = re.compile(
-    r'(?:tôi|mình)\s+là\s+ai\s*\??',
+    r'^\s*(?:tôi|mình)\s+là\s+ai\s*[?？]?\s*$',
     re.IGNORECASE,
 )
+
+# Relation name query — "tên gì?" form. Includes P0-7C synonyms and optional "của".
+# Anchored to prevent substring matches; uses extended query pattern.
 _RE_RELATION_NAME_Q = re.compile(
-    r'^' + _RELATIONS_PATTERN + r'\s+(?:tôi|mình)\s+tên\s+(?:là\s+)?g[ìi]\s*\??',
+    r'^' + _RELATIONS_QUERY_PATTERN
+    + r'(?:\s+của)?\s+(?:tôi|mình)\s+tên\s+(?:là\s+)?g[ìi]\s*[?？]?\s*$',
     re.IGNORECASE,
 )
-# "Bắc là ai?" / "Quý là ai?" — subject must NOT be tôi/mình/bạn
+
+# P0-7C NEW: relation "là ai?" form — "người yêu của tôi là ai?", "bạn gái của tôi là ai?"
+_RE_RELATION_LA_AI_Q = re.compile(
+    r'^' + _RELATIONS_QUERY_PATTERN
+    + r'(?:\s+của)?\s+(?:tôi|mình)\s+là\s+ai\s*[?？]?\s*$',
+    re.IGNORECASE,
+)
+
+# P0-7C NEW: profile summary queries — "bạn biết/nhớ/lưu gì về tôi?"
+_RE_PROFILE_SUMMARY_Q = re.compile(
+    r'^\s*bạn\s+(?:biết|nhớ|lưu|đang\s+nhớ)\s+(?:gì\s+)?về\s+(?:tôi|mình)\s*[?？]?\s*$',
+    re.IGNORECASE,
+)
+
+# "Bắc là ai?" / "Quý là ai?" — subject must NOT be self-words
 _RE_INVERSE_Q = re.compile(
-    r'^([^\s.!?,]+)\s+là\s+ai\s*\??',
+    r'^([^\s.!?,]+)\s+là\s+ai\s*[?？]?\s*$',
     re.IGNORECASE,
 )
 _SELF_WORDS = frozenset({"tôi", "mình", "bạn", "tao", "ta"})
@@ -167,7 +217,7 @@ def detect_profile_fact_candidate(text: str) -> ProfileFactCandidate | None:
                 value=value, original_text=stripped,
             )
 
-    # Relation-name
+    # Relation-name (storage labels only — synonym capture is out of P0-7C scope)
     m = _RE_RELATION_NAME.match(stripped)
     if m:
         raw_label = m.group(1).strip()
@@ -183,24 +233,45 @@ def detect_profile_fact_candidate(text: str) -> ProfileFactCandidate | None:
 
 
 def detect_profile_query(text: str) -> ProfileQuery | None:
-    """Return a ProfileQuery if text is a profile question, else None."""
+    """Return a ProfileQuery if text is a profile question, else None.
+
+    Priority order (P0-7C):
+    1. Relation name "tên gì?" — anchored, extended with synonyms
+    2. Relation "là ai?" — new form, anchored
+    3. Profile summary — new
+    4. Self-name — unanchored (.search) for "bạn nhớ tôi tên gì không?"
+    5. Self-identity — FIXED: fully anchored to prevent substring match
+    6. Inverse value lookup
+    """
     stripped = text.strip()
 
-    # Relation-name query (check before self-name to avoid partial overlap)
+    # 1. Relation name "tên gì?" form (includes synonyms + optional "của")
     m = _RE_RELATION_NAME_Q.match(stripped)
     if m:
         label = _normalize_relation_label(m.group(1))
         return ProfileQuery(kind="relation_name", relation_label=label)
 
-    # Self-name query
+    # 2. P0-7C: relation "là ai?" form — "người yêu của tôi là ai?"
+    m = _RE_RELATION_LA_AI_Q.match(stripped)
+    if m:
+        label = _normalize_relation_label(m.group(1))
+        return ProfileQuery(kind="relation_name", relation_label=label)
+
+    # 3. P0-7C: profile summary — "bạn biết/nhớ gì về tôi?"
+    if _RE_PROFILE_SUMMARY_Q.match(stripped):
+        return ProfileQuery(kind="profile_summary")
+
+    # 4. Self-name query (unanchored search; relation checks above guard against overlap)
     if _RE_SELF_NAME_Q.search(stripped):
         return ProfileQuery(kind="self_name")
 
-    # Self-identity query
-    if _RE_SELF_IDENTITY_Q.search(stripped):
+    # 5. Self-identity — P0-7C FIX: fully anchored, use .match() not .search().
+    # Prevents "tôi là AI engineer", "note tôi là AI...", "người yêu của tôi là ai"
+    # from triggering self-identity recall via substring match.
+    if _RE_SELF_IDENTITY_Q.match(stripped):
         return ProfileQuery(kind="self_identity")
 
-    # Inverse lookup: "Bắc là ai?" — exclude self-words as subject
+    # 6. Inverse lookup: "Bắc là ai?" — exclude self-words as subject
     m = _RE_INVERSE_Q.match(stripped)
     if m:
         subject_word = m.group(1).strip().lower().rstrip('?')
@@ -300,15 +371,19 @@ def answer_profile_query(
                 return f"Bạn tên là {name}."
 
     elif query.kind == "relation_name":
+        # P0-7C: expand query label via synonym map so "người yêu" matches "bạn gái" records.
+        lookup_labels = _get_lookup_labels(query.relation_label)
         for rec in confirmed:
+            stored_label = rec.metadata.get("relation_label", "")
             if (
                 rec.metadata.get("subject") == "relation"
                 and rec.metadata.get("relation") == "name"
-                and rec.metadata.get("relation_label") == query.relation_label
+                and stored_label in lookup_labels
             ):
                 name = rec.metadata.get("value", "")
-                label = query.relation_label or ""
-                return f"{label.capitalize()} của bạn tên là {name}."
+                # Use stored label for display accuracy.
+                display_label = stored_label or query.relation_label or ""
+                return f"{display_label.capitalize()} của bạn tên là {name}."
 
     elif query.kind == "inverse_value":
         lookup = (query.value or "").lower()
@@ -322,5 +397,21 @@ def answer_profile_query(
                 elif subject == "relation":
                     rel = rec.metadata.get("relation_label", "người liên quan")
                     return f"{val_display} là {rel} của bạn."
+
+    elif query.kind == "profile_summary":
+        # P0-7C: list all confirmed profile facts; exclude notes.
+        lines: list[str] = []
+        for rec in confirmed:
+            subject = rec.metadata.get("subject", "")
+            rel = rec.metadata.get("relation", "")
+            val = rec.metadata.get("value", "")
+            if subject == "self" and rel == "name":
+                lines.append(f"- Bạn tên là {val}.")
+            elif subject == "relation" and rel == "name":
+                rel_label = rec.metadata.get("relation_label", "người liên quan")
+                lines.append(f"- {rel_label.capitalize()} của bạn tên là {val}.")
+        if not lines:
+            return "Tôi chưa có thông tin hồ sơ nào đã được xác nhận về bạn."
+        return "Tôi đang nhớ những thông tin sau về bạn:\n" + "\n".join(lines)
 
     return None

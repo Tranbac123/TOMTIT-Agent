@@ -118,6 +118,11 @@ class SessionRuntime:
         self._pending_conversation_state: PendingConversationState | None = None
         # CONV-P0 P0-7B: short-term pending state for profile fact confirmation (session-local).
         self._pending_profile_confirmation: PendingProfileConfirmationState | None = None
+        # CONV-P0 P0-7C: count of profile facts confirmed in this session. Used to gate
+        # profile_summary store reads — avoids reading store for sessions with no profile facts,
+        # which preserves the zero-side-effect guarantee for the "bạn biết gì về tôi?" route
+        # when no facts have been saved.
+        self._confirmed_profile_fact_count: int = 0
         if session is not None:
             self._session = session
         else:
@@ -330,6 +335,7 @@ class SessionRuntime:
                 pending.candidate, self._store, state.session_id
             )
             if ok:
+                self._confirmed_profile_fact_count += 1
                 state.complete("Đã lưu.")
             else:
                 state.errors.append("profile_save_failed")
@@ -367,9 +373,18 @@ class SessionRuntime:
     def _maybe_answer_profile_query(
         self, user_message: str, state: AgentState
     ) -> AgentState | None:
-        """Return a completed AgentState if the message is a profile query with a known answer."""
+        """Return a completed AgentState if the message is a profile query with a known answer.
+
+        For profile_summary queries: skip store read entirely when no facts have been
+        confirmed this session. This preserves the zero-side-effect contract for sessions
+        with no profile data (the router's CLARIFICATION response handles those turns).
+        """
         query = detect_profile_query(user_message.strip())
         if query is None:
+            return None
+        # P0-7C: profile_summary reads store; gate it on session-local fact count to avoid
+        # store reads when no facts were ever saved in this session.
+        if query.kind == "profile_summary" and self._confirmed_profile_fact_count == 0:
             return None
         answer = answer_profile_query(query, self._store)
         if answer is None:
