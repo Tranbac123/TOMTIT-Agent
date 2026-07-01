@@ -14,12 +14,16 @@ from agent_core.conversation.pending_state import PendingConversationState
 from agent_core.conversation.profile_memory import (
     PROFILE_CANCEL,
     PROFILE_CONFIRM,
+    AutoProfileCandidate,
     PendingProfileConfirmationState,
     ProfileFactCandidate,
     answer_profile_query,
+    build_auto_ack_message,
     build_confirmation_prompt,
+    detect_auto_profile_candidate,
     detect_profile_fact_candidate,
     detect_profile_query,
+    save_auto_profile_fact,
     save_confirmed_profile_fact,
 )
 from agent_core.conversation.response_composer import ResponseComposer
@@ -176,6 +180,11 @@ class SessionRuntime:
         profile_pending = self._maybe_start_profile_confirmation(user_message, state)
         if profile_pending is not None:
             return profile_pending
+
+        # CONV-P0 P0-7D priority 5: auto-save low-risk self-profile facts without confirmation.
+        auto_saved = self._maybe_auto_save_profile_fact(user_message, state)
+        if auto_saved is not None:
+            return auto_saved
 
         # CONV-P0 P0-3 seam: classify before runtime. Direct/clarification routes complete
         # the state here WITHOUT planner/tool/memory; everything else falls through to run().
@@ -412,6 +421,29 @@ class SessionRuntime:
         )
         state.history.append("conv:profile_candidate_detected")
         state.complete(prompt)
+        state.history.append("conv:state_finalized")
+        self._record_terminal_state(state)
+        return state
+
+    def _maybe_auto_save_profile_fact(
+        self, user_message: str, state: AgentState
+    ) -> AgentState | None:
+        """AUTO_SAFE write: save low-risk self-profile facts without user confirmation.
+
+        Fires only when: occupation/preference/goal/learning_focus candidate detected,
+        no question mark, no note/command prefix. Never fires for relation.name (those
+        still require explicit confirmation via _maybe_start_profile_confirmation).
+        """
+        candidate = detect_auto_profile_candidate(user_message.strip())
+        if candidate is None:
+            return None
+        ok = save_auto_profile_fact(candidate, self._store, state.session_id)
+        if not ok:
+            return None
+        self._confirmed_profile_fact_count += 1
+        ack = build_auto_ack_message(candidate)
+        state.history.append("conv:auto_profile_saved")
+        state.complete(ack)
         state.history.append("conv:state_finalized")
         self._record_terminal_state(state)
         return state
