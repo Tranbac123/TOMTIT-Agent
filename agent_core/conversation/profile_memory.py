@@ -52,7 +52,9 @@ class AutoProfileCandidate:
     """An AUTO_SAFE profile fact — written without confirmation."""
     subject: Literal["self"] = "self"
     relation: Literal[
-        "occupation", "preference", "goal", "learning_focus", "habit", "skill"
+        "occupation", "preference", "goal", "learning_focus", "habit", "skill",
+        # P0-7F-FIX4 Part D
+        "household_pet",
     ] = "occupation"
     value: str = ""
     original_text: str = ""
@@ -99,6 +101,8 @@ class ProfileQuery:
         "self_affection", "self_drink_preference",
         # P0-7F-FIX3
         "third_party_affection",
+        # P0-7F-FIX4
+        "friend_name", "self_pet",
     ]
     value: str | None = None          # for inverse_value: the name to look up
     relation_label: str | None = None  # for relation_name / relation_existence
@@ -465,6 +469,19 @@ _RE_DRINK_PREF_Q = re.compile(
     r'^(?:tôi|mình)\s+thích\s+(?:uống|ăn)\s+gì\s*[?？]?\s*$',
     re.IGNORECASE,
 )
+# P0-7F-FIX4 Part C: friend-name query — "bạn (của) tôi tên là gì?". Must be checked BEFORE
+# the self-name query, whose unanchored search would otherwise match the "tôi tên là gì"
+# substring and wrongly answer with the USER's own name. Bare "bạn tên là gì?" (about the
+# assistant) is intentionally NOT matched — it requires an explicit "tôi/mình" possessor.
+_RE_FRIEND_NAME_Q = re.compile(
+    r'^bạn\s+(?:của\s+)?(?:tôi|mình)\s+tên\s+(?:là\s+)?g[ìi]\s*[?？]?\s*$',
+    re.IGNORECASE,
+)
+# P0-7F-FIX4 Part D: household-pet query — "nhà tôi nuôi con gì?".
+_RE_PET_Q = re.compile(
+    r'^(?:nhà\s+)?(?:tôi|mình)\s+nuôi\s+(?:con\s+)?gì\s*[?？]?\s*$',
+    re.IGNORECASE,
+)
 
 # P0-7F-FIX2/FIX3: values that leaked into the preference store before the write guards
 # were in place. Filtered at read time (never deleted from durable store).
@@ -676,6 +693,15 @@ def detect_profile_query(text: str) -> ProfileQuery | None:
         subject = m.group(1).strip().rstrip('?')
         if subject.lower() not in _SELF_WORDS:
             return ProfileQuery(kind="third_party_affection", value=subject)
+
+    # 0.5. P0-7F-FIX4 Part C: friend-name query ("bạn của tôi tên là gì?"). Before the
+    #      self-name query so it never resolves to the user's own name.
+    if _RE_FRIEND_NAME_Q.match(stripped):
+        return ProfileQuery(kind="friend_name", relation_label="bạn")
+
+    # 0.6. P0-7F-FIX4 Part D: household-pet query ("nhà tôi nuôi con gì?").
+    if _RE_PET_Q.match(stripped):
+        return ProfileQuery(kind="self_pet")
 
     # 1. Relation name "tên gì?" form
     m = _RE_RELATION_NAME_Q.match(stripped)
@@ -929,6 +955,11 @@ def build_auto_ack_message(candidate: AutoProfileCandidate) -> str:
             f"Đã nhớ là bạn hay {value}. Khi nói về phượt hoặc di chuyển xa, mình sẽ ưu "
             "tiên nhắc đến an toàn, đồ bảo hộ, thời tiết và lịch trình nghỉ ngơi."
         )
+    if rel == "household_pet":
+        return (
+            f"Đã nhớ nhà bạn có nuôi một con {value}. Mình sẽ tính đến điều này khi trò "
+            "chuyện về thú cưng hoặc lịch sinh hoạt của bạn."
+        )
     return f"Đã nhớ {rel}: {value}."
 
 
@@ -1023,6 +1054,19 @@ def build_affection_explanation_response(value: str) -> str:
         f"Mình hiểu bạn đang giải thích về tình cảm với {value}. Mình sẽ không lưu đây là "
         f'sở thích thông thường. Nếu bạn muốn lưu rõ quan hệ, hãy nói: "người yêu của tôi '
         f'là {value}" hoặc "bạn gái của tôi là {value}".'
+    )
+
+
+def build_affection_relation_response(value: str) -> str:
+    """Response for an affection relation phrase ("tôi có tình cảm với X", "tôi crush X").
+
+    Acknowledges the feeling, refuses to store it as an ordinary preference, and offers the
+    explicit relationship phrasing that WOULD be saved (P0-7F-FIX4 Part A).
+    """
+    return (
+        f"Mình hiểu bạn có tình cảm với {value}. Mình sẽ không lưu đây là sở thích thông "
+        f'thường. Nếu bạn muốn lưu rõ quan hệ, hãy nói: "người yêu của tôi là {value}" '
+        f'hoặc "bạn gái của tôi là {value}".'
     )
 
 
@@ -1152,6 +1196,7 @@ def save_auto_profile_fact(
         "learning_focus": f"bạn đang học {candidate.value}",
         "habit": f"bạn hay {candidate.value}",
         "skill": f"bạn biết {candidate.value}",
+        "household_pet": f"nhà bạn có nuôi {candidate.value}",
     }
     content = _content_map.get(candidate.relation, f"{candidate.relation}: {candidate.value}")
 
@@ -1230,6 +1275,7 @@ class ProfileSnapshot:
     preferences_personal: list[str] = field(default_factory=list)
     preferences_professional: list[str] = field(default_factory=list)
     habits: list[str] = field(default_factory=list)
+    pets: list[str] = field(default_factory=list)  # P0-7F-FIX4: household pets
     relations: list[tuple[str, str]] = field(default_factory=list)  # (label, name)
 
 
@@ -1288,6 +1334,8 @@ def collect_profile_snapshot(store: "MemoryStoreProtocol") -> ProfileSnapshot:
                 _add(snap.preferences_personal, val)
         elif subject == "self" and rel == "habit":
             _add(snap.habits, val)
+        elif subject == "self" and rel == "household_pet":
+            _add(snap.pets, val)
         elif subject == "relation" and rel == "name":
             label = md.get("relation_label", "người liên quan")
             if (label, val) not in snap.relations:
@@ -1396,6 +1444,8 @@ def answer_profile_query(
             )
         if snap.habits:
             lines.append(f"- Bạn hay {', '.join(snap.habits)}.")
+        if snap.pets:
+            lines.append(f"- Nhà bạn có nuôi {', '.join(snap.pets)}.")
         for label, name in snap.relations:
             lines.append(f"- {label.capitalize()} của bạn tên là {name}.")
         if not lines:
@@ -1489,6 +1539,25 @@ def answer_profile_query(
             f"Mình không thể biết {subject} có thích bạn hay không nếu bạn chưa cung cấp "
             "thông tin đó."
         )
+
+    # --- P0-7F-FIX4 Part C: friend_name ("bạn của tôi tên là gì?") ---
+    elif query.kind == "friend_name":
+        for rec in confirmed:
+            if (
+                rec.metadata.get("subject") == "relation"
+                and rec.metadata.get("relation") == "name"
+                and rec.metadata.get("relation_label") == "bạn"
+            ):
+                name = rec.metadata.get("value", "")
+                return f"Bạn của bạn tên là {name}."
+        return "Mình chưa có thông tin đã lưu về tên bạn của bạn."
+
+    # --- P0-7F-FIX4 Part D: self_pet ("nhà tôi nuôi con gì?") ---
+    elif query.kind == "self_pet":
+        snap = collect_profile_snapshot(store)
+        if snap.pets:
+            return f"Nhà bạn có nuôi {', '.join(snap.pets)}."
+        return "Mình chưa có thông tin đã lưu về vật nuôi trong nhà bạn."
 
     # --- P0-7F-FIX2: self_drink_preference ("tôi thích uống gì?") ---
     elif query.kind == "self_drink_preference":

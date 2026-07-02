@@ -84,6 +84,16 @@ _PERSONAL_TOKENS: frozenset[str] = frozenset({
     "nhạc", "phim", "game", "bóng", "đá bóng", "chạy", "gym", "yoga",
 })
 
+# P0-7F-FIX4 Part B: common object/food/activity nouns that are ordinary preferences,
+# not person names. Guards the person-affinity heuristic (which otherwise over-fires on
+# short lowercase tokens like "kem"/"trà"/"phở", treating a dessert as someone the user
+# has feelings for). Bounded allowlist — deliberately NOT a general NER.
+_COMMON_OBJECT_TOKENS: frozenset[str] = frozenset({
+    "kem", "trà", "tra", "cafe", "cà phê", "ca phe", "bánh", "banh",
+    "phở", "pho", "bún", "bun", "cơm", "com", "game", "sách", "sach",
+    "nhạc", "nhac", "phim", "bóng đá", "bong da",
+})
+
 _VAGUE_VALUE_TOKENS: frozenset[str] = frozenset({
     "cái này", "cái đó", "cái kia", "việc này", "việc đó", "nó", "đó", "này",
     "gì", "gi",
@@ -156,6 +166,9 @@ def _is_person_affinity_value(value: str) -> bool:
     low = v.lower()
     if low in _PROFESSIONAL_TOKENS or low in _PERSONAL_TOKENS:
         return False
+    # P0-7F-FIX4 Part B: common object/food token → ordinary preference, not a person.
+    if low in _COMMON_OBJECT_TOKENS:
+        return False
     if _has_professional_token(v) or _has_personal_token(v):
         return False
     return v.replace("-", "").isalpha()
@@ -204,6 +217,26 @@ _RE_WANT = re.compile(
 _RE_RELATIONSHIP = re.compile(
     r'^(bạn\s+gái|bạn\s+trai|người\s+yêu|vợ|chồng|partner)\s+'
     r'(?:của\s+)?(?:tôi|mình)\s+(?:tên\s+)?là\s+([^\s.!?,]+)\s*[.!?]*\s*$',
+    re.IGNORECASE,
+)
+# P0-7F-FIX4 Part C: friend relation write — "bạn (của) tôi tên là meo". The bare label
+# "bạn" (friend) is distinct from "bạn gái/trai" (partner) handled by _RE_RELATIONSHIP, and
+# from "bạn" meaning the assistant. Requires an explicit "tôi/mình" possessor + "tên là".
+_RE_FRIEND_NAME = re.compile(
+    r'^bạn\s+(?:của\s+)?(?:tôi|mình)\s+tên\s+là\s+([^\s.!?,]+)\s*[.!?]*\s*$',
+    re.IGNORECASE,
+)
+# P0-7F-FIX4 Part A: affection relation phrase — "tôi có tình cảm/cảm tình với X",
+# "tôi crush X". Person target is group(1); never a hobby, always a clarify (no save).
+_RE_AFFECTION_RELATION = re.compile(
+    r'^(?:tôi|mình)\s+(?:có\s+(?:tình\s+cảm|cảm\s+tình)\s+với|crush)\s+(\S+)',
+    re.IGNORECASE,
+)
+# P0-7F-FIX4 Part D: household pet fact — "nhà tôi (có) nuôi (1 con) mèo", "tôi nuôi mèo".
+# Optional "nhà", optional quantifier, optional "con"; group(1) is the animal.
+_RE_HOUSEHOLD_PET = re.compile(
+    r'^(?:nhà\s+)?(?:tôi|mình)\s+(?:có\s+)?nuôi\s+'
+    r'(?:(?:\d+|một|hai|ba|vài|nhiều)\s+)?(?:con\s+)?(.+?)\s*[.!?]*\s*$',
     re.IGNORECASE,
 )
 
@@ -333,6 +366,28 @@ def classify_profile_semantic_intent(text: str) -> SemanticProfileIntent | None:
                 value=value, sensitivity="person_affinity", write_policy="clarify",
             )
 
+    # Affection relation phrase ("tôi có tình cảm với quý", "tôi crush quý") — clarify,
+    # never save as a hobby (P0-7F-FIX4 Part A). Person target captured for the response.
+    m = _RE_AFFECTION_RELATION.match(stripped)
+    if m:
+        value = _clean_value(m.group(1))
+        if value:
+            return SemanticProfileIntent(
+                kind="profile_write", category="affection_relation",
+                value=value, sensitivity="person_affinity", write_policy="clarify",
+            )
+
+    # Friend relation write ("bạn của tôi tên là meo") — stored as a relation named
+    # under the "bạn" (friend) label, distinct from partner labels (P0-7F-FIX4 Part C).
+    m = _RE_FRIEND_NAME.match(stripped)
+    if m:
+        value = _clean_value(m.group(1))
+        if value and not _is_unsafe_or_sensitive_auto_value(value):
+            return SemanticProfileIntent(
+                kind="profile_write", category="relationship.partner_name",
+                value=value, relation_label="bạn", write_policy="auto_safe",
+            )
+
     # Person-affection phrase: "người tôi thích tên là Quý".
     m = _RE_PERSON_AFFECTION_PHRASE.match(stripped)
     if m:
@@ -354,6 +409,17 @@ def classify_profile_semantic_intent(text: str) -> SemanticProfileIntent | None:
             return SemanticProfileIntent(
                 kind="profile_write", category="relationship.partner_name",
                 value=value, relation_label=label, write_policy="auto_safe",
+            )
+
+    # Household pet fact ("nhà tôi có nuôi 1 con mèo", "tôi nuôi mèo") — low-risk profile
+    # fact, saved without confirmation (P0-7F-FIX4 Part D). Only pet/animal possession.
+    m = _RE_HOUSEHOLD_PET.match(stripped)
+    if m:
+        value = _clean_value(m.group(1))
+        if _valid_value(value) and not _is_unsafe_or_sensitive_auto_value(value):
+            return SemanticProfileIntent(
+                kind="profile_write", category="household_pet",
+                value=value, write_policy="auto_safe",
             )
 
     # Preference ("tôi thích/mê/yêu thích/có sở thích X").

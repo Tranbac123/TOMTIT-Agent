@@ -21,6 +21,7 @@ from agent_core.conversation.profile_memory import (
     answer_profile_query,
     answer_yes_no_memory_query,
     build_affection_explanation_response,
+    build_affection_relation_response,
     build_auto_ack_message,
     build_blocked_value_response,
     build_confirmation_prompt,
@@ -97,6 +98,29 @@ _UNSUPPORTED_CURRENT_INFO_RESPONSE = (
     "Hiện tại trong runtime này tôi chưa hỗ trợ trả lời thời gian/ngày/thời tiết trực tiếp, "
     "nên chưa thể trả lời chính xác yêu cầu này. Tôi chưa gọi tool hay tra cứu dữ liệu nào "
     "cho việc này."
+)
+
+# CONV-P0 P0-7F-FIX4 Part E: unsupported open-knowledge Q&A ("mèo có phải là chó không?",
+# "AI là gì?"). This rule-based runtime has no LLM/web lookup, so obvious open-QA questions
+# get a deterministic "not supported" reply instead of the generic tool-example fallback —
+# a safe seam for a future P0-8A LLMResponder. Profile queries run first (priority 4) and are
+# never reached here; the definition lane is deliberately narrow (single-token subject) and
+# excludes identity/self words so "tomtit là gì?" / "bạn là gì?" stay DIRECT_RESPONSE and
+# multi-word prompts ("giải thích AI là gì?") keep flowing to the router.
+_OPEN_QA_STOP_SUBJECTS: frozenset[str] = frozenset({
+    "tôi", "mình", "bạn", "tao", "ta", "nó", "đây", "đó", "gì", "tomtit",
+})
+_RE_OPEN_QA_YESNO = re.compile(
+    r'^\S+\s+có\s+phải\s+là\s+.+\s+(?:không|ko)\s*[?？]?\s*$',
+    re.IGNORECASE,
+)
+_RE_OPEN_QA_DEFINITION = re.compile(
+    r'^([^\s?？]+)\s+là\s+g[ìi]\s*[?？]?\s*$',
+    re.IGNORECASE,
+)
+_UNSUPPORTED_OPEN_QA_RESPONSE = (
+    "Hiện tại trong runtime rule-based này tôi chưa hỗ trợ trả lời câu hỏi kiến thức mở. "
+    "Tôi chưa gọi LLM hay tra cứu dữ liệu nào cho câu này."
 )
 
 # CONV-P0 P0-6B: pending state helpers — narrow patterns, intentionally minimal.
@@ -267,6 +291,12 @@ class SessionRuntime:
         current_info = self._maybe_answer_unsupported_current_info(user_message, state)
         if current_info is not None:
             return current_info
+
+        # CONV-P0 P0-7F-FIX4 priority 9.6: deterministic "unsupported open-knowledge Q&A"
+        # reply — preempts the generic planner fallback for obvious factual questions. No tool.
+        open_qa = self._maybe_answer_unsupported_open_qa(user_message, state)
+        if open_qa is not None:
+            return open_qa
 
         # CONV-P0 P0-3 seam: classify before runtime. Direct/clarification routes complete
         # the state here WITHOUT planner/tool/memory; everything else falls through to run().
@@ -653,6 +683,28 @@ class SessionRuntime:
             state, "conv:unsupported_current_info", _UNSUPPORTED_CURRENT_INFO_RESPONSE
         )
 
+    def _maybe_answer_unsupported_open_qa(
+        self, user_message: str, state: AgentState
+    ) -> AgentState | None:
+        """P0-7F-FIX4 Part E: deterministic reply for obvious open-knowledge questions.
+
+        Fires only for a narrow yes/no "X có phải là Y không?" form or a single-token
+        "X là gì?" definition whose subject is not an identity/self word. Profile queries and
+        assistant-identity prompts are handled earlier, so they never reach this lane. Never
+        saves, never calls a tool/LLM/web — a safe seam for a future P0-8A LLMResponder.
+        """
+        text = user_message.strip()
+        if _RE_OPEN_QA_YESNO.match(text):
+            return self._complete_conv(
+                state, "conv:unsupported_open_qa", _UNSUPPORTED_OPEN_QA_RESPONSE
+            )
+        m = _RE_OPEN_QA_DEFINITION.match(text)
+        if m and m.group(1).lower() not in _OPEN_QA_STOP_SUBJECTS:
+            return self._complete_conv(
+                state, "conv:unsupported_open_qa", _UNSUPPORTED_OPEN_QA_RESPONSE
+            )
+        return None
+
     def _has_recent_profile_query(self) -> bool:
         if self._profile_query_context_turn is None:
             return False
@@ -681,6 +733,10 @@ class SessionRuntime:
             return AutoProfileCandidate(relation="learning_focus", value=value, original_text=original_text)
         if cat == "goal":
             return AutoProfileCandidate(relation="goal", value=value, original_text=original_text)
+        if cat == "household_pet":
+            return AutoProfileCandidate(
+                relation="household_pet", value=value, original_text=original_text
+            )
         return None
 
     def _handle_semantic_relationship(
@@ -758,6 +814,11 @@ class SessionRuntime:
                 return self._complete_conv(
                     state, "conv:affection_explanation",
                     build_affection_explanation_response(intent.value or ""),
+                )
+            if intent.category == "affection_relation":
+                return self._complete_conv(
+                    state, "conv:affection_relation",
+                    build_affection_relation_response(intent.value or ""),
                 )
             if intent.sensitivity == "person_affinity":
                 return self._complete_conv(

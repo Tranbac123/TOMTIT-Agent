@@ -397,3 +397,99 @@ def test_affection_explanation_is_clarify_not_write(text: str, value: str):
     assert c.category == "affection_explanation"
     assert c.value == value
     assert c.write_policy == "clarify"
+
+
+# ---------------------------------------------------------------------------
+# P0-7F-FIX4 Part A: Affection relation phrase ("có tình cảm với X", "crush X")
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("text, value", [
+    ("tôi có tình cảm với quý", "quý"),
+    ("mình có tình cảm với quý", "quý"),
+    ("tôi có cảm tình với quý", "quý"),
+    ("mình có cảm tình với quý", "quý"),
+    ("tôi crush quý", "quý"),
+    ("mình crush quý", "quý"),
+])
+def test_affection_relation_is_clarify_not_write(text: str, value: str):
+    c = _c(text)
+    assert c is not None
+    assert c.category == "affection_relation"
+    assert c.value == value
+    assert c.sensitivity == "person_affinity"
+    assert c.write_policy == "clarify"
+
+
+# ---------------------------------------------------------------------------
+# P0-7F-FIX4 Part B: common object/food is a preference, not a person name
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("text, value", [
+    ("tôi thích kem", "kem"),
+    ("tôi thích trà", "trà"),
+    ("tôi thích phở", "phở"),
+    ("tôi thích bánh", "bánh"),
+])
+def test_common_object_food_is_preference_not_person(text: str, value: str):
+    c = _c(text)
+    assert c is not None
+    assert c.kind == "profile_write"
+    assert c.category == "preference.personal"
+    assert c.value == value
+    assert c.write_policy == "auto_safe"
+
+
+def test_toi_thich_an_kem_is_preference():
+    c = _c("tôi thích ăn kem")
+    assert c is not None
+    assert c.category == "preference.personal"
+    assert c.value == "ăn kem"
+
+
+@pytest.mark.parametrize("text", ["tôi thích quý", "tôi yêu quý"])
+def test_person_name_still_person_affinity(text: str):
+    c = _c(text)
+    assert c is not None
+    assert c.sensitivity == "person_affinity"
+    assert c.write_policy == "clarify"
+
+
+# ---------------------------------------------------------------------------
+# P0-7F-FIX4 Part C: friend relation write ("bạn của tôi tên là meo")
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("text", [
+    "bạn tôi tên là meo",
+    "bạn của tôi tên là meo",
+    "bạn mình tên là meo",
+    "bạn của mình tên là meo",
+])
+def test_friend_relation_write(text: str):
+    c = _c(text)
+    assert c is not None
+    assert c.kind == "profile_write"
+    assert c.category == "relationship.partner_name"
+    assert c.relation_label == "bạn"
+    assert c.value == "meo"
+    assert c.write_policy == "auto_safe"
+
+
+# ---------------------------------------------------------------------------
+# P0-7F-FIX4 Part D: household pet fact ("nhà tôi có nuôi 1 con mèo")
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("text", [
+    "nhà tôi có nuôi 1 con mèo",
+    "nhà tôi có nuôi một con mèo",
+    "nhà tôi nuôi mèo",
+    "nhà mình nuôi mèo",
+    "tôi nuôi mèo",
+    "mình nuôi mèo",
+])
+def test_household_pet_write(text: str):
+    c = _c(text)
+    assert c is not None
+    assert c.kind == "profile_write"
+    assert c.category == "household_pet"
+    assert c.value == "mèo"
+    assert c.write_policy == "auto_safe"

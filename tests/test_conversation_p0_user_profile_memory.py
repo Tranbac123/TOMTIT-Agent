@@ -1777,3 +1777,178 @@ def test_fix3_build_affection_explanation_response():
     assert "quý" in r.lower()
     assert "không lưu" in r.lower()
     assert "người yêu của tôi là quý" in r.lower()
+
+
+# ===========================================================================
+# P0-7F-FIX4 — relationship / entity disambiguation (runtime)
+# ===========================================================================
+
+# --- Part A: affection relation phrase → clarify, no save ---
+
+@pytest.mark.parametrize("text", [
+    "tôi có tình cảm với quý",
+    "mình có cảm tình với quý",
+    "tôi crush quý",
+])
+def test_fix4_affection_relation_not_saved(text: str):
+    sr = _make_sr()
+    answer = sr.handle_turn(text).final_answer or ""
+    low = answer.lower()
+    assert "đã nhớ là bạn thích" not in low
+    assert "rule-based MVP" not in answer
+    assert "tình cảm" in low or "không lưu" in low
+
+
+def test_fix4_build_affection_relation_response():
+    from agent_core.conversation.profile_memory import build_affection_relation_response
+    r = build_affection_relation_response("quý")
+    assert "quý" in r.lower()
+    assert "không lưu" in r.lower()
+    assert "người yêu của tôi là quý" in r.lower()
+
+
+# --- Part B: common object/food is a preference, not a person ---
+
+def test_fix4_object_food_preference_saved():
+    sr = _make_sr()
+    low = (sr.handle_turn("tôi thích kem").final_answer or "").lower()
+    assert "đã nhớ" in low
+    assert "kem" in low
+
+
+def test_fix4_an_kem_preference_saved():
+    sr = _make_sr()
+    low = (sr.handle_turn("tôi thích ăn kem").final_answer or "").lower()
+    assert "đã nhớ" in low
+    assert "kem" in low
+
+
+@pytest.mark.parametrize("text", ["tôi thích quý", "tôi yêu quý"])
+def test_fix4_person_name_not_saved_as_hobby(text: str):
+    sr = _make_sr()
+    low = (sr.handle_turn(text).final_answer or "").lower()
+    assert "đã nhớ" not in low
+    assert "không lưu" in low
+
+
+# --- Part C: friend relation write + query (never self-name) ---
+
+@pytest.mark.parametrize("text", ["bạn tôi tên là meo", "bạn của tôi tên là meo"])
+def test_fix4_friend_relation_saved(text: str):
+    sr = _make_sr()
+    low = (sr.handle_turn(text).final_answer or "").lower()
+    assert "đã nhớ" in low
+    assert "meo" in low
+
+
+def test_fix4_friend_query_returns_friend_name():
+    sr = _make_sr()
+    sr.handle_turn("bạn của tôi tên là meo")
+    low = (sr.handle_turn("bạn của tôi tên là gì?").final_answer or "").lower()
+    assert "meo" in low
+
+
+def test_fix4_friend_query_unknown_is_not_self_name():
+    """'bạn của tôi tên là gì?' must never resolve to the USER's own name."""
+    sr = _make_sr()
+    sr.handle_turn("tôi là bắc")
+    low = (sr.handle_turn("bạn của tôi tên là gì?").final_answer or "").lower()
+    assert "bắc" not in low
+    assert "chưa" in low or "không" in low
+
+
+def test_fix4_friend_query_after_self_name_returns_friend_not_self():
+    sr = _make_sr()
+    sr.handle_turn("tôi là bắc")
+    sr.handle_turn("bạn của tôi tên là meo")
+    low = (sr.handle_turn("bạn của tôi tên là gì?").final_answer or "").lower()
+    assert "meo" in low
+    assert "bắc" not in low
+
+
+def test_fix4_friend_name_query_detected():
+    q = detect_profile_query("bạn của tôi tên là gì?")
+    assert q is not None
+    assert q.kind == "friend_name"
+
+
+# --- Part D: household pet fact save + summary + query ---
+
+@pytest.mark.parametrize("text", [
+    "nhà tôi có nuôi 1 con mèo",
+    "nhà tôi nuôi mèo",
+    "tôi nuôi mèo",
+])
+def test_fix4_household_pet_saved(text: str):
+    sr = _make_sr()
+    low = (sr.handle_turn(text).final_answer or "").lower()
+    assert "đã nhớ" in low
+    assert "mèo" in low
+
+
+def test_fix4_pet_shows_in_summary():
+    sr = _make_sr()
+    sr.handle_turn("nhà tôi có nuôi 1 con mèo")
+    low = (sr.handle_turn("bạn biết gì về tôi").final_answer or "").lower()
+    assert "mèo" in low
+
+
+def test_fix4_pet_query_returns_pet():
+    sr = _make_sr()
+    sr.handle_turn("nhà tôi có nuôi 1 con mèo")
+    low = (sr.handle_turn("nhà tôi nuôi con gì?").final_answer or "").lower()
+    assert "mèo" in low
+
+
+# --- Part E: unsupported open-knowledge Q&A lane ---
+
+@pytest.mark.parametrize("text", [
+    "mèo có phải là chó không?",
+    "chó có phải là mèo không?",
+    "AI là gì?",
+    "data là gì?",
+])
+def test_fix4_unsupported_open_qa(text: str):
+    sr = _make_sr()
+    answer = sr.handle_turn(text).final_answer or ""
+    low = answer.lower()
+    assert "rule-based MVP" not in answer
+    assert "kiến thức mở" in low or "chưa hỗ trợ" in low
+    assert "đã nhớ" not in low
+
+
+@pytest.mark.parametrize("text", ["tomtit là gì?", "bạn là gì?"])
+def test_fix4_open_qa_does_not_break_assistant_identity(text: str):
+    """Assistant-identity prompts stay DIRECT_RESPONSE, never the open-QA lane."""
+    sr = _make_sr()
+    answer = sr.handle_turn(text).final_answer or ""
+    assert "kiến thức mở" not in answer.lower()
+
+
+# --- Part F: regression guards ---
+
+def test_fix4_regression_guards():
+    sr = _make_sr()
+
+    assert "đã nhớ" in (sr.handle_turn("tôi là bắc").final_answer or "").lower()
+
+    occ = sr.handle_turn("tôi là AI engineer").final_answer or ""
+    assert "đã nhớ" in occ.lower()
+    assert "công việc" in occ.lower() or "lĩnh vực" in occ.lower()
+
+    assert "đã nhớ" not in (sr.handle_turn("tôi thích cafe không").final_answer or "").lower()
+    assert "đã nhớ" in (sr.handle_turn("tôi thích cafe không đường").final_answer or "").lower()
+
+    ai = sr.handle_turn("tôi thích AI").final_answer or ""
+    assert "đã nhớ" in ai.lower() and "AI" in ai
+
+    assert "đã nhớ" not in (sr.handle_turn("tôi thích ai").final_answer or "").lower()
+
+    sr.handle_turn("người yêu tôi là quý")
+    assert "quý" in (sr.handle_turn("người yêu của tôi là ai").final_answer or "").lower()
+
+    assert "đã nhớ" in (sr.handle_turn("tôi làm AI").final_answer or "").lower()
+    work = sr.handle_turn("tôi làm gì?").final_answer or ""
+    assert "AI" in work and "Bạn là AI" not in work
+
+    assert "rule-based MVP" not in (sr.handle_turn("thời thiết hôm nay thế nào").final_answer or "")
