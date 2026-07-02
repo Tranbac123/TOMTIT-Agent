@@ -864,3 +864,99 @@ def test_profile_summary_includes_auto_saved_occupation():
     assert "engineer" in answer.lower() or "AI" in answer, (
         f"Profile summary must include auto-saved occupation. Got: {answer!r}"
     )
+
+
+# ===========================================================================
+# P0-7D-FIX1 tests — common "enginer" typo auto-saves as occupation, and the
+# role-keyword matcher does not over-match on substrings (con trai / hai người).
+# ===========================================================================
+
+def _auto_saved(final_answer: str | None) -> bool:
+    return "đã lưu vào hồ sơ" in (final_answer or "").lower()
+
+
+def test_auto_saves_occupation_toi_la_ai_enginer_typo():
+    sr = _make_sr()
+    s = sr.handle_turn("tôi là AI enginer")
+    assert s.status == AgentStatus.COMPLETED
+    assert _auto_saved(s.final_answer), s.final_answer
+    assert "AI" in (s.final_answer or "")
+    assert "engin" in (s.final_answer or "").lower()
+    assert sr._pending_profile_confirmation is None
+
+
+def test_auto_saves_occupation_toi_lam_ai_enginer_typo():
+    sr = _make_sr()
+    s = sr.handle_turn("tôi làm AI enginer")
+    assert s.status == AgentStatus.COMPLETED
+    assert _auto_saved(s.final_answer), s.final_answer
+    assert "engin" in (s.final_answer or "").lower()
+
+
+def test_auto_saves_occupation_nghe_cua_toi_la_ai_enginer_typo():
+    sr = _make_sr()
+    s = sr.handle_turn("nghề của tôi là AI enginer")
+    assert s.status == AgentStatus.COMPLETED
+    assert _auto_saved(s.final_answer), s.final_answer
+    assert "engin" in (s.final_answer or "").lower()
+
+
+def test_enginer_typo_query_answers_after_auto_save():
+    sr = _make_sr()
+    sr.handle_turn("tôi là AI enginer")
+    s = sr.handle_turn("tôi làm nghề gì?")
+    assert s.status == AgentStatus.COMPLETED
+    answer = s.final_answer or ""
+    assert "AI" in answer
+    assert "engin" in answer.lower()
+
+
+def test_note_toi_la_ai_enginer_still_does_not_auto_save():
+    sr = _make_sr()
+    s = sr.handle_turn("note tôi là AI enginer")
+    assert s.status == AgentStatus.COMPLETED
+    assert not _auto_saved(s.final_answer), s.final_answer
+
+
+def test_luu_ghi_chu_toi_la_ai_enginer_still_does_not_auto_save():
+    sr = _make_sr()
+    s = sr.handle_turn("lưu ghi chú tôi là AI enginer")
+    assert s.status == AgentStatus.COMPLETED
+    assert not _auto_saved(s.final_answer), s.final_answer
+
+
+def test_toi_la_bac_still_requires_name_confirmation():
+    sr = _make_sr()
+    s = sr.handle_turn("tôi là Bắc")
+    assert s.status == AgentStatus.COMPLETED
+    # Single proper-name token → confirmation-gated name candidate, NOT auto-save.
+    assert not _auto_saved(s.final_answer), s.final_answer
+    assert sr._pending_profile_confirmation is not None
+    assert sr._pending_profile_confirmation.candidate.value == "Bắc"
+
+
+def test_toi_la_nguoi_tot_still_does_not_auto_save():
+    sr = _make_sr()
+    s = sr.handle_turn("tôi là người tốt")
+    assert s.status == AgentStatus.COMPLETED
+    assert not _auto_saved(s.final_answer), s.final_answer
+    assert sr._pending_profile_confirmation is None
+
+
+def test_correction_phrase_toi_la_ai_enginer_does_not_auto_save():
+    sr = _make_sr()
+    s = sr.handle_turn("sai rồi tôi là AI enginer")
+    assert s.status == AgentStatus.COMPLETED
+    # Not anchored at "tôi là ..." (prefixed by "sai rồi") → no occupation auto-save.
+    assert not _auto_saved(s.final_answer), s.final_answer
+
+
+@pytest.mark.parametrize("text", ["tôi là con trai", "tôi là trai làng", "tôi là hai người"])
+def test_role_keyword_substring_does_not_over_match(text: str):
+    # Regression: 2-char keyword "ai" must not match inside "trai"/"hai".
+    sr = _make_sr()
+    s = sr.handle_turn(text)
+    assert s.status == AgentStatus.COMPLETED
+    assert not _auto_saved(s.final_answer), (
+        f"{text!r} must not auto-save as occupation. Got: {s.final_answer!r}"
+    )

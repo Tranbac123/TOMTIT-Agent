@@ -153,13 +153,26 @@ def _is_safe_for_auto_save(text: str) -> bool:
     return not _RE_NOTE_CMD_PREFIX.match(text.strip())
 
 
+# Single-token keywords (all ASCII) must match on a WHOLE token, not as a substring —
+# otherwise short ones like "ai"/"ml" over-match ("ai" inside "trai"/"hai", "con trai").
+# Multi-word Vietnamese phrases ("kỹ sư", "lập trình", …) stay substring-matched: they are
+# specific enough that a substring hit is a genuine hit.
+_ROLE_KEYWORD_TOKENS: frozenset[str] = frozenset(k for k in _ROLE_KEYWORDS if " " not in k)
+_ROLE_KEYWORD_PHRASES: frozenset[str] = frozenset(k for k in _ROLE_KEYWORDS if " " in k)
+_RE_ASCII_TOKEN = re.compile(r"[a-z0-9]+")
+
+
 def _has_role_keyword(value: str) -> bool:
-    """True if value contains at least one known role/profession keyword."""
+    """True if value contains a known role/profession keyword.
+
+    Single-word keywords are matched against whole ASCII tokens (so "ai enginer" matches
+    but "con trai" does not); multi-word phrases are matched as substrings.
+    """
     value_lower = value.lower()
-    for kw in _ROLE_KEYWORDS:
-        if kw in value_lower:
-            return True
-    return False
+    if any(phrase in value_lower for phrase in _ROLE_KEYWORD_PHRASES):
+        return True
+    tokens = _RE_ASCII_TOKEN.findall(value_lower)
+    return any(tok in _ROLE_KEYWORD_TOKENS for tok in tokens)
 
 
 def _is_valid_auto_value(value: str) -> bool:
