@@ -960,3 +960,93 @@ def test_role_keyword_substring_does_not_over_match(text: str):
     assert not _auto_saved(s.final_answer), (
         f"{text!r} must not auto-save as occupation. Got: {s.final_answer!r}"
     )
+
+
+# ===========================================================================
+# P0-7D-FIX2 tests — unsafe/sensitive preference values must not auto-save
+# ===========================================================================
+
+@pytest.mark.parametrize("value", [
+    "cocaine", "thuốc phiện", "heroin", "ma túy", "cần sa", "meth",
+])
+def test_unsafe_preference_does_not_auto_save(value: str):
+    sr = _make_sr()
+    s = sr.handle_turn(f"tôi thích {value}")
+    assert s.status == AgentStatus.COMPLETED
+    assert not _auto_saved(s.final_answer), (
+        f"unsafe preference {value!r} must not auto-save. Got: {s.final_answer!r}"
+    )
+    assert sr._pending_profile_confirmation is None
+    # Query must not surface the blocked value.
+    q = sr.handle_turn("tôi thích gì?")
+    assert value not in (q.final_answer or "")
+
+
+def test_note_preference_unsafe_value_still_does_not_auto_save():
+    sr = _make_sr()
+    s = sr.handle_turn("note tôi thích cocaine")
+    assert s.status == AgentStatus.COMPLETED
+    assert not _auto_saved(s.final_answer), s.final_answer
+
+
+def test_correction_preference_unsafe_value_still_does_not_auto_save():
+    sr = _make_sr()
+    s = sr.handle_turn("sai rồi tôi thích cocaine")
+    assert s.status == AgentStatus.COMPLETED
+    assert not _auto_saved(s.final_answer), s.final_answer
+
+
+def test_summary_does_not_include_blocked_unsafe_preference():
+    sr = _make_sr()
+    sr.handle_turn("tôi thích cocaine")      # blocked
+    sr.handle_turn("tôi thích build AI")     # safe, auto-saved
+
+    s = sr.handle_turn("bạn biết gì về tôi?")
+    assert s.status == AgentStatus.COMPLETED
+    answer = s.final_answer or ""
+    assert "cocaine" not in answer, f"summary leaked blocked value: {answer!r}"
+    assert "build AI" in answer
+
+
+def test_safe_preference_build_ai_still_auto_saves():
+    sr = _make_sr()
+    s = sr.handle_turn("tôi thích build AI")
+    assert s.status == AgentStatus.COMPLETED
+    assert _auto_saved(s.final_answer), s.final_answer
+    assert "build AI" in (s.final_answer or "")
+
+
+def test_safe_occupation_ai_enginer_still_auto_saves():
+    sr = _make_sr()
+    s = sr.handle_turn("tôi là AI enginer")
+    assert s.status == AgentStatus.COMPLETED
+    assert _auto_saved(s.final_answer), s.final_answer
+    assert "AI" in (s.final_answer or "")
+
+
+def test_safe_learning_focus_llm_still_auto_saves():
+    sr = _make_sr()
+    s = sr.handle_turn("tôi đang học LLM")
+    assert s.status == AgentStatus.COMPLETED
+    assert _auto_saved(s.final_answer), s.final_answer
+    assert "LLM" in (s.final_answer or "")
+
+
+def test_safe_goal_build_ai_agent_still_auto_saves():
+    sr = _make_sr()
+    s = sr.handle_turn("mục tiêu của tôi là build AI Agent")
+    assert s.status == AgentStatus.COMPLETED
+    assert _auto_saved(s.final_answer), s.final_answer
+    assert "build AI Agent" in (s.final_answer or "")
+
+
+def test_unsafe_guard_helper_blocks_and_allows():
+    from agent_core.conversation.profile_memory import (
+        _is_unsafe_or_sensitive_auto_value,
+    )
+    for bad in ["cocaine", "thuốc phiện", "heroin", "ma túy", "cần sa", "meth",
+                "password", "api key", "cccd", "passport"]:
+        assert _is_unsafe_or_sensitive_auto_value(bad), bad
+    for good in ["build AI", "AI Agent", "lập trình", "AI enginer", "LLM",
+                 "build AI Agent", "đá bóng"]:
+        assert not _is_unsafe_or_sensitive_auto_value(good), good

@@ -175,12 +175,62 @@ def _has_role_keyword(value: str) -> bool:
     return any(tok in _ROLE_KEYWORD_TOKENS for tok in tokens)
 
 
+# P0-7D-FIX2: rule-based unsafe/sensitive value guard for AUTO_SAFE writes.
+# Deterministic, conservative, no NLP/LLM. AUTO_SAFE silently persists profile facts
+# without confirmation, so a value that names an illegal drug, a secret/credential, a
+# government ID, or exact private contact info must NOT be auto-written to durable memory.
+# Blocked auto-save falls through to the normal router/fallback (no "Đã lưu" claim).
+#
+# Multi-word / diacritic phrases are substring-matched (specific enough that a hit is real);
+# single ASCII-ish terms are whole-token matched (avoid substring over-match); a small set
+# of short ambiguous terms ("đá") is matched only as the entire value (so "đá bóng" survives).
+_UNSAFE_VALUE_PHRASES: frozenset[str] = frozenset({
+    # illegal / recreational drugs
+    "thuốc phiện", "thuoc phien", "ma túy", "ma tuy", "cần sa", "can sa",
+    "ma đá", "ma da", "chất cấm", "chat cam",
+    # credentials / secrets
+    "mật khẩu", "mat khau", "api key",
+    # government id / private identity
+    "căn cước", "can cuoc", "số tài khoản", "so tai khoan",
+    "số điện thoại", "so dien thoai", "địa chỉ nhà", "dia chi nha",
+})
+_UNSAFE_VALUE_TOKENS: frozenset[str] = frozenset({
+    # illegal / recreational drugs
+    "cocaine", "cocain", "coke", "heroin", "heroine", "meth",
+    "methamphetamine", "amphetamine", "cannabis", "marijuana", "weed", "opium",
+    "ketamine", "lsd", "mdma", "ecstasy",
+    # credentials / secrets
+    "password", "passwd", "token", "secret", "otp",
+    # government id
+    "cmnd", "cccd", "passport",
+})
+# Short ambiguous terms blocked only when they are the ENTIRE value.
+_UNSAFE_VALUE_EXACT: frozenset[str] = frozenset({"đá", "da"})
+_RE_UNICODE_TOKEN = re.compile(r"\w+", re.UNICODE)
+
+
+def _is_unsafe_or_sensitive_auto_value(value: str) -> bool:
+    """True if value names an unsafe/sensitive thing that must not be auto-saved."""
+    v = value.strip().lower()
+    if not v:
+        return False
+    if v in _UNSAFE_VALUE_EXACT:
+        return True
+    if any(phrase in v for phrase in _UNSAFE_VALUE_PHRASES):
+        return True
+    tokens = _RE_UNICODE_TOKEN.findall(v)
+    return any(tok in _UNSAFE_VALUE_TOKENS for tok in tokens)
+
+
 def _is_valid_auto_value(value: str) -> bool:
-    """True if value is a meaningful, non-vague, bounded string for auto-save."""
+    """True if value is a meaningful, non-vague, bounded, SAFE string for auto-save."""
     v = value.strip()
     if not v or len(v) < 3 or len(v) > 80:
         return False
     if v.lower() in _VAGUE_REFS:
+        return False
+    # P0-7D-FIX2: never auto-save unsafe/sensitive values into durable profile memory.
+    if _is_unsafe_or_sensitive_auto_value(v):
         return False
     return True
 
