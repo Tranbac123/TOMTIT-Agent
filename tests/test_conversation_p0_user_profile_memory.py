@@ -1551,3 +1551,229 @@ def test_build_negation_no_affection_response():
     r = build_negation_no_affection_response()
     assert "không" in r.lower()
     assert "lưu" in r.lower()
+
+
+# ===========================================================================
+# P0-7F-FIX3 — semantic correctness + hygiene patch
+# ===========================================================================
+
+# --- Part A: yes/no suffix (runtime) ---
+
+def test_fix3_cafe_khong_is_query_not_saved():
+    sr = _make_sr()
+    s = sr.handle_turn("tôi thích cafe không")
+    assert not _auto_saved(s.final_answer), s.final_answer
+
+
+def test_fix3_cafe_khong_question_is_query_not_saved():
+    sr = _make_sr()
+    s = sr.handle_turn("tôi thích cafe không?")
+    assert not _auto_saved(s.final_answer), s.final_answer
+
+
+def test_fix3_cafe_khong_duong_still_saves():
+    sr = _make_sr()
+    s = sr.handle_turn("tôi thích cafe không đường")
+    assert _auto_saved(s.final_answer), s.final_answer
+    assert "không đường" in (s.final_answer or "").lower()
+
+
+# --- Part B: AI vs ai (query detection) ---
+
+def test_fix3_toi_thich_AI_is_not_affection_query():
+    """detect_profile_query must not treat uppercase 'AI' as the question word 'ai'."""
+    assert detect_profile_query("tôi thích AI") is None
+
+
+def test_fix3_toi_thich_ai_lowercase_is_affection_query():
+    q = detect_profile_query("tôi thích ai")
+    assert q is not None
+    assert q.kind == "self_affection"
+
+
+def test_fix3_toi_thich_AI_saves_professional_interest():
+    sr = _make_sr()
+    s = sr.handle_turn("tôi thích AI")
+    assert _auto_saved(s.final_answer), s.final_answer
+    assert "AI" in (s.final_answer or "")
+
+
+def test_fix3_toi_thich_ai_lowercase_does_not_save():
+    sr = _make_sr()
+    s = sr.handle_turn("tôi thích ai")
+    assert not _auto_saved(s.final_answer), s.final_answer
+
+
+# --- Part C: affection explanation (runtime) ---
+
+def test_fix3_affection_explanation_not_saved():
+    sr = _make_sr()
+    s = sr.handle_turn(
+        "tôi thích quý có nghĩa là tôi thích đơn phương và chúng tôi chưa là người yêu"
+    )
+    answer = s.final_answer or ""
+    assert not _auto_saved(answer), answer
+    assert "rule-based MVP" not in answer
+    assert "tình cảm" in answer.lower()
+    assert "người yêu của tôi là quý" in answer.lower()
+
+
+# --- Part D: third-party mind-state ---
+
+def test_fix3_third_party_affection_query_detected():
+    q = detect_profile_query("quý có thích tôi không?")
+    assert q is not None
+    assert q.kind == "third_party_affection"
+    assert q.value == "quý"
+
+
+def test_fix3_self_yesno_is_not_third_party():
+    """'tôi có thích quý không?' has a self subject → not a third-party query."""
+    q = detect_profile_query("tôi có thích quý không?")
+    assert q is None or q.kind != "third_party_affection"
+
+
+def test_fix3_third_party_mind_state_response():
+    sr = _make_sr()
+    s = sr.handle_turn("quý có thích tôi không?")
+    answer = s.final_answer or ""
+    assert "không thể biết" in answer.lower()
+    assert "quý" in answer.lower()
+    assert "rule-based MVP" not in answer
+
+
+def test_fix3_affection_query_mentions_partner_when_relationship_exists():
+    sr = _make_sr()
+    sr.handle_turn("bạn gái của tôi là quý")
+    s = sr.handle_turn("tôi thích ai")
+    assert "quý" in (s.final_answer or "").lower()
+
+
+# --- Part E: name detection ---
+
+def test_fix3_lowercase_name_candidate():
+    c = detect_profile_fact_candidate("tôi là bắc")
+    assert c is not None
+    assert c.subject == "self"
+    assert c.relation == "name"
+    assert c.value == "bắc"
+
+
+def test_fix3_lowercase_name_minh():
+    c = detect_profile_fact_candidate("mình là bắc")
+    assert c is not None
+    assert c.value == "bắc"
+
+
+def test_fix3_ten_without_la():
+    assert detect_profile_fact_candidate("tôi tên Bắc").value == "Bắc"
+    assert detect_profile_fact_candidate("tên tôi Bắc").value == "Bắc"
+
+
+def test_fix3_ai_engineer_is_not_name():
+    """'tôi là AI engineer' must not be a name candidate (it is an occupation)."""
+    c = detect_profile_fact_candidate("tôi là AI engineer")
+    assert c is None or c.relation != "name" or c.value != "AI"
+
+
+def test_fix3_developer_single_token_is_not_name():
+    assert detect_profile_fact_candidate("tôi là developer") is None
+
+
+def test_fix3_lowercase_name_saves_at_runtime():
+    sr = _make_sr()
+    s = sr.handle_turn("tôi là bắc")
+    assert "đã nhớ" in (s.final_answer or "").lower()
+    assert "bắc" in (s.final_answer or "").lower()
+
+
+def test_fix3_nationality_is_not_saved_as_name():
+    sr = _make_sr()
+    s = sr.handle_turn("tôi là người VN")
+    assert "đã nhớ tên" not in (s.final_answer or "").lower()
+
+
+# --- Part G: extended memory hygiene ---
+
+def _inject_pref(store, value: str, kind: str = "personal") -> None:
+    from agent_core.conversation.profile_memory import save_auto_profile_fact, AutoProfileCandidate
+    cand = AutoProfileCandidate(
+        relation="preference", value=value,
+        original_text=f"tôi thích {value}", preference_kind=kind,
+    )
+    save_auto_profile_fact(cand, store, session_id="fix3_pollution")
+
+
+@pytest.mark.parametrize("polluted", [
+    "cafe không", "ai", "uống gì",
+    "quý có nghĩa là tôi thích đơn phương và chúng tôi chưa là người yêu",
+])
+def test_fix3_polluted_values_filtered(polluted: str):
+    from agent_core.conversation.profile_memory import _is_polluted_preference
+    assert _is_polluted_preference(polluted)
+
+
+@pytest.mark.parametrize("valid", [
+    "cafe", "cafe không đường", "đi du lịch", "build AI", "AI", "AI Agent",
+])
+def test_fix3_valid_values_not_filtered(valid: str):
+    from agent_core.conversation.profile_memory import _is_polluted_preference
+    assert not _is_polluted_preference(valid)
+
+
+def test_fix3_summary_hides_polluted_shows_valid():
+    from agent_core.conversation.profile_memory import collect_profile_snapshot
+    agent, store = build_local_agent()
+    for v, k in [
+        ("cafe không", "personal"), ("ai", "professional"), ("uống gì", "personal"),
+        ("quý có nghĩa là tôi thích đơn phương và chúng tôi chưa là người yêu", "personal"),
+        ("cafe", "personal"), ("cafe không đường", "personal"),
+        ("đi du lịch", "personal"), ("build AI", "professional"),
+    ]:
+        _inject_pref(store, v, k)
+    snap = collect_profile_snapshot(store)
+    shown = [x.lower() for x in snap.preferences_personal + snap.preferences_professional]
+    assert "cafe" in shown
+    assert "cafe không đường" in shown
+    assert "đi du lịch" in shown
+    assert "build ai" in shown
+    assert "cafe không" not in shown
+    assert "ai" not in shown
+    assert "uống gì" not in shown
+    assert not any("có nghĩa" in x for x in shown)
+
+
+def test_fix3_preference_query_hides_polluted():
+    from agent_core.runtime.session_runtime import SessionRuntime
+    agent, store = build_local_agent()
+    _inject_pref(store, "cafe không", "personal")
+    _inject_pref(store, "cafe", "personal")
+    sr = SessionRuntime(agent, store)
+    s = sr.handle_turn("tôi thích gì")
+    answer = (s.final_answer or "").lower()
+    assert "cafe" in answer
+    assert "\n- cafe không\n" not in answer and not answer.endswith("- cafe không")
+
+
+# --- Part H: weather/date unsupported ---
+
+@pytest.mark.parametrize("text", [
+    "thời tiết hôm nay thế nào",
+    "thời thiết hôm nay thế nào",   # typo
+    "hôm nay ngày bao nhiêu",
+])
+def test_fix3_unsupported_current_info(text: str):
+    sr = _make_sr()
+    s = sr.handle_turn(text)
+    answer = s.final_answer or ""
+    assert "rule-based MVP" not in answer
+    low = answer.lower()
+    assert "thời tiết" in low or "thời gian" in low or "ngày" in low
+
+
+def test_fix3_build_affection_explanation_response():
+    from agent_core.conversation.profile_memory import build_affection_explanation_response
+    r = build_affection_explanation_response("quý")
+    assert "quý" in r.lower()
+    assert "không lưu" in r.lower()
+    assert "người yêu của tôi là quý" in r.lower()

@@ -20,6 +20,7 @@ from agent_core.conversation.profile_memory import (
     ProfileFactCandidate,
     answer_profile_query,
     answer_yes_no_memory_query,
+    build_affection_explanation_response,
     build_auto_ack_message,
     build_blocked_value_response,
     build_confirmation_prompt,
@@ -76,6 +77,26 @@ _SESSION_RECALL_Q = re.compile(
     r'|(?:tôi|mình)\s+vừa\s+nói\s+gì'
     r')\s*[?？]?\s*$',
     re.IGNORECASE,
+)
+
+# CONV-P0 P0-7F-FIX3 Part H: unsupported current-info (weather / date / time). This runtime
+# has no weather or clock tool, so these requests get a deterministic "not supported" reply
+# instead of the generic planner fallback. The common typo "thời thiết" is normalized to
+# "thời tiết" before matching.
+_RE_UNSUPPORTED_CURRENT_INFO = re.compile(
+    r'(?:'
+    r'thời\s+tiết'                                  # weather (post-typo-normalization)
+    r'|hôm\s+nay\s+(?:là\s+)?ngày\s+(?:bao\s+nhiêu|mấy)'   # "hôm nay ngày bao nhiêu/mấy"
+    r'|hôm\s+nay\s+(?:là\s+)?thứ\s+mấy'             # "hôm nay thứ mấy"
+    r'|ngày\s+(?:hôm\s+nay|mai|mấy)\b'
+    r'|bây\s+giờ\s+là\s+mấy\s+giờ|mấy\s+giờ\s+rồi'  # clock
+    r')',
+    re.IGNORECASE,
+)
+_UNSUPPORTED_CURRENT_INFO_RESPONSE = (
+    "Hiện tại trong runtime này tôi chưa hỗ trợ trả lời thời gian/ngày/thời tiết trực tiếp, "
+    "nên chưa thể trả lời chính xác yêu cầu này. Tôi chưa gọi tool hay tra cứu dữ liệu nào "
+    "cho việc này."
 )
 
 # CONV-P0 P0-6B: pending state helpers — narrow patterns, intentionally minimal.
@@ -240,6 +261,12 @@ class SessionRuntime:
         auto_saved = self._maybe_auto_save_profile_fact(user_message, state)
         if auto_saved is not None:
             return auto_saved
+
+        # CONV-P0 P0-7F-FIX3 priority 9.5: deterministic "unsupported current-info"
+        # (weather/date/time) reply — preempts the generic planner fallback. No tool call.
+        current_info = self._maybe_answer_unsupported_current_info(user_message, state)
+        if current_info is not None:
+            return current_info
 
         # CONV-P0 P0-3 seam: classify before runtime. Direct/clarification routes complete
         # the state here WITHOUT planner/tool/memory; everything else falls through to run().
@@ -609,6 +636,23 @@ class SessionRuntime:
             return None
         return self._complete_conv(state, "conv:comparison_answered", answer)
 
+    def _maybe_answer_unsupported_current_info(
+        self, user_message: str, state: AgentState
+    ) -> AgentState | None:
+        """P0-7F-FIX3 Part H: deterministic reply for weather/date/time requests.
+
+        Normalizes the common "thời thiết" typo to "thời tiết" before matching. This runtime
+        has no weather/clock tool, so the reply is honest and never fabricates a value or
+        calls any tool. Only fires for clearly current-info requests; everything else falls
+        through to the router.
+        """
+        normalized = re.sub(r"thời\s+thiết", "thời tiết", user_message.strip(), flags=re.IGNORECASE)
+        if not _RE_UNSUPPORTED_CURRENT_INFO.search(normalized):
+            return None
+        return self._complete_conv(
+            state, "conv:unsupported_current_info", _UNSUPPORTED_CURRENT_INFO_RESPONSE
+        )
+
     def _has_recent_profile_query(self) -> bool:
         if self._profile_query_context_turn is None:
             return False
@@ -703,15 +747,22 @@ class SessionRuntime:
                 ),
             )
         if intent.write_policy == "clarify":
-            if intent.sensitivity == "person_affinity":
-                return self._complete_conv(
-                    state, "conv:person_affinity_clarify",
-                    build_person_affinity_response(intent.value or ""),
-                )
+            # Category-specific clarifications take precedence over the generic
+            # person-affinity response (both carry person_affinity sensitivity).
             if intent.category == "negation_no_affection":
                 return self._complete_conv(
                     state, "conv:negation_no_affection",
                     build_negation_no_affection_response(),
+                )
+            if intent.category == "affection_explanation":
+                return self._complete_conv(
+                    state, "conv:affection_explanation",
+                    build_affection_explanation_response(intent.value or ""),
+                )
+            if intent.sensitivity == "person_affinity":
+                return self._complete_conv(
+                    state, "conv:person_affinity_clarify",
+                    build_person_affinity_response(intent.value or ""),
                 )
             return self._complete_conv(
                 state, "conv:profile_near_miss",

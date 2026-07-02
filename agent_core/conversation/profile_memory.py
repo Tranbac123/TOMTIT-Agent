@@ -97,6 +97,8 @@ class ProfileQuery:
         "self_skill",
         # P0-7F-FIX2
         "self_affection", "self_drink_preference",
+        # P0-7F-FIX3
+        "third_party_affection",
     ]
     value: str | None = None          # for inverse_value: the name to look up
     relation_label: str | None = None  # for relation_name / relation_existence
@@ -281,13 +283,14 @@ def _is_valid_auto_value(value: str) -> bool:
 # ---------------------------------------------------------------------------
 
 # "tôi tên là Bắc", "mình tên là Bắc"
+# "tôi tên là Bắc", "tôi tên Bắc" (P0-7F-FIX3 Part E: "là" optional)
 _RE_SELF_TEN_LA = re.compile(
-    r'^(?:tôi|mình)\s+tên\s+là\s+([^\s.!?,]+)\s*[.!?]*\s*$',
+    r'^(?:tôi|mình)\s+tên\s+(?:là\s+)?([^\s.!?,]+)\s*[.!?]*\s*$',
     re.IGNORECASE | re.DOTALL,
 )
-# "tên tôi là Bắc", "tên mình là Bắc"
+# "tên tôi là Bắc", "tên mình là Bắc", "tên tôi Bắc" (P0-7F-FIX3 Part E: "là" optional)
 _RE_TEN_TOI_LA = re.compile(
-    r'^tên\s+(?:tôi|mình)\s+là\s+([^\s.!?,]+)\s*[.!?]*\s*$',
+    r'^tên\s+(?:tôi|mình)\s+(?:là\s+)?([^\s.!?,]+)\s*[.!?]*\s*$',
     re.IGNORECASE | re.DOTALL,
 )
 # "lưu tên tôi là Bắc"
@@ -442,9 +445,19 @@ _RE_PREFERENCE_Q = re.compile(
     r')\s*[?？]?\s*$',
     re.IGNORECASE,
 )
-# P0-7F-FIX2: "tôi thích ai?" — affection query (who do I like?)
+# P0-7F-FIX2/FIX3: "tôi thích ai?" — affection query (who do I like?).
+# P0-7F-FIX3 Part B: "ai" is matched case-sensitively via a scoped no-ignorecase group
+# so the lowercase question word "ai" routes here, while the uppercase technology token
+# "AI" ("tôi thích AI") does NOT — it falls through to a professional-interest write.
 _RE_AFFECTION_Q = re.compile(
-    r'^(?:tôi|mình)\s+(?:thích|yêu|crush)\s+ai\s*[?？]?\s*$',
+    r'^(?:tôi|mình)\s+(?:thích|yêu|crush)\s+(?-i:ai)\s*[?？]?\s*$',
+    re.IGNORECASE,
+)
+# P0-7F-FIX3 Part D: third-party mind-state ("quý có thích tôi không?"). Subject (group 1)
+# is any non-self token; runtime returns a deterministic "cannot know" response, never a save.
+_RE_THIRD_PARTY_AFFECTION_Q = re.compile(
+    r'^(\S+)\s+có\s+(?:thích|yêu|quý|thương)\s+(?:tôi|mình)\s+'
+    r'(?:không|ko|hông|hong)\s*[?？]?\s*$',
     re.IGNORECASE,
 )
 # P0-7F-FIX2: "tôi thích uống gì?" / "tôi thích ăn gì?" — food/drink preference query
@@ -453,11 +466,26 @@ _RE_DRINK_PREF_Q = re.compile(
     re.IGNORECASE,
 )
 
-# P0-7F-FIX2: known interrogative values that leaked into the preference store before the
-# write guard was in place. Filtered at query time; never deleted from store.
+# P0-7F-FIX2/FIX3: values that leaked into the preference store before the write guards
+# were in place. Filtered at read time (never deleted from durable store).
 _POLLUTED_PREFERENCE_VALUES: frozenset[str] = frozenset({
     "ai", "gì", "gi", "uống gì", "uong gi", "ăn gì", "an gi",
 })
+# P0-7F-FIX3 Part G: interrogative-phrase suffixes and yes/no question particles that make
+# a stored preference value obviously polluted ("uống gì", "cafe không"). A trailing
+# " đường" (as in "cafe không đường") is NOT a particle, so valid values survive.
+_POLLUTED_INTERROGATIVE_ENDINGS: tuple[str, ...] = (
+    " gì", " gi", " đâu", " nào",
+)
+_POLLUTED_YESNO_ENDINGS: tuple[str, ...] = (
+    " đúng không", " phải không", " không", " chưa", " à", " hả", " nhỉ",
+)
+# Affection-explanation fragments that indicate a person-affection sentence was mis-saved
+# as an ordinary preference.
+_POLLUTED_AFFECTION_MARKERS: tuple[str, ...] = (
+    "có nghĩa là tôi thích", "nghĩa là tôi thích",
+    "tôi thích đơn phương", "đơn phương", "chưa là người yêu",
+)
 _RE_LEARNING_Q = re.compile(
     r'^(?:tôi|mình)\s+(?:đang\s+)?học\s+gì\s*[?？]?\s*$',
     re.IGNORECASE,
@@ -501,13 +529,56 @@ def _is_proper_name(s: str) -> bool:
     return bool(s) and s[0].isupper()
 
 
+def _is_name_like_token(value: str) -> bool:
+    """True if value is a plausible person-name token, regardless of case (P0-7F-FIX3 Part E).
+
+    Accepts single short alphabetic tokens ("Bắc", "bắc", "Nam"); rejects question words,
+    role/occupation/technology keywords ("developer", "AI", "ml"), digits, and multi-word or
+    over-long phrases. This lets "tôi là bắc" save a lowercase name while "tôi là developer"
+    / "tôi là AI engineer" stay out of the name path.
+    """
+    v = value.strip()
+    if not v or " " in v:
+        return False
+    if any(ch.isdigit() for ch in v):
+        return False
+    if len(v) < 2 or len(v) > 15:
+        return False
+    if v.lower() in _QUESTION_WORDS:
+        return False
+    if _has_role_keyword(v):
+        return False
+    return v.replace("-", "").isalpha()
+
+
 def _normalize_relation_label(raw: str) -> str:
     return re.sub(r'\s+', ' ', raw.strip().lower())
 
 
 def _is_polluted_preference(val: str) -> bool:
-    """True if val is a known interrogative word that leaked into the preference store."""
-    return val.strip().lower() in _POLLUTED_PREFERENCE_VALUES
+    """True if val is an obviously polluted preference value (read-time hygiene, P0-7F-FIX3).
+
+    Covers bare interrogative words, interrogative-phrase / yes-no question suffixes, and
+    affection-explanation fragments. Valid values ("cafe", "cafe không đường", "build AI",
+    "đi du lịch") are preserved.
+    """
+    raw = re.sub(r"\s+", " ", val.strip())
+    v = raw.lower()
+    if not v:
+        return True
+    # "ai" is case-ambiguous: bare lowercase "ai" is the question word (polluted), while
+    # "AI"/"Ai" is the technology token (valid). Other bare interrogatives are unambiguous.
+    if raw == "ai":
+        return True
+    if v in (_POLLUTED_PREFERENCE_VALUES - {"ai"}):
+        return True
+    if any(v.endswith(end) for end in _POLLUTED_INTERROGATIVE_ENDINGS):
+        return True
+    if any(v.endswith(end) for end in _POLLUTED_YESNO_ENDINGS):
+        return True
+    if any(marker in v for marker in _POLLUTED_AFFECTION_MARKERS):
+        return True
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -534,11 +605,12 @@ def detect_profile_fact_candidate(text: str) -> ProfileFactCandidate | None:
                     value=value, original_text=stripped,
                 )
 
-    # Self-is — riskier, require proper name (uppercase first char), single token
+    # Self-is — single token that looks like a person name. P0-7F-FIX3 Part E accepts
+    # lowercase names ("tôi là bắc") while still excluding role/technology/demographic tokens.
     m = _RE_SELF_IS.match(stripped)
     if m:
         value = m.group(1).rstrip('.!?').strip()
-        if value and _is_proper_name(value) and value.lower() not in _QUESTION_WORDS:
+        if value and _is_name_like_token(value) and value.lower() not in _QUESTION_WORDS:
             return ProfileFactCandidate(
                 subject="self", relation="name",
                 value=value, original_text=stripped,
@@ -596,6 +668,14 @@ def detect_profile_query(text: str) -> ProfileQuery | None:
     11. Inverse value lookup
     """
     stripped = text.strip()
+
+    # 0. P0-7F-FIX3 Part D: third-party mind-state ("quý có thích tôi không?").
+    #    Subject must not be a self-word (that would be a yes/no self-preference query).
+    m = _RE_THIRD_PARTY_AFFECTION_Q.match(stripped)
+    if m:
+        subject = m.group(1).strip().rstrip('?')
+        if subject.lower() not in _SELF_WORDS:
+            return ProfileQuery(kind="third_party_affection", value=subject)
 
     # 1. Relation name "tên gì?" form
     m = _RE_RELATION_NAME_Q.match(stripped)
@@ -930,6 +1010,19 @@ def build_negation_no_affection_response() -> str:
     return (
         "Mình hiểu là hiện tại bạn không muốn lưu thông tin về người bạn thích. "
         "Mình sẽ không lưu gì từ câu này."
+    )
+
+
+def build_affection_explanation_response(value: str) -> str:
+    """Response for an affection explanation ("tôi thích quý có nghĩa là ...") — never save.
+
+    Acknowledges the affection context and offers the explicit relationship phrasing that
+    WOULD be saved, without persisting the explanation as an ordinary preference (P0-7F-FIX3).
+    """
+    return (
+        f"Mình hiểu bạn đang giải thích về tình cảm với {value}. Mình sẽ không lưu đây là "
+        f'sở thích thông thường. Nếu bạn muốn lưu rõ quan hệ, hãy nói: "người yêu của tôi '
+        f'là {value}" hoặc "bạn gái của tôi là {value}".'
     )
 
 
@@ -1388,6 +1481,14 @@ def answer_profile_query(
         if affection_vals:
             return f"Mình đang nhớ {affection_vals[0]} là người bạn thích/quan tâm."
         return "Mình chưa có thông tin đã lưu về người bạn thích."
+
+    # --- P0-7F-FIX3: third_party_affection ("quý có thích tôi không?") ---
+    elif query.kind == "third_party_affection":
+        subject = query.value or "người đó"
+        return (
+            f"Mình không thể biết {subject} có thích bạn hay không nếu bạn chưa cung cấp "
+            "thông tin đó."
+        )
 
     # --- P0-7F-FIX2: self_drink_preference ("tôi thích uống gì?") ---
     elif query.kind == "self_drink_preference":

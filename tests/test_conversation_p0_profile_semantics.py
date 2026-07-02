@@ -318,3 +318,82 @@ def test_nguoi_minh_thich_la_nam():
     assert c is not None
     assert c.category == "relationship.affection_candidate"
     assert c.value == "Nam"
+
+
+# ---------------------------------------------------------------------------
+# P0-7F-FIX3 Part A: Yes/No query suffix guard
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("text, value", [
+    ("tôi thích cafe không", "cafe"),
+    ("tôi thích cafe không?", "cafe"),
+    ("tôi thích cafe đúng không", "cafe"),
+    ("tôi thích cafe phải không", "cafe"),
+    ("tôi thích cafe chưa", "cafe"),
+    ("tôi có thích cafe không", "cafe"),
+])
+def test_yesno_suffix_is_query_not_write(text: str, value: str):
+    c = _c(text)
+    assert c is not None
+    assert c.kind == "yes_no_memory_query"
+    assert c.category == "preference"
+    assert c.value == value
+    assert c.write_policy == "none"
+
+
+def test_cafe_khong_duong_is_still_a_write():
+    """'không đường' is content (no-sugar), not a question particle → preference write."""
+    c = _c("tôi thích cafe không đường")
+    assert c is not None
+    assert c.kind == "profile_write"
+    assert c.category == "preference.personal"
+    assert c.value == "cafe không đường"
+    assert c.write_policy == "auto_safe"
+
+
+def test_yesno_skill_suffix_is_query():
+    c = _c("tôi biết bơi phải không")
+    assert c is not None
+    assert c.kind == "yes_no_memory_query"
+    assert c.category == "skill"
+    assert c.value == "bơi"
+
+
+# ---------------------------------------------------------------------------
+# P0-7F-FIX3 Part B: AI technology vs ai question word (semantic write side)
+# ---------------------------------------------------------------------------
+
+def test_toi_thich_AI_uppercase_saves_professional():
+    c = _c("tôi thích AI")
+    assert c is not None
+    assert c.kind == "profile_write"
+    assert c.category == "preference.professional"
+    assert c.value == "AI"
+    assert c.write_policy == "auto_safe"
+
+
+def test_toi_lam_AI_is_occupation():
+    c = _c("tôi làm AI")
+    assert c is not None
+    assert c.category == "occupation"
+    assert c.write_policy == "auto_safe"
+
+
+# ---------------------------------------------------------------------------
+# P0-7F-FIX3 Part C: Affection explanation guard
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("text, value", [
+    ("tôi thích quý có nghĩa là tôi thích đơn phương và chúng tôi chưa là người yêu", "quý"),
+    ("tôi thích Quý có nghĩa là tôi thích đơn phương", "Quý"),
+    ("tôi thích quý nghĩa là tôi thích đơn phương", "quý"),
+    ("tôi thích quý tức là bạn thân", "quý"),
+    ("tôi thích quý đơn phương", "quý"),
+    ("tôi thích quý nhưng chúng tôi chưa là người yêu", "quý"),
+])
+def test_affection_explanation_is_clarify_not_write(text: str, value: str):
+    c = _c(text)
+    assert c is not None
+    assert c.category == "affection_explanation"
+    assert c.value == value
+    assert c.write_policy == "clarify"

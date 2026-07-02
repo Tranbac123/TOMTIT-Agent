@@ -209,12 +209,26 @@ _RE_RELATIONSHIP = re.compile(
 
 # Query patterns handled by the semantic layer (skill/summary variants live in
 # profile_memory; here we own yes/no + follow-up).
+#
+# P0-7F-FIX3 Part A: sentence-final question particles turn a "tôi thích X <particle>"
+# turn into a yes/no query even without a trailing "?". The particle must be the LAST
+# token so that content phrases like "cafe không đường" (no-sugar) are still preference
+# writes — the non-greedy value group cannot leave trailing content after the particle.
+_YESNO_SUFFIX = r'(?:đúng\s+không|phải\s+không|không|chưa|à|hả|nhỉ)'
 _RE_YESNO_PREF = re.compile(
-    r'^(?:tôi|mình)\s+(?:có\s+)?thích\s+(.+?)\s+(?:đúng\s+không|không)\s*[?？]?\s*$',
+    r'^(?:tôi|mình)\s+(?:có\s+)?thích\s+(.+?)\s+' + _YESNO_SUFFIX + r'\s*[?？]?\s*$',
     re.IGNORECASE,
 )
 _RE_YESNO_SKILL = re.compile(
-    r'^(?:tôi|mình)\s+(?:có\s+)?biết\s+(.+?)\s+(?:đúng\s+không|không)\s*[?？]?\s*$',
+    r'^(?:tôi|mình)\s+(?:có\s+)?biết\s+(.+?)\s+' + _YESNO_SUFFIX + r'\s*[?？]?\s*$',
+    re.IGNORECASE,
+)
+# P0-7F-FIX3 Part C: affection explanation ("tôi thích quý có nghĩa là ...",
+# "tôi thích quý đơn phương", "tôi thích quý nhưng chúng tôi chưa là người yêu").
+# The person target is group(1); everything after is an explanation, never a hobby value.
+_RE_AFFECTION_EXPLANATION = re.compile(
+    r'^(?:tôi|mình)\s+thích\s+(\S+)\s+'
+    r'(?:(?:có\s+)?nghĩa\s+là|tức\s+là|đơn\s+phương|nhưng\s+chúng\s+(?:tôi|mình))',
     re.IGNORECASE,
 )
 _RE_FOLLOWUP = re.compile(
@@ -269,30 +283,35 @@ def classify_profile_semantic_intent(text: str) -> SemanticProfileIntent | None:
             kind="clarification_followup", category=None, value=None, write_policy="none"
         )
 
+    # Yes/no memory queries — self-identifying via a sentence-final question particle
+    # (P0-7F-FIX3 Part A), so they are checked BEFORE any write interpretation and do not
+    # require a trailing "?". "tôi thích cafe không" → query, "tôi thích cafe không đường"
+    # → falls through to a preference write.
+    m = _RE_YESNO_PREF.match(stripped)
+    if m:
+        value = _clean_value(m.group(1))
+        if value:
+            return SemanticProfileIntent(
+                kind="yes_no_memory_query", category="preference",
+                value=value, write_policy="none",
+            )
+    m = _RE_YESNO_SKILL.match(stripped)
+    if m:
+        value = _clean_value(m.group(1))
+        if value:
+            return SemanticProfileIntent(
+                kind="yes_no_memory_query", category="skill",
+                value=value, write_policy="none",
+            )
+
     is_question = stripped.endswith("?") or stripped.endswith("？")
 
-    # --- profile summary + yes/no memory queries (questions) ---
+    # --- profile summary query ---
     if is_question or _RE_PROFILE_SUMMARY_Q.match(stripped):
         if _RE_PROFILE_SUMMARY_Q.match(stripped):
             return SemanticProfileIntent(
                 kind="profile_summary_query", category=None, value=None, write_policy="none"
             )
-        m = _RE_YESNO_PREF.match(stripped)
-        if m:
-            value = _clean_value(m.group(1))
-            if value:
-                return SemanticProfileIntent(
-                    kind="yes_no_memory_query", category="preference",
-                    value=value, write_policy="none",
-                )
-        m = _RE_YESNO_SKILL.match(stripped)
-        if m:
-            value = _clean_value(m.group(1))
-            if value:
-                return SemanticProfileIntent(
-                    kind="yes_no_memory_query", category="skill",
-                    value=value, write_policy="none",
-                )
         # A question we do not specifically own → let legacy query handlers try.
         return None
 
@@ -302,6 +321,17 @@ def classify_profile_semantic_intent(text: str) -> SemanticProfileIntent | None:
             kind="profile_write", category="negation_no_affection", value=None,
             sensitivity="safe", write_policy="clarify",
         )
+
+    # Affection explanation ("tôi thích quý có nghĩa là ...") — clarify, never save as
+    # a hobby/preference (P0-7F-FIX3 Part C). Person target captured for the response.
+    m = _RE_AFFECTION_EXPLANATION.match(stripped)
+    if m:
+        value = _clean_value(m.group(1))
+        if value:
+            return SemanticProfileIntent(
+                kind="profile_write", category="affection_explanation",
+                value=value, sensitivity="person_affinity", write_policy="clarify",
+            )
 
     # Person-affection phrase: "người tôi thích tên là Quý".
     m = _RE_PERSON_AFFECTION_PHRASE.match(stripped)
