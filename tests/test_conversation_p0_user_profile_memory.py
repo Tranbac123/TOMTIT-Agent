@@ -1350,3 +1350,24 @@ def test_followup_without_context_asks_clarification_no_write():
     assert "đã nhớ" not in (s.final_answer or "").lower()
     assert "đã lưu" not in (s.final_answer or "").lower()
     assert sr._confirmed_profile_fact_count == 0
+
+
+# --- P0-7F-FIX1: plain occupation query "tôi làm gì?" ---
+
+def test_occupation_plain_query_unknown_is_specific_not_generic():
+    """tôi làm gì? with no saved occupation → specific unknown, not generic fallback."""
+    sr = _make_sr()
+    s = sr.handle_turn("tôi làm gì?")
+    answer = s.final_answer or ""
+    assert "chưa" in answer.lower()
+    occ_words = ("nghề", "công việc", "lĩnh vực", "vai trò")
+    assert any(w in answer.lower() for w in occ_words)
+    assert "rule-based MVP" not in answer
+
+
+def test_occupation_plain_query_returns_saved_occupation():
+    """tôi làm AI + tôi làm gì? → AI in answer."""
+    sr = _make_sr()
+    sr.handle_turn("tôi làm AI")
+    s = sr.handle_turn("tôi làm gì?")
+    assert "AI" in (s.final_answer or "")

@@ -424,7 +424,8 @@ _SELF_WORDS = frozenset({"tôi", "mình", "bạn", "tao", "ta"})
 # P0-7D query patterns
 _RE_OCCUPATION_Q = re.compile(
     r'^(?:'
-    r'(?:tôi|mình)\s+làm\s+nghề\s+gì'
+    r'(?:tôi|mình)\s+làm\s+gì'
+    r'|(?:tôi|mình)\s+làm\s+nghề\s+gì'
     r'|nghề\s+(?:của\s+)?(?:tôi|mình)\s+là\s+gì'
     r'|công\s+việc\s+(?:của\s+)?(?:tôi|mình)\s+là\s+gì'
     r'|vai\s+trò\s+(?:của\s+)?(?:tôi|mình)\s+là\s+gì'
