@@ -1169,3 +1169,184 @@ def test_habit_detect_unit():
     assert c is not None
     assert c.relation == "habit"
     assert "thể thao" in c.value.lower()
+
+
+# ===========================================================================
+# P0-7F tests — semantic profile coverage (skill, occupation, relationship,
+# preference split/aggregation, person-affinity, yes/no, follow-up, summary)
+# ===========================================================================
+
+# --- Skill ---
+
+def test_skill_biet_boi_auto_saves():
+    sr = _make_sr()
+    s = sr.handle_turn("tôi biết bơi")
+    assert s.status == AgentStatus.COMPLETED
+    assert _auto_saved(s.final_answer), s.final_answer
+    assert "bơi" in (s.final_answer or "").lower()
+
+
+def test_skill_query_after_auto_save():
+    sr = _make_sr()
+    sr.handle_turn("tôi biết bơi")
+    sr.handle_turn("tôi có thể code Python")
+    s = sr.handle_turn("tôi biết làm gì?")
+    answer = s.final_answer or ""
+    assert "bơi" in answer.lower()
+    assert "python" in answer.lower()
+
+
+def test_skill_query_unknown_state():
+    sr = _make_sr()
+    s = sr.handle_turn("tôi biết làm gì?")
+    assert "chưa" in (s.final_answer or "").lower()
+
+
+# --- Occupation "tôi làm AI" (+ task-object guard) ---
+
+def test_occupation_toi_lam_ai_auto_saves():
+    sr = _make_sr()
+    s = sr.handle_turn("tôi làm AI")
+    assert _auto_saved(s.final_answer), s.final_answer
+    assert "AI" in (s.final_answer or "")
+
+
+def test_toi_lam_bai_tap_does_not_auto_save():
+    sr = _make_sr()
+    s = sr.handle_turn("tôi làm bài tập")
+    assert not _auto_saved(s.final_answer), s.final_answer
+
+
+# --- Relationship "của tôi" variants ---
+
+@pytest.mark.parametrize("text", [
+    "bạn gái của tôi là Quý",
+    "bạn gái của tôi tên là Quý",
+])
+def test_relationship_cua_toi_auto_saves(text: str):
+    sr = _make_sr()
+    s = sr.handle_turn(text)
+    assert _auto_saved(s.final_answer), s.final_answer
+    assert "Quý" in (s.final_answer or "")
+    q = sr.handle_turn("bạn gái tôi tên gì?")
+    assert "Quý" in (q.final_answer or "")
+
+
+def test_nguoi_yeu_la_ai_answers_relation_when_known():
+    sr = _make_sr()
+    sr.handle_turn("bạn gái của tôi là Quý")
+    s = sr.handle_turn("người yêu của tôi là ai")
+    assert "Quý" in (s.final_answer or "")
+
+
+def test_nguoi_yeu_la_ai_unknown_state_is_specific():
+    sr = _make_sr()
+    s = sr.handle_turn("người yêu của tôi là ai")
+    answer = (s.final_answer or "").lower()
+    assert "chưa" in answer
+    assert "bạn tên là" not in answer
+
+
+def test_relationship_cua_toi_conflict_safe():
+    sr = _make_sr()
+    sr.handle_turn("bạn gái của tôi là Quý")
+    s = sr.handle_turn("bạn gái của tôi là Lan")
+    answer = s.final_answer or ""
+    assert "Quý" in answer
+    assert not _auto_saved(answer), answer
+
+
+# --- Person-affinity guard ---
+
+def test_toi_thich_quy_is_not_saved_as_preference():
+    sr = _make_sr()
+    s = sr.handle_turn("tôi thích Quý")
+    answer = s.final_answer or ""
+    assert "không lưu" in answer.lower()
+    assert not _auto_saved(answer), answer
+    q = sr.handle_turn("tôi thích gì?")
+    assert "Quý" not in (q.final_answer or "")
+
+
+# --- Preference aggregation (personal + professional) ---
+
+def test_preference_query_aggregates_all():
+    sr = _make_sr()
+    sr.handle_turn("tôi thích uống cafe")
+    sr.handle_turn("tôi thích đi du lịch")
+    sr.handle_turn("tôi thích build AI")
+    s = sr.handle_turn("tôi thích gì?")
+    answer = s.final_answer or ""
+    assert "uống cafe" in answer
+    assert "đi du lịch" in answer
+    assert "build AI" in answer
+
+
+# --- Muốn desires ---
+
+def test_muon_build_saves_goal():
+    sr = _make_sr()
+    sr.handle_turn("tôi muốn build AI Agent")
+    s = sr.handle_turn("mục tiêu của tôi là gì?")
+    assert "build AI Agent" in (s.final_answer or "")
+
+
+def test_muon_di_choi_near_miss_does_not_save():
+    sr = _make_sr()
+    s = sr.handle_turn("tôi muốn đi chơi")
+    assert not _auto_saved(s.final_answer), s.final_answer
+    assert sr._confirmed_profile_fact_count == 0
+
+
+# --- Summary variants ---
+
+def test_summary_variant_ban_da_nho_gi_ve_toi():
+    sr = _make_sr()
+    sr.handle_turn("tôi biết bơi")
+    s = sr.handle_turn("bạn đã nhớ gì về tôi")
+    assert "bơi" in (s.final_answer or "").lower()
+
+
+# --- Yes/no memory query ---
+
+def test_yes_no_preference_known():
+    sr = _make_sr()
+    sr.handle_turn("tôi thích uống cafe")
+    s = sr.handle_turn("tôi có thích uống cafe không?")
+    answer = (s.final_answer or "").lower()
+    assert "có" in answer
+    assert "cafe" in answer
+
+
+def test_yes_no_skill_known():
+    sr = _make_sr()
+    sr.handle_turn("tôi biết bơi")
+    s = sr.handle_turn("tôi biết bơi đúng không?")
+    answer = (s.final_answer or "").lower()
+    assert "đúng" in answer or "có" in answer
+    assert "bơi" in answer
+
+
+def test_yes_no_unknown_state():
+    sr = _make_sr()
+    s = sr.handle_turn("tôi có thích guitar không?")
+    assert "chưa" in (s.final_answer or "").lower()
+
+
+# --- Follow-up "gì nữa?" ---
+
+def test_followup_after_preference_query():
+    sr = _make_sr()
+    sr.handle_turn("tôi thích uống cafe")
+    sr.handle_turn("tôi thích gì?")
+    s = sr.handle_turn("gì nữa?")
+    answer = (s.final_answer or "").lower()
+    assert "hiện tại" in answer or "chỉ" in answer
+
+
+def test_followup_without_context_asks_clarification_no_write():
+    sr = _make_sr()
+    s = sr.handle_turn("gì nữa?")
+    assert "đã nhớ" not in (s.final_answer or "").lower()
+    assert "đã lưu" not in (s.final_answer or "").lower()
+    assert sr._confirmed_profile_fact_count == 0

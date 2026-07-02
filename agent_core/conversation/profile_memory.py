@@ -52,10 +52,13 @@ class AutoProfileCandidate:
     """An AUTO_SAFE profile fact — written without confirmation."""
     subject: Literal["self"] = "self"
     relation: Literal[
-        "occupation", "preference", "goal", "learning_focus", "habit"
+        "occupation", "preference", "goal", "learning_focus", "habit", "skill"
     ] = "occupation"
     value: str = ""
     original_text: str = ""
+    # P0-7F: personal vs professional split for preferences (metadata only; the storage
+    # relation stays "preference" so existing retrieval keeps working).
+    preference_kind: str | None = None
 
 
 @dataclass(frozen=True)
@@ -90,6 +93,8 @@ class ProfileQuery:
         "self_learning_focus", "relation_existence",
         # P0-7E
         "self_habit",
+        # P0-7F
+        "self_skill",
     ]
     value: str | None = None          # for inverse_value: the name to look up
     relation_label: str | None = None  # for relation_name / relation_existence
@@ -389,9 +394,23 @@ _RE_RELATION_LA_AI_Q = re.compile(
     re.IGNORECASE,
 )
 
-# P0-7C: profile summary queries
+# P0-7C: profile summary queries. P0-7F broadens to "đã/đang" tenses,
+# "lưu thông tin gì", and "hồ sơ của tôi có gì".
 _RE_PROFILE_SUMMARY_Q = re.compile(
-    r'^\s*bạn\s+(?:biết|nhớ|lưu|đang\s+nhớ)\s+(?:gì\s+)?về\s+(?:tôi|mình)\s*[?？]?\s*$',
+    r'^\s*(?:'
+    r'bạn\s+(?:đã\s+|đang\s+)?(?:biết|nhớ|lưu)\s+(?:gì\s+)?về\s+(?:tôi|mình)'
+    r'|bạn\s+(?:đã\s+|đang\s+)?lưu\s+(?:thông\s+tin\s+)?gì\s+về\s+(?:tôi|mình)'
+    r'|bạn\s+(?:đã\s+|đang\s+)?nhớ\s+(?:những\s+)?gì\s+về\s+(?:tôi|mình)'
+    r'|hồ\s+sơ\s+(?:của\s+)?(?:tôi|mình)\s+có\s+gì'
+    r')\s*[?？]?\s*$',
+    re.IGNORECASE,
+)
+# P0-7F: skill/ability query — "tôi biết làm gì?", "tôi biết gì?", "tôi có kỹ năng gì?"
+_RE_SKILL_Q = re.compile(
+    r'^(?:'
+    r'(?:tôi|mình)\s+biết\s+(?:làm\s+)?gì'
+    r'|(?:tôi|mình)\s+có\s+(?:những\s+)?kỹ\s+năng\s+gì'
+    r')\s*[?？]?\s*$',
     re.IGNORECASE,
 )
 
@@ -598,6 +617,10 @@ def detect_profile_query(text: str) -> ProfileQuery | None:
     if _RE_HABIT_Q.match(stripped):
         return ProfileQuery(kind="self_habit")
 
+    # 9c. P0-7F: skill query
+    if _RE_SKILL_Q.match(stripped):
+        return ProfileQuery(kind="self_skill")
+
     # 10. P0-7D: relation existence query
     m = _RE_RELATION_EXIST_Q.match(stripped)
     if m:
@@ -667,11 +690,12 @@ def _match_auto_pattern(stripped: str) -> tuple[str, str] | None:
         if _is_valid_auto_value_shape(value):
             return ("occupation", value)
 
-    # --- Occupation ("tôi làm VALUE") ---
+    # --- Occupation ("tôi làm VALUE") — P0-7F: require a role keyword so task/object
+    # phrases ("tôi làm bài tập", "tôi làm việc này") no longer auto-save as occupation. ---
     m = _RE_OCCUPATION_TOI_LAM.match(stripped)
     if m:
         value = m.group(1).strip().rstrip('.!')
-        if _is_valid_auto_value_shape(value):
+        if _is_valid_auto_value_shape(value) and _has_role_keyword(value):
             return ("occupation", value)
 
     # --- Occupation ("tôi là VALUE") — requires role keyword to avoid description clash ---
@@ -769,10 +793,15 @@ def build_auto_ack_message(candidate: AutoProfileCandidate) -> str:
     value = candidate.value
     if rel == "preference":
         return _preference_ack(value)
+    if rel == "skill":
+        return (
+            f"Đã nhớ là bạn biết {value}. Mình sẽ tính đến kỹ năng này khi gợi ý "
+            "những việc liên quan."
+        )
     if rel == "occupation":
         return (
-            f"Đã nhớ bạn là {value}. Thông tin này giúp mình ưu tiên ngữ cảnh kỹ thuật, "
-            "AI agent, LLM và workflow build sản phẩm khi hỗ trợ bạn."
+            f"Đã nhớ công việc/lĩnh vực của bạn là {value}. Thông tin này giúp mình ưu tiên "
+            "ngữ cảnh kỹ thuật, AI agent, LLM và workflow build sản phẩm khi hỗ trợ bạn."
         )
     if rel == "learning_focus":
         return (
@@ -834,6 +863,68 @@ def build_blocked_value_response(attempt: BlockedProfileAttempt) -> str:
         "thông thường. Nếu bạn đang nói về chủ đề này trong ngữ cảnh nghiên cứu, viết nội "
         "dung, hoặc cần hỗ trợ an toàn, hãy nói rõ hơn."
     )
+
+
+# ---------------------------------------------------------------------------
+# P0-7F response builders
+# ---------------------------------------------------------------------------
+
+def build_person_affinity_response(value: str) -> str:
+    """Person-affinity ("tôi thích Quý") is not a hobby — clarify, never save as preference."""
+    return (
+        f"Mình hiểu bạn đang nói về {value} như một người, nên mình sẽ không lưu đây là "
+        "sở thích thông thường. Nếu " + value + " là người yêu/bạn gái/bạn trai của bạn, "
+        f'hãy nói rõ, ví dụ: "người yêu của tôi là {value}".'
+    )
+
+
+def build_near_miss_response(value: str) -> str:
+    """Short-term/ambiguous desire ("tôi muốn đi chơi") — offer to remember, do not save."""
+    return (
+        f"Mình hiểu đây có thể là mong muốn ngắn hạn ({value}). Bạn muốn mình lưu nó như một "
+        "sở thích/kế hoạch lâu dài không, hay chỉ đang nói về hiện tại?"
+    )
+
+
+def build_followup_response(has_context: bool) -> str:
+    """Answer for a "gì nữa?" follow-up after a profile query (session-local, no memory)."""
+    if has_context:
+        return "Hiện tại mình chỉ thấy các thông tin đó trong hồ sơ của bạn."
+    return "Bạn muốn hỏi tiếp về thông tin nào trong hồ sơ của bạn?"
+
+
+def answer_yes_no_memory_query(
+    category: str, value: str, store: "MemoryStoreProtocol"
+) -> str:
+    """Deterministic yes/no reasoning over the profile snapshot (P0-7F).
+
+    Names the stored category explicitly; never infers a "yes" across unrelated categories
+    without saying so. Three states: matched, cross-category note, unknown.
+    """
+    snap = collect_profile_snapshot(store)
+    target = _norm_cmp(value)
+    prefs = [_norm_cmp(v) for v in snap.preferences_personal + snap.preferences_professional]
+    skills = [_norm_cmp(v) for v in snap.skills]
+
+    if category == "preference":
+        if target in prefs:
+            return f"Có, mình đang nhớ bạn thích {value}."
+        if target in skills:
+            return (
+                f'Mình đang nhớ bạn biết {value}, nhưng chưa lưu "{value}" như một sở thích.'
+            )
+        return f"Mình chưa thấy thông tin đã lưu rằng bạn thích {value}."
+
+    if category == "skill":
+        if target in skills:
+            return f"Đúng, mình đang nhớ bạn biết {value}."
+        if target in prefs:
+            return (
+                f'Mình đang nhớ bạn thích {value}, nhưng chưa lưu là bạn biết "{value}".'
+            )
+        return f"Mình chưa thấy thông tin đã lưu rằng bạn biết {value}."
+
+    return f"Mình chưa thấy thông tin đã lưu về {value}."
 
 
 # ---------------------------------------------------------------------------
@@ -917,6 +1008,9 @@ def save_auto_profile_fact(
         "extractor": "rule_based_profile_v1",
         "original_text": candidate.original_text,
     }
+    # P0-7F: preference personal/professional subcategory (metadata only).
+    if candidate.relation == "preference" and candidate.preference_kind:
+        metadata["preference_kind"] = candidate.preference_kind
 
     _content_map = {
         "occupation": f"bạn là {candidate.value}",
@@ -924,6 +1018,7 @@ def save_auto_profile_fact(
         "goal": f"mục tiêu của bạn là {candidate.value}",
         "learning_focus": f"bạn đang học {candidate.value}",
         "habit": f"bạn hay {candidate.value}",
+        "skill": f"bạn biết {candidate.value}",
     }
     content = _content_map.get(candidate.relation, f"{candidate.relation}: {candidate.value}")
 
@@ -991,6 +1086,80 @@ def find_existing_profile_value(
     return None
 
 
+@dataclass
+class ProfileSnapshot:
+    """Aggregated view of confirmed profile records for query reasoning (P0-7F)."""
+    name: str | None = None
+    occupation: list[str] = field(default_factory=list)
+    skills: list[str] = field(default_factory=list)
+    learning: list[str] = field(default_factory=list)
+    goals: list[str] = field(default_factory=list)
+    preferences_personal: list[str] = field(default_factory=list)
+    preferences_professional: list[str] = field(default_factory=list)
+    habits: list[str] = field(default_factory=list)
+    relations: list[tuple[str, str]] = field(default_factory=list)  # (label, name)
+
+
+def _norm_cmp(value: str) -> str:
+    return re.sub(r"\s+", " ", value.strip().lower())
+
+
+def collect_profile_snapshot(store: "MemoryStoreProtocol") -> ProfileSnapshot:
+    """Aggregate all confirmed profile records into a categorized snapshot.
+
+    Deterministic insertion-order ordering (by created_at) so query answers are stable.
+    Reads FACT + PREFERENCE user_profile records; accepts v1 and v2 schemas.
+    """
+    records = list(store.search(MemoryQuery(
+        text="", types=[MemoryType.FACT], tags=["user_profile"], limit=200,
+    ))) + list(store.search(MemoryQuery(
+        text="", types=[MemoryType.PREFERENCE], tags=["user_profile"], limit=200,
+    )))
+    confirmed = [
+        r for r in records
+        if r.metadata.get("confirmed")
+        and r.metadata.get("profile_schema") in ("user_profile_fact_v1", "user_profile_fact_v2")
+    ]
+    confirmed.sort(key=lambda r: r.created_at)
+
+    def _add(bucket: list[str], val: str) -> None:
+        # Dedupe case-insensitively, preserving first-seen display form + insertion order.
+        if _norm_cmp(val) not in {_norm_cmp(x) for x in bucket}:
+            bucket.append(val)
+
+    snap = ProfileSnapshot()
+    for rec in confirmed:
+        md = rec.metadata
+        subject = md.get("subject", "")
+        rel = md.get("relation", "")
+        val = md.get("value", "")
+        if not val:
+            continue
+        if subject == "self" and rel == "name":
+            if snap.name is None:
+                snap.name = val
+        elif subject == "self" and rel == "occupation":
+            _add(snap.occupation, val)
+        elif subject == "self" and rel == "skill":
+            _add(snap.skills, val)
+        elif subject == "self" and rel == "learning_focus":
+            _add(snap.learning, val)
+        elif subject == "self" and rel == "goal":
+            _add(snap.goals, val)
+        elif subject == "self" and rel == "preference":
+            if md.get("preference_kind") == "professional":
+                _add(snap.preferences_professional, val)
+            else:
+                _add(snap.preferences_personal, val)
+        elif subject == "self" and rel == "habit":
+            _add(snap.habits, val)
+        elif subject == "relation" and rel == "name":
+            label = md.get("relation_label", "người liên quan")
+            if (label, val) not in snap.relations:
+                snap.relations.append((label, val))
+    return snap
+
+
 def answer_profile_query(
     query: ProfileQuery,
     store: "MemoryStoreProtocol",
@@ -1049,9 +1218,10 @@ def answer_profile_query(
                 name = rec.metadata.get("value", "")
                 display_label = stored_label or query.relation_label or ""
                 return f"{display_label.capitalize()} của bạn tên là {name}."
-        # No relation fact found: return None to fall through to router
-        # (relation_name unknown state is handled by router CLARIFICATION)
-        return None
+        # P0-7F: no relation fact → specific unknown-state answer (was: fall through to a
+        # generic user-memory fallback, which read as "I don't support memory").
+        label = query.relation_label or "người yêu/bạn gái"
+        return f"Tôi chưa có thông tin đã lưu về {label} của bạn."
 
     # --- inverse_value ---
     elif query.kind == "inverse_value":
@@ -1068,28 +1238,31 @@ def answer_profile_query(
                     return f"{val_display} là {rel} của bạn."
         return None
 
-    # --- profile_summary ---
+    # --- profile_summary (P0-7F: grouped, stable-order snapshot) ---
     elif query.kind == "profile_summary":
+        snap = collect_profile_snapshot(store)
         lines: list[str] = []
-        for rec in confirmed:
-            subject = rec.metadata.get("subject", "")
-            rel = rec.metadata.get("relation", "")
-            val = rec.metadata.get("value", "")
-            if subject == "self" and rel == "name":
-                lines.append(f"- Bạn tên là {val}.")
-            elif subject == "self" and rel == "occupation":
-                lines.append(f"- Bạn là {val}.")
-            elif subject == "self" and rel == "preference":
-                lines.append(f"- Bạn thích {val}.")
-            elif subject == "self" and rel == "goal":
-                lines.append(f"- Mục tiêu của bạn là {val}.")
-            elif subject == "self" and rel == "learning_focus":
-                lines.append(f"- Bạn đang học {val}.")
-            elif subject == "self" and rel == "habit":
-                lines.append(f"- Bạn hay {val}.")
-            elif subject == "relation" and rel == "name":
-                rel_label = rec.metadata.get("relation_label", "người liên quan")
-                lines.append(f"- {rel_label.capitalize()} của bạn tên là {val}.")
+        if snap.name:
+            lines.append(f"- Bạn tên là {snap.name}.")
+        if snap.occupation:
+            lines.append(f"- Công việc/lĩnh vực của bạn là {', '.join(snap.occupation)}.")
+        if snap.skills:
+            lines.append(f"- Bạn biết {', '.join(snap.skills)}.")
+        if snap.learning:
+            lines.append(f"- Bạn đang học {', '.join(snap.learning)}.")
+        if snap.goals:
+            lines.append(f"- Mục tiêu của bạn là {', '.join(snap.goals)}.")
+        if snap.preferences_personal:
+            lines.append(f"- Bạn thích {', '.join(snap.preferences_personal)}.")
+        if snap.preferences_professional:
+            lines.append(
+                f"- Bạn quan tâm đến {', '.join(snap.preferences_professional)} "
+                "ở mảng công việc/kỹ thuật."
+            )
+        if snap.habits:
+            lines.append(f"- Bạn hay {', '.join(snap.habits)}.")
+        for label, name in snap.relations:
+            lines.append(f"- {label.capitalize()} của bạn tên là {name}.")
         if not lines:
             return "Tôi chưa có thông tin hồ sơ nào đã được xác nhận về bạn."
         return "Tôi đang nhớ những thông tin sau về bạn:\n" + "\n".join(lines)
@@ -1102,13 +1275,30 @@ def answer_profile_query(
                 return f"Bạn là {val}."
         return "Tôi chưa có thông tin đã lưu về nghề nghiệp/vai trò của bạn."
 
-    # --- P0-7D: self_preference ---
+    # --- P0-7D/7F: self_preference — aggregate ALL preferences (personal + professional) ---
     elif query.kind == "self_preference":
-        for rec in confirmed:
-            if rec.metadata.get("subject") == "self" and rec.metadata.get("relation") == "preference":
-                val = rec.metadata.get("value", "")
-                return f"Bạn thích {val}."
-        return "Tôi chưa có thông tin đã lưu về sở thích của bạn."
+        snap = collect_profile_snapshot(store)
+        if not snap.preferences_personal and not snap.preferences_professional:
+            return "Tôi chưa có thông tin đã lưu về sở thích của bạn."
+        parts: list[str] = []
+        if snap.preferences_personal:
+            parts.append(
+                "Tôi đang nhớ bạn thích:\n"
+                + "\n".join(f"- {v}" for v in snap.preferences_personal)
+            )
+        if snap.preferences_professional:
+            parts.append(
+                "Bạn cũng quan tâm đến mảng công việc/kỹ thuật:\n"
+                + "\n".join(f"- {v}" for v in snap.preferences_professional)
+            )
+        return "\n\n".join(parts)
+
+    # --- P0-7F: self_skill ---
+    elif query.kind == "self_skill":
+        snap = collect_profile_snapshot(store)
+        if not snap.skills:
+            return "Tôi chưa có thông tin đã lưu về kỹ năng của bạn."
+        return "Bạn biết " + ", ".join(snap.skills) + "."
 
     # --- P0-7D: self_learning_focus ---
     elif query.kind == "self_learning_focus":

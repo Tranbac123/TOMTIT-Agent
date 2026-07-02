@@ -19,9 +19,13 @@ from agent_core.conversation.profile_memory import (
     PendingProfileConfirmationState,
     ProfileFactCandidate,
     answer_profile_query,
+    answer_yes_no_memory_query,
     build_auto_ack_message,
     build_blocked_value_response,
     build_confirmation_prompt,
+    build_followup_response,
+    build_near_miss_response,
+    build_person_affinity_response,
     build_profile_conflict_message,
     build_profile_fact_ack,
     detect_auto_profile_candidate,
@@ -32,6 +36,11 @@ from agent_core.conversation.profile_memory import (
     save_auto_profile_fact,
     save_confirmed_profile_fact,
 )
+from agent_core.conversation.profile_semantics import (
+    SemanticProfileIntent,
+    classify_profile_semantic_intent,
+)
+from agent_core.conversation.simple_comparison import try_answer_comparison
 from agent_core.conversation.response_composer import ResponseComposer
 from agent_core.conversation.router import ConversationRouter
 from agent_core.memory.base import MemoryStoreProtocol
@@ -144,6 +153,9 @@ class SessionRuntime:
         # which preserves the zero-side-effect guarantee for the "bạn biết gì về tôi?" route
         # when no facts have been saved.
         self._confirmed_profile_fact_count: int = 0
+        # CONV-P0 P0-7F: session-local turn index of the last answered profile query,
+        # used only for the "gì nữa?" follow-up. Never persisted to memory.
+        self._profile_query_context_turn: int | None = None
         if session is not None:
             self._session = session
         else:
@@ -194,10 +206,22 @@ class SessionRuntime:
         if recall is not None:
             return recall
 
+        # CONV-P0 P0-7F priority 3.5: safe numeric comparison ("1 > 2", "2 == 2").
+        # Runs before the arithmetic calculator so equality is not misrouted to a numeric result.
+        comparison = self._maybe_answer_comparison(user_message, state)
+        if comparison is not None:
+            return comparison
+
         # CONV-P0 P0-7B priority 4: profile query — answer from confirmed facts before router.
         profile_answer = self._maybe_answer_profile_query(user_message, state)
         if profile_answer is not None:
             return profile_answer
+
+        # CONV-P0 P0-7F priority 4.5: semantic profile layer — skill/occupation/preference
+        # split/person-affinity/muốn desires/relationship variants + yes-no + "gì nữa" follow-up.
+        semantic = self._maybe_handle_semantic_profile(user_message, state)
+        if semantic is not None:
+            return semantic
 
         # CONV-P0 P0-7E priority 5: direct self.name / relation.name — AUTO_SAFE save
         # (conflict-safe: never silently overwrites an existing value).
@@ -428,6 +452,8 @@ class SessionRuntime:
         answer = answer_profile_query(query, self._store)
         if answer is None:
             return None
+        # P0-7F: remember that a profile query was just answered, for a "gì nữa?" follow-up.
+        self._profile_query_context_turn = len(self._session.turns)
         state.history.append("conv:profile_query_answered")
         state.complete(answer)
         state.history.append("conv:state_finalized")
@@ -558,6 +584,148 @@ class SessionRuntime:
         state.history.append("conv:state_finalized")
         self._record_terminal_state(state)
         return state
+
+    # ------------------------------------------------------------------
+    # CONV-P0 P0-7F — semantic profile coverage + comparison
+    # ------------------------------------------------------------------
+
+    def _complete_conv(
+        self, state: AgentState, marker: str, text: str
+    ) -> AgentState:
+        """Complete a conversation-layer turn with a trace marker (no planner/tool/memory)."""
+        state.history.append(marker)
+        state.complete(text)
+        state.history.append("conv:state_finalized")
+        self._record_terminal_state(state)
+        return state
+
+    def _maybe_answer_comparison(
+        self, user_message: str, state: AgentState
+    ) -> AgentState | None:
+        """P0-7F: answer a bare numeric comparison ("1 > 2", "2 == 2") deterministically."""
+        answer = try_answer_comparison(user_message)
+        if answer is None:
+            return None
+        return self._complete_conv(state, "conv:comparison_answered", answer)
+
+    def _has_recent_profile_query(self) -> bool:
+        if self._profile_query_context_turn is None:
+            return False
+        return (len(self._session.turns) - self._profile_query_context_turn) <= 2
+
+    def _semantic_to_auto_candidate(
+        self, intent: SemanticProfileIntent, original_text: str
+    ) -> AutoProfileCandidate | None:
+        cat = intent.category
+        value = intent.value or ""
+        if cat == "preference.personal":
+            return AutoProfileCandidate(
+                relation="preference", value=value,
+                original_text=original_text, preference_kind="personal",
+            )
+        if cat == "preference.professional":
+            return AutoProfileCandidate(
+                relation="preference", value=value,
+                original_text=original_text, preference_kind="professional",
+            )
+        if cat == "skill":
+            return AutoProfileCandidate(relation="skill", value=value, original_text=original_text)
+        if cat == "occupation":
+            return AutoProfileCandidate(relation="occupation", value=value, original_text=original_text)
+        if cat == "learning_topic":
+            return AutoProfileCandidate(relation="learning_focus", value=value, original_text=original_text)
+        if cat == "goal":
+            return AutoProfileCandidate(relation="goal", value=value, original_text=original_text)
+        return None
+
+    def _handle_semantic_relationship(
+        self, intent: SemanticProfileIntent, user_message: str, state: AgentState
+    ) -> AgentState:
+        """Relationship partner-name write (conflict-safe, reuses P0-7E name storage)."""
+        candidate = ProfileFactCandidate(
+            subject="relation", relation="name",
+            value=intent.value or "", relation_label=intent.relation_label,
+            original_text=user_message.strip(),
+        )
+        existing = find_existing_profile_value(candidate, self._store)
+        if existing is not None:
+            return self._complete_conv(
+                state, "conv:profile_name_conflict",
+                build_profile_conflict_message(candidate, existing),
+            )
+        ok = save_confirmed_profile_fact(
+            candidate, self._store, state.session_id, confirmation_source="auto_safe"
+        )
+        if not ok:
+            state.errors.append("profile_save_failed")
+            return self._complete_conv(
+                state, "conv:profile_autosave_failed",
+                "Không thể lưu thông tin. Vui lòng thử lại.",
+            )
+        self._confirmed_profile_fact_count += 1
+        return self._complete_conv(
+            state, "conv:auto_profile_name_saved", build_profile_fact_ack(candidate)
+        )
+
+    def _maybe_handle_semantic_profile(
+        self, user_message: str, state: AgentState
+    ) -> AgentState | None:
+        """P0-7F: dispatch a semantically-classified profile turn, or None to fall through."""
+        intent = classify_profile_semantic_intent(user_message.strip())
+        if intent is None:
+            return None
+
+        if intent.kind == "clarification_followup":
+            return self._complete_conv(
+                state, "conv:profile_followup",
+                build_followup_response(self._has_recent_profile_query()),
+            )
+
+        if intent.kind == "yes_no_memory_query":
+            self._profile_query_context_turn = len(self._session.turns)
+            answer = answer_yes_no_memory_query(
+                intent.category or "", intent.value or "", self._store
+            )
+            return self._complete_conv(state, "conv:profile_yes_no_answered", answer)
+
+        if intent.kind != "profile_write":
+            return None
+
+        # --- profile_write dispatch by policy ---
+        if intent.write_policy == "block":
+            return self._complete_conv(
+                state, "conv:unsafe_profile_value_blocked",
+                build_blocked_value_response(
+                    BlockedProfileAttempt(
+                        relation=intent.category or "", value=intent.value or ""
+                    )
+                ),
+            )
+        if intent.write_policy == "clarify":
+            if intent.sensitivity == "person_affinity":
+                return self._complete_conv(
+                    state, "conv:person_affinity_clarify",
+                    build_person_affinity_response(intent.value or ""),
+                )
+            return self._complete_conv(
+                state, "conv:profile_near_miss",
+                build_near_miss_response(intent.value or ""),
+            )
+
+        # write_policy == "auto_safe"
+        if intent.category == "relationship.partner_name":
+            return self._handle_semantic_relationship(intent, user_message, state)
+
+        candidate = self._semantic_to_auto_candidate(intent, user_message.strip())
+        if candidate is None:
+            return None
+        ok = save_auto_profile_fact(candidate, self._store, state.session_id)
+        if not ok:
+            return None
+        self._confirmed_profile_fact_count += 1
+        return self._complete_conv(
+            state, "conv:semantic_profile_saved", build_auto_ack_message(candidate)
+        )
 
     # CONV-P0 P0-6B — pending note slot continuation
     # ------------------------------------------------------------------
