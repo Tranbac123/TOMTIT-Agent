@@ -1371,3 +1371,183 @@ def test_occupation_plain_query_returns_saved_occupation():
     sr.handle_turn("tôi làm AI")
     s = sr.handle_turn("tôi làm gì?")
     assert "AI" in (s.final_answer or "")
+
+
+# ---------------------------------------------------------------------------
+# P0-7F-FIX2 — detect_profile_query: affection + drink queries
+# ---------------------------------------------------------------------------
+
+def test_detect_affection_query_toi_thich_ai():
+    q = detect_profile_query("tôi thích ai?")
+    assert q is not None
+    assert q.kind == "self_affection"
+
+
+def test_detect_drink_pref_query_uong_gi():
+    q = detect_profile_query("tôi thích uống gì?")
+    assert q is not None
+    assert q.kind == "self_drink_preference"
+
+
+def test_detect_drink_pref_query_an_gi():
+    q = detect_profile_query("tôi thích ăn gì?")
+    assert q is not None
+    assert q.kind == "self_drink_preference"
+
+
+# ---------------------------------------------------------------------------
+# P0-7F-FIX2 — occupation wording
+# ---------------------------------------------------------------------------
+
+def test_occupation_wording_is_linh_vuc_not_ban_la():
+    """'tôi làm AI' then 'tôi làm gì?' must say lĩnh vực/công việc, not 'Bạn là AI'."""
+    sr = _make_sr()
+    sr.handle_turn("tôi làm AI")
+    s = sr.handle_turn("tôi làm gì?")
+    answer = s.final_answer or ""
+    assert "AI" in answer
+    assert "Bạn là AI" not in answer
+    assert "lĩnh vực" in answer.lower() or "công việc" in answer.lower()
+    assert "rule-based MVP" not in answer
+
+
+# ---------------------------------------------------------------------------
+# P0-7F-FIX2 — polluted preference filtering
+# ---------------------------------------------------------------------------
+
+def _inject_preference(store, value: str, kind: str = "personal") -> None:
+    """Inject a preference record with the given value, bypassing the semantic guard."""
+    from agent_core.conversation.profile_memory import save_auto_profile_fact, AutoProfileCandidate
+    cand = AutoProfileCandidate(
+        relation="preference",
+        value=value,
+        original_text=f"tôi thích {value}",
+        preference_kind=kind,
+    )
+    save_auto_profile_fact(cand, store, session_id="test_pollution")
+
+
+def test_polluted_ai_filtered_from_snapshot():
+    """Legacy 'ai' record must not appear in the collected snapshot."""
+    from agent_core.conversation.profile_memory import collect_profile_snapshot
+    agent, store = build_local_agent()
+    _inject_preference(store, "ai", "professional")
+    snap = collect_profile_snapshot(store)
+    assert "ai" not in snap.preferences_professional
+    assert "ai" not in snap.preferences_personal
+
+
+def test_polluted_uong_gi_filtered_from_snapshot():
+    """Legacy 'uống gì' record must not appear in the collected snapshot."""
+    from agent_core.conversation.profile_memory import collect_profile_snapshot
+    agent, store = build_local_agent()
+    _inject_preference(store, "uống gì", "personal")
+    snap = collect_profile_snapshot(store)
+    assert "uống gì" not in snap.preferences_personal
+
+
+def test_preference_query_hides_polluted_values():
+    """'tôi thích gì?' with only polluted records → unknown-state response, no leaked values."""
+    from agent_core.runtime.session_runtime import SessionRuntime
+    agent, store = build_local_agent()
+    _inject_preference(store, "ai", "professional")
+    _inject_preference(store, "uống gì", "personal")
+    sr = SessionRuntime(agent, store)
+    s = sr.handle_turn("tôi thích gì?")
+    answer = s.final_answer or ""
+    assert "uống gì" not in answer.lower()
+    assert "chưa" in answer.lower()
+
+
+# ---------------------------------------------------------------------------
+# P0-7F-FIX2 — runtime integration: all 8 disambiguation bugs
+# ---------------------------------------------------------------------------
+
+def test_bug1_toi_thich_ai_no_save():
+    """Bug 1: 'tôi thích ai' must not be saved as a preference."""
+    sr = _make_sr()
+    s = sr.handle_turn("tôi thích ai")
+    assert "đã nhớ" not in (s.final_answer or "").lower()
+
+
+def test_bug2_toi_thich_ai_question_specific_not_generic():
+    """Bug 2: 'tôi thích ai?' must get a specific affection-query response."""
+    sr = _make_sr()
+    s = sr.handle_turn("tôi thích ai?")
+    answer = s.final_answer or ""
+    assert "rule-based MVP" not in answer
+    assert "đã nhớ" not in answer.lower()
+
+
+def test_bug3_toi_thich_uong_gi_no_save():
+    """Bug 3: 'tôi thích uống gì' must not be saved as a preference."""
+    sr = _make_sr()
+    s = sr.handle_turn("tôi thích uống gì")
+    assert "đã nhớ" not in (s.final_answer or "").lower()
+
+
+def test_bug3_drink_query_returns_saved_drink():
+    """Bug 3+: 'tôi thích uống cafe' then 'tôi thích uống gì?' → cafe in answer."""
+    sr = _make_sr()
+    sr.handle_turn("tôi thích uống cafe")
+    s = sr.handle_turn("tôi thích uống gì?")
+    answer = s.final_answer or ""
+    assert "cafe" in answer.lower()
+    assert "rule-based MVP" not in answer
+
+
+def test_bug4_preference_query_no_polluted_values():
+    """Bug 4: 'tôi thích gì?' must not show interrogative values from store."""
+    from agent_core.runtime.session_runtime import SessionRuntime
+    agent, store = build_local_agent()
+    _inject_preference(store, "ai", "professional")
+    _inject_preference(store, "uống gì", "personal")
+    sr = SessionRuntime(agent, store)
+    s = sr.handle_turn("tôi thích gì?")
+    answer = s.final_answer or ""
+    assert "uống gì" not in answer.lower()
+
+
+def test_bug5_lowercase_name_is_person_affinity():
+    """Bug 5: 'tôi thích quý' (lowercase) must trigger person-affinity clarification."""
+    sr = _make_sr()
+    s = sr.handle_turn("tôi thích quý")
+    answer = s.final_answer or ""
+    assert "không lưu" in answer.lower()
+    assert "đã nhớ" not in answer.lower()
+
+
+def test_bug6_nguoi_toi_thich_ten_la_quy():
+    """Bug 6: 'người tôi thích tên là Quý' must get person-affinity response."""
+    sr = _make_sr()
+    s = sr.handle_turn("người tôi thích tên là Quý")
+    answer = s.final_answer or ""
+    assert "Quý" in answer
+    assert "rule-based MVP" not in answer
+    assert "đã nhớ là bạn thích" not in answer.lower()
+
+
+def test_bug7_toi_khong_thich_ai_negation():
+    """Bug 7: 'tôi không thích ai' must get negation response, not generic fallback."""
+    sr = _make_sr()
+    s = sr.handle_turn("tôi không thích ai")
+    answer = s.final_answer or ""
+    assert "không" in answer.lower() and "lưu" in answer.lower()
+    assert "rule-based MVP" not in answer
+
+
+def test_bug8_occupation_wording_not_ban_la():
+    """Bug 8: 'tôi làm AI' + 'tôi làm gì?' must not say 'Bạn là AI'."""
+    sr = _make_sr()
+    sr.handle_turn("tôi làm AI")
+    s = sr.handle_turn("tôi làm gì?")
+    answer = s.final_answer or ""
+    assert "Bạn là AI" not in answer
+    assert "AI" in answer
+
+
+def test_build_negation_no_affection_response():
+    from agent_core.conversation.profile_memory import build_negation_no_affection_response
+    r = build_negation_no_affection_response()
+    assert "không" in r.lower()
+    assert "lưu" in r.lower()

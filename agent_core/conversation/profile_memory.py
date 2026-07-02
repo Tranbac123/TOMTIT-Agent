@@ -95,6 +95,8 @@ class ProfileQuery:
         "self_habit",
         # P0-7F
         "self_skill",
+        # P0-7F-FIX2
+        "self_affection", "self_drink_preference",
     ]
     value: str | None = None          # for inverse_value: the name to look up
     relation_label: str | None = None  # for relation_name / relation_existence
@@ -440,6 +442,22 @@ _RE_PREFERENCE_Q = re.compile(
     r')\s*[?？]?\s*$',
     re.IGNORECASE,
 )
+# P0-7F-FIX2: "tôi thích ai?" — affection query (who do I like?)
+_RE_AFFECTION_Q = re.compile(
+    r'^(?:tôi|mình)\s+(?:thích|yêu|crush)\s+ai\s*[?？]?\s*$',
+    re.IGNORECASE,
+)
+# P0-7F-FIX2: "tôi thích uống gì?" / "tôi thích ăn gì?" — food/drink preference query
+_RE_DRINK_PREF_Q = re.compile(
+    r'^(?:tôi|mình)\s+thích\s+(?:uống|ăn)\s+gì\s*[?？]?\s*$',
+    re.IGNORECASE,
+)
+
+# P0-7F-FIX2: known interrogative values that leaked into the preference store before the
+# write guard was in place. Filtered at query time; never deleted from store.
+_POLLUTED_PREFERENCE_VALUES: frozenset[str] = frozenset({
+    "ai", "gì", "gi", "uống gì", "uong gi", "ăn gì", "an gi",
+})
 _RE_LEARNING_Q = re.compile(
     r'^(?:tôi|mình)\s+(?:đang\s+)?học\s+gì\s*[?？]?\s*$',
     re.IGNORECASE,
@@ -485,6 +503,11 @@ def _is_proper_name(s: str) -> bool:
 
 def _normalize_relation_label(raw: str) -> str:
     return re.sub(r'\s+', ' ', raw.strip().lower())
+
+
+def _is_polluted_preference(val: str) -> bool:
+    """True if val is a known interrogative word that leaked into the preference store."""
+    return val.strip().lower() in _POLLUTED_PREFERENCE_VALUES
 
 
 # ---------------------------------------------------------------------------
@@ -602,7 +625,15 @@ def detect_profile_query(text: str) -> ProfileQuery | None:
     if _RE_OCCUPATION_Q.match(stripped):
         return ProfileQuery(kind="self_occupation")
 
-    # 7. P0-7D: preference query
+    # 7. P0-7F-FIX2: affection query ("tôi thích ai?") — before general preference query
+    if _RE_AFFECTION_Q.match(stripped):
+        return ProfileQuery(kind="self_affection")
+
+    # 7b. P0-7F-FIX2: drink/food preference query ("tôi thích uống gì?")
+    if _RE_DRINK_PREF_Q.match(stripped):
+        return ProfileQuery(kind="self_drink_preference")
+
+    # 7c. P0-7D: preference query
     if _RE_PREFERENCE_Q.match(stripped):
         return ProfileQuery(kind="self_preference")
 
@@ -894,6 +925,14 @@ def build_followup_response(has_context: bool) -> str:
     return "Bạn muốn hỏi tiếp về thông tin nào trong hồ sơ của bạn?"
 
 
+def build_negation_no_affection_response() -> str:
+    """Response for "tôi không thích ai" — acknowledge negation, never save."""
+    return (
+        "Mình hiểu là hiện tại bạn không muốn lưu thông tin về người bạn thích. "
+        "Mình sẽ không lưu gì từ câu này."
+    )
+
+
 def answer_yes_no_memory_query(
     category: str, value: str, store: "MemoryStoreProtocol"
 ) -> str:
@@ -1148,6 +1187,8 @@ def collect_profile_snapshot(store: "MemoryStoreProtocol") -> ProfileSnapshot:
         elif subject == "self" and rel == "goal":
             _add(snap.goals, val)
         elif subject == "self" and rel == "preference":
+            if _is_polluted_preference(val):
+                continue
             if md.get("preference_kind") == "professional":
                 _add(snap.preferences_professional, val)
             else:
@@ -1273,7 +1314,7 @@ def answer_profile_query(
         for rec in confirmed:
             if rec.metadata.get("subject") == "self" and rec.metadata.get("relation") == "occupation":
                 val = rec.metadata.get("value", "")
-                return f"Bạn là {val}."
+                return f"Mình đang nhớ công việc/lĩnh vực của bạn là {val}."
         return "Tôi chưa có thông tin đã lưu về nghề nghiệp/vai trò của bạn."
 
     # --- P0-7D/7F: self_preference — aggregate ALL preferences (personal + professional) ---
@@ -1338,5 +1379,25 @@ def answer_profile_query(
                 name = rec.metadata.get("value", "")
                 return f"Bạn có {stored_label} tên là {name}."
         return "Tôi chưa có thông tin đã lưu về việc này."
+
+    # --- P0-7F-FIX2: self_affection ("tôi thích ai?") ---
+    elif query.kind == "self_affection":
+        snap = collect_profile_snapshot(store)
+        _AFFECTION_LABELS = frozenset({"người yêu", "bạn gái", "bạn trai", "partner", "vợ", "chồng"})
+        affection_vals = [name for label, name in snap.relations if label in _AFFECTION_LABELS]
+        if affection_vals:
+            return f"Mình đang nhớ {affection_vals[0]} là người bạn thích/quan tâm."
+        return "Mình chưa có thông tin đã lưu về người bạn thích."
+
+    # --- P0-7F-FIX2: self_drink_preference ("tôi thích uống gì?") ---
+    elif query.kind == "self_drink_preference":
+        snap = collect_profile_snapshot(store)
+        drink_prefs = [
+            v for v in snap.preferences_personal
+            if v.lower().startswith("uống ") or v.lower().startswith("ăn ")
+        ]
+        if drink_prefs:
+            return "Bạn thích " + ", ".join(drink_prefs) + "."
+        return "Mình chưa có thông tin đã lưu về đồ uống/ăn bạn thích."
 
     return None

@@ -89,6 +89,14 @@ _VAGUE_VALUE_TOKENS: frozenset[str] = frozenset({
     "gì", "gi",
 })
 
+# Bare Vietnamese interrogative words that must never be saved as profile values.
+_INTERROGATIVE_VALUES: frozenset[str] = frozenset({
+    "ai", "gì", "gi", "đâu", "nào", "sao", "vì sao", "bao nhiêu",
+    "khi nào", "thế nào", "làm gì", "lam gi",
+})
+# Suffixes that make a phrase interrogative (e.g. "uống gì", "ăn gì").
+_INTERROGATIVE_ENDINGS: tuple[str, ...] = (" gì", " gi", " đâu", " nào")
+
 _RE_ASCII_WORD = re.compile(r"[a-z0-9+#]+")
 
 
@@ -110,19 +118,38 @@ def _has_personal_token(value: str) -> bool:
     return any(w in single for w in words)
 
 
+def _is_interrogative_value(value: str) -> bool:
+    """True if value is (or ends with) a Vietnamese question word.
+
+    Guards against bare question words ("ai", "gì") or question-ended phrases
+    ("uống gì", "ăn gì") being saved as profile preferences.
+
+    Bare check is case-sensitive so that "ai" (question word) is blocked while
+    "AI" (uppercase technology token) is allowed through.
+    Suffix check is case-insensitive (endings like " gì" are always lowercase).
+    """
+    v = value.strip()
+    # Case-sensitive bare check: "ai" is interrogative, "AI" is not.
+    if v in _INTERROGATIVE_VALUES:
+        return True
+    return any(v.lower().endswith(end) for end in _INTERROGATIVE_ENDINGS)
+
+
 def _is_person_affinity_value(value: str) -> bool:
     """True if value looks like a single human name (not an activity/professional thing).
 
-    Conservative on purpose (audit §20): a single capitalized alphabetic token, not a
-    known professional/personal cue and not an activity phrase. "Quý"/"Nam" → True,
-    "AI"/"cafe"/"build AI"/"uống cafe" → False.
+    Catches both capitalized ("Quý") and lowercase ("quý") Vietnamese single-word names.
+    Lowercase tokens shorter than 3 chars are excluded to avoid 2-letter filler words.
+    Known professional/personal tokens are always excluded.
+    "AI"/"cafe"/"build AI"/"uống cafe" → False; "Quý"/"quý"/"Nam" → True.
     """
     v = value.strip()
     if not v or " " in v:
         return False
     if any(ch.isdigit() for ch in v):
         return False
-    if not v[0].isupper():
+    # Lowercase single tokens need ≥ 3 chars to avoid short filler words ("ok", "ờ").
+    if not v[0].isupper() and len(v) < 3:
         return False
     if len(v) > 15:
         return False
@@ -194,6 +221,16 @@ _RE_FOLLOWUP = re.compile(
     r'^(?:gì\s+nữa|còn\s+gì\s+nữa|còn\s+không|thêm\s+gì\s+nữa)\s*[?？]?\s*$',
     re.IGNORECASE,
 )
+# "người tôi thích tên là Quý" / "người mình thích là Nam" — person-affection phrase.
+_RE_PERSON_AFFECTION_PHRASE = re.compile(
+    r'^người\s+(?:mà\s+)?(?:tôi|mình)\s+thích\s+(?:(?:tên\s+)?là\s+)?(.+)$',
+    re.IGNORECASE,
+)
+# "tôi không thích ai" — negation of person affection; never save.
+_RE_NEGATION_NO_AFFECTION = re.compile(
+    r'^(?:tôi|mình)\s+không\s+thích\s+ai(?:\s+cả)?\s*[.!?]*\s*$',
+    re.IGNORECASE,
+)
 
 _RELATION_LABEL_NORM = {
     "bạn gái": "bạn gái",
@@ -259,6 +296,23 @@ def classify_profile_semantic_intent(text: str) -> SemanticProfileIntent | None:
         # A question we do not specifically own → let legacy query handlers try.
         return None
 
+    # Negation: "tôi không thích ai" — acknowledge, never save.
+    if _RE_NEGATION_NO_AFFECTION.match(stripped):
+        return SemanticProfileIntent(
+            kind="profile_write", category="negation_no_affection", value=None,
+            sensitivity="safe", write_policy="clarify",
+        )
+
+    # Person-affection phrase: "người tôi thích tên là Quý".
+    m = _RE_PERSON_AFFECTION_PHRASE.match(stripped)
+    if m:
+        value = _clean_value(m.group(1))
+        if value:
+            return SemanticProfileIntent(
+                kind="profile_write", category="relationship.affection_candidate",
+                value=value, sensitivity="person_affinity", write_policy="clarify",
+            )
+
     # Relationship partner-name ("bạn gái của tôi là Quý", "... tên là Quý").
     m = _RE_RELATIONSHIP.match(stripped)
     if m:
@@ -277,6 +331,8 @@ def classify_profile_semantic_intent(text: str) -> SemanticProfileIntent | None:
     if m:
         value = _clean_value(m.group(1))
         if not _valid_value(value):
+            return None
+        if _is_interrogative_value(value):
             return None
         if _is_unsafe_or_sensitive_auto_value(value):
             return SemanticProfileIntent(

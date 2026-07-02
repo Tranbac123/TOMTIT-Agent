@@ -25,6 +25,7 @@ from agent_core.conversation.profile_memory import (
     build_confirmation_prompt,
     build_followup_response,
     build_near_miss_response,
+    build_negation_no_affection_response,
     build_person_affinity_response,
     build_profile_conflict_message,
     build_profile_fact_ack,
@@ -706,6 +707,11 @@ class SessionRuntime:
                 return self._complete_conv(
                     state, "conv:person_affinity_clarify",
                     build_person_affinity_response(intent.value or ""),
+                )
+            if intent.category == "negation_no_affection":
+                return self._complete_conv(
+                    state, "conv:negation_no_affection",
+                    build_negation_no_affection_response(),
                 )
             return self._complete_conv(
                 state, "conv:profile_near_miss",

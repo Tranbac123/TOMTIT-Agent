@@ -219,3 +219,102 @@ def test_followup(text: str):
 ])
 def test_legacy_inputs_fall_through(text: str):
     assert _c(text) is None
+
+
+# ---------------------------------------------------------------------------
+# P0-7F-FIX2: Interrogative value guard
+# ---------------------------------------------------------------------------
+
+from agent_core.conversation.profile_semantics import (
+    _is_interrogative_value,
+    _is_person_affinity_value,
+)
+
+
+@pytest.mark.parametrize("value", ["ai", "gì", "gi", "uống gì", "ăn gì", "làm gì"])
+def test_is_interrogative_value_true(value: str):
+    assert _is_interrogative_value(value)
+
+
+@pytest.mark.parametrize("value", ["build AI", "AI", "cafe", "bơi", "Quý", "uống cafe"])
+def test_is_interrogative_value_false(value: str):
+    assert not _is_interrogative_value(value)
+
+
+def test_toi_thich_ai_does_not_save():
+    """Bare 'ai' is a Vietnamese question word — must not be saved as a preference."""
+    assert _c("tôi thích ai") is None
+
+
+def test_toi_thich_uong_gi_does_not_save():
+    """'uống gì' ends with interrogative — must not be saved as a preference."""
+    assert _c("tôi thích uống gì") is None
+
+
+def test_toi_thich_build_ai_still_saves():
+    """'build AI' has a professional token — must still save as professional preference."""
+    c = _c("tôi thích build AI")
+    assert c is not None
+    assert c.category == "preference.professional"
+    assert c.write_policy == "auto_safe"
+
+
+# ---------------------------------------------------------------------------
+# P0-7F-FIX2: Lowercase person-affinity guard
+# ---------------------------------------------------------------------------
+
+def test_lowercase_viet_name_is_person_affinity():
+    """'quý' (lowercase, 3-char Vietnamese word) → person_affinity, not saved."""
+    c = _c("tôi thích quý")
+    assert c is not None
+    assert c.category == "relationship.affection_candidate"
+    assert c.sensitivity == "person_affinity"
+    assert c.write_policy == "clarify"
+
+
+def test_person_affinity_two_char_lowercase_excluded():
+    """2-char lowercase tokens must not trigger person-affinity (filler word guard)."""
+    assert not _is_person_affinity_value("ok")
+
+
+def test_person_affinity_three_char_lowercase_included():
+    """3-char Vietnamese name 'quý' must be detected as person-affinity."""
+    assert _is_person_affinity_value("quý")
+
+
+# ---------------------------------------------------------------------------
+# P0-7F-FIX2: Negation no-affection
+# ---------------------------------------------------------------------------
+
+def test_toi_khong_thich_ai_is_negation_clarify():
+    c = _c("tôi không thích ai")
+    assert c is not None
+    assert c.category == "negation_no_affection"
+    assert c.write_policy == "clarify"
+    assert c.value is None
+
+
+def test_toi_khong_thich_ai_ca_is_negation():
+    c = _c("tôi không thích ai cả")
+    assert c is not None
+    assert c.category == "negation_no_affection"
+
+
+# ---------------------------------------------------------------------------
+# P0-7F-FIX2: Person-affection phrase
+# ---------------------------------------------------------------------------
+
+def test_nguoi_toi_thich_ten_la_quy():
+    c = _c("người tôi thích tên là Quý")
+    assert c is not None
+    assert c.category == "relationship.affection_candidate"
+    assert c.sensitivity == "person_affinity"
+    assert c.write_policy == "clarify"
+    assert c.value == "Quý"
+
+
+def test_nguoi_minh_thich_la_nam():
+    c = _c("người mình thích là Nam")
+    assert c is not None
+    assert c.category == "relationship.affection_candidate"
+    assert c.value == "Nam"
