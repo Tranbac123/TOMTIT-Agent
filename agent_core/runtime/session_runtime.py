@@ -15,14 +15,20 @@ from agent_core.conversation.profile_memory import (
     PROFILE_CANCEL,
     PROFILE_CONFIRM,
     AutoProfileCandidate,
+    BlockedProfileAttempt,
     PendingProfileConfirmationState,
     ProfileFactCandidate,
     answer_profile_query,
     build_auto_ack_message,
+    build_blocked_value_response,
     build_confirmation_prompt,
+    build_profile_conflict_message,
+    build_profile_fact_ack,
     detect_auto_profile_candidate,
+    detect_blocked_auto_profile_value,
     detect_profile_fact_candidate,
     detect_profile_query,
+    find_existing_profile_value,
     save_auto_profile_fact,
     save_confirmed_profile_fact,
 )
@@ -50,6 +56,17 @@ if TYPE_CHECKING:
 # Real recall (CLI) enables the bounded same-tick FTS stabilization (SPEC_M7B §10): at most
 # 5 attempts, stop on first hit, never retry a remote failure. Tests override this.
 _RECALL_MAX_ATTEMPTS = 5
+
+# CONV-P0 P0-7E: minimal current-session recall. Answers "what did I just ask/say" from
+# session-local history only — no memory write, no long-term recall, no cross-session claim.
+_SESSION_RECALL_Q = re.compile(
+    r'^(?:'
+    r'(?:tôi|mình)\s+vừa\s+hỏi\s+(?:gì\s+)?(?:bạn)?'
+    r'|câu\s+(?:hỏi\s+)?trước\s+(?:tôi|mình)\s+hỏi\s+gì'
+    r'|(?:tôi|mình)\s+vừa\s+nói\s+gì'
+    r')\s*[?？]?\s*$',
+    re.IGNORECASE,
+)
 
 # CONV-P0 P0-6B: pending state helpers — narrow patterns, intentionally minimal.
 _PENDING_CANCEL = re.compile(
@@ -171,17 +188,30 @@ class SessionRuntime:
                 session_id=self._session.session_id,
             )
 
-        # CONV-P0 P0-7B priority 3: profile query — answer from confirmed facts before router.
+        # CONV-P0 P0-7E priority 3: minimal current-session recall ("tôi vừa hỏi gì?").
+        # Answered before profile/router so it is not swallowed by the generic fallback.
+        recall = self._maybe_answer_session_recall(user_message, state)
+        if recall is not None:
+            return recall
+
+        # CONV-P0 P0-7B priority 4: profile query — answer from confirmed facts before router.
         profile_answer = self._maybe_answer_profile_query(user_message, state)
         if profile_answer is not None:
             return profile_answer
 
-        # CONV-P0 P0-7B priority 4: profile fact candidate — ask confirmation.
-        profile_pending = self._maybe_start_profile_confirmation(user_message, state)
-        if profile_pending is not None:
-            return profile_pending
+        # CONV-P0 P0-7E priority 5: direct self.name / relation.name — AUTO_SAFE save
+        # (conflict-safe: never silently overwrites an existing value).
+        name_saved = self._maybe_auto_save_name_relation(user_message, state)
+        if name_saved is not None:
+            return name_saved
 
-        # CONV-P0 P0-7D priority 5: auto-save low-risk self-profile facts without confirmation.
+        # CONV-P0 P0-7E priority 6: auto-profile claim carrying an unsafe/sensitive value —
+        # specific safety response instead of a silent block + generic fallback.
+        blocked = self._maybe_blocked_value_response(user_message, state)
+        if blocked is not None:
+            return blocked
+
+        # CONV-P0 P0-7D priority 7: auto-save low-risk self-profile facts without confirmation.
         auto_saved = self._maybe_auto_save_profile_fact(user_message, state)
         if auto_saved is not None:
             return auto_saved
@@ -444,6 +474,87 @@ class SessionRuntime:
         ack = build_auto_ack_message(candidate)
         state.history.append("conv:auto_profile_saved")
         state.complete(ack)
+        state.history.append("conv:state_finalized")
+        self._record_terminal_state(state)
+        return state
+
+    def _maybe_answer_session_recall(
+        self, user_message: str, state: AgentState
+    ) -> AgentState | None:
+        """P0-7E: answer "tôi vừa hỏi gì bạn?" from session-local history only.
+
+        Uses the previous user turn recorded in this session. Never writes memory, never
+        reads long-term memory, never claims cross-session recall. The current turn is not
+        yet recorded when this runs, so ``self._session.turns`` holds only prior turns.
+        """
+        if not _SESSION_RECALL_Q.match(user_message.strip()):
+            return None
+        prev_goal = self._session.turns[-1].goal if self._session.turns else None
+        state.history.append("conv:session_recall_answered")
+        if prev_goal:
+            state.complete(f'Bạn vừa hỏi: "{prev_goal}".')
+        else:
+            state.complete("Mình chưa có câu hỏi trước đó trong phiên này.")
+        state.history.append("conv:state_finalized")
+        self._record_terminal_state(state)
+        return state
+
+    def _maybe_auto_save_name_relation(
+        self, user_message: str, state: AgentState
+    ) -> AgentState | None:
+        """P0-7E: AUTO_SAFE save for direct self.name / relation.name claims.
+
+        First-time claim → auto-save + natural ack. A claim conflicting with an existing
+        stored value → deterministic guidance, never a silent overwrite (correction/delete
+        remains a future phase). Unsafe/sensitive name values are rejected before saving.
+        """
+        candidate = detect_profile_fact_candidate(user_message.strip())
+        if candidate is None:
+            return None
+        # Guardrail: never auto-save an unsafe/sensitive value as a name.
+        from agent_core.conversation.profile_memory import _is_unsafe_or_sensitive_auto_value
+        if _is_unsafe_or_sensitive_auto_value(candidate.value):
+            return None
+
+        existing = find_existing_profile_value(candidate, self._store)
+        if existing is not None:
+            state.history.append("conv:profile_name_conflict")
+            state.complete(build_profile_conflict_message(candidate, existing))
+            state.history.append("conv:state_finalized")
+            self._record_terminal_state(state)
+            return state
+
+        ok = save_confirmed_profile_fact(
+            candidate, self._store, state.session_id, confirmation_source="auto_safe"
+        )
+        if not ok:
+            state.errors.append("profile_save_failed")
+            state.history.append("conv:profile_autosave_failed")
+            state.complete("Không thể lưu thông tin. Vui lòng thử lại.")
+            state.history.append("conv:state_finalized")
+            self._record_terminal_state(state)
+            return state
+
+        self._confirmed_profile_fact_count += 1
+        state.history.append("conv:auto_profile_name_saved")
+        state.complete(build_profile_fact_ack(candidate))
+        state.history.append("conv:state_finalized")
+        self._record_terminal_state(state)
+        return state
+
+    def _maybe_blocked_value_response(
+        self, user_message: str, state: AgentState
+    ) -> AgentState | None:
+        """P0-7E: specific safety response when an auto-profile claim carries an unsafe value.
+
+        Does not save, does not expose provenance. Only fires when the message matches an
+        auto-profile pattern (so arbitrary unsupported input still falls through to router).
+        """
+        attempt = detect_blocked_auto_profile_value(user_message.strip())
+        if attempt is None:
+            return None
+        state.history.append("conv:unsafe_profile_value_blocked")
+        state.complete(build_blocked_value_response(attempt))
         state.history.append("conv:state_finalized")
         self._record_terminal_state(state)
         return state

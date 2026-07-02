@@ -103,8 +103,12 @@ def _assert_direct_state(state: AgentState):
     "text, intent, route",
     [
         ("Xin chào", "greeting", ConversationRoute.DIRECT_RESPONSE),
+        ("alo", "greeting", ConversationRoute.DIRECT_RESPONSE),                 # P0-7E
+        ("helo", "greeting", ConversationRoute.DIRECT_RESPONSE),                # P0-7E
+        ("hêlo", "greeting", ConversationRoute.DIRECT_RESPONSE),                # P0-7E
         ("Bạn là ai?", "identity_query", ConversationRoute.DIRECT_RESPONSE),
         ("Bạn làm được gì?", "capability_query", ConversationRoute.DIRECT_RESPONSE),
+        ("bạn là được gì?", "capability_query", ConversationRoute.DIRECT_RESPONSE),  # P0-7E typo
         ("làm cái đó đi", "clarification_request", ConversationRoute.CLARIFICATION),
         ("calculate 2 + 2", "calculate", ConversationRoute.RUNTIME_FALLBACK),
         ("anything", "unknown", ConversationRoute.RUNTIME_FALLBACK),

@@ -29,7 +29,7 @@ _ARITH_ONLY = re.compile(r'^[0-9(][0-9\s.()+\-*/%=xX×?]*$')
 # B.8 / CONV-P0 P0-2: greeting — full-string hi/hello/chào, optionally with a
 # time-of-day or addressee tail ("Chào buổi sáng", "Chào bạn").
 _GREETING_WORDS = re.compile(
-    r'^(?:hi|hello|hey|xin\s+chào|chào)'
+    r'^(?:hi|hello|hey|xin\s+chào|chào|alo|helo|ê\s*lo|hê\s*lo)'
     r'(?:\s+(?:bạn|mọi\s+người|anh|chị|em|buổi\s+(?:sáng|trưa|chiều|tối)))?'
     r'\s*[!?.]*\s*$',
     re.IGNORECASE,
@@ -61,7 +61,9 @@ _CAPABILITY_CUE = re.compile(
     r'what\s+can\s+you\s+do|^help\b|'
     r'(?:giúp|hỗ\s+trợ)\s+g[ìi]\s+(?:được\s+)?(?:cho\s+)?tôi\b|'
     r'(?:giúp|hỗ\s+trợ)\s+tôi\s+được\s+g[ìi]|'
-    r'(?:có\s+)?biết\s+nói\s+không)',
+    r'(?:có\s+)?biết\s+nói\s+không|'
+    # P0-7E typo: "bạn là được gì?" ≈ "bạn làm được gì?" (là↔làm typo)
+    r'(?:bạn|mày|tomtit)\s+là\s+được\s+g[ìi])',
     re.IGNORECASE,
 )
 _MEMORY_READ_CUE = re.compile(

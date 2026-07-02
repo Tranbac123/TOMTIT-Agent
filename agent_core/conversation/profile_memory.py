@@ -14,6 +14,12 @@ P0-7D adds:
 - category-specific query answering with unknown-state responses
 - profile summary expanded to include v2 categories
 - backward-compatible v1/v2 schema retrieval
+
+P0-7E adds:
+- AUTO_SAFE for self.habit (lifestyle) and direct self.name / relation.name
+- natural, category-specific post-save acknowledgements (build_profile_ack)
+- deterministic safety response for unsafe/sensitive blocked values
+- conflict-safe name/relation writes (never silently overwrite an existing value)
 """
 from __future__ import annotations
 
@@ -45,8 +51,22 @@ class ProfileFactCandidate:
 class AutoProfileCandidate:
     """An AUTO_SAFE profile fact — written without confirmation."""
     subject: Literal["self"] = "self"
-    relation: Literal["occupation", "preference", "goal", "learning_focus"] = "occupation"
+    relation: Literal[
+        "occupation", "preference", "goal", "learning_focus", "habit"
+    ] = "occupation"
     value: str = ""
+    original_text: str = ""
+
+
+@dataclass(frozen=True)
+class BlockedProfileAttempt:
+    """A message that matched an auto-profile pattern but carried an unsafe/sensitive value.
+
+    Detected so the runtime can return a specific safety response instead of silently
+    saving (P0-7D guard) then falling through to a generic fallback (P0-7E UX).
+    """
+    relation: str
+    value: str
     original_text: str = ""
 
 
@@ -68,6 +88,8 @@ class ProfileQuery:
         # P0-7D new query kinds
         "self_occupation", "self_preference", "self_goal",
         "self_learning_focus", "relation_existence",
+        # P0-7E
+        "self_habit",
     ]
     value: str | None = None          # for inverse_value: the name to look up
     relation_label: str | None = None  # for relation_name / relation_existence
@@ -222,15 +244,27 @@ def _is_unsafe_or_sensitive_auto_value(value: str) -> bool:
     return any(tok in _UNSAFE_VALUE_TOKENS for tok in tokens)
 
 
-def _is_valid_auto_value(value: str) -> bool:
-    """True if value is a meaningful, non-vague, bounded, SAFE string for auto-save."""
+def _is_valid_auto_value_shape(value: str) -> bool:
+    """True if value has a meaningful, non-vague, bounded SHAPE (ignores safety).
+
+    P0-7E splits shape from safety so the runtime can distinguish "not a profile claim"
+    (shape invalid) from "a profile claim carrying an unsafe value" (shape valid but
+    blocked) — the latter gets a specific safety response instead of a generic fallback.
+    """
     v = value.strip()
     if not v or len(v) < 3 or len(v) > 80:
         return False
     if v.lower() in _VAGUE_REFS:
         return False
+    return True
+
+
+def _is_valid_auto_value(value: str) -> bool:
+    """True if value is a meaningful, non-vague, bounded, SAFE string for auto-save."""
+    if not _is_valid_auto_value_shape(value):
+        return False
     # P0-7D-FIX2: never auto-save unsafe/sensitive values into durable profile memory.
-    if _is_unsafe_or_sensitive_auto_value(v):
+    if _is_unsafe_or_sensitive_auto_value(value.strip()):
         return False
     return True
 
@@ -314,6 +348,11 @@ _RE_GOAL = re.compile(
     r'^(?:mục\s+tiêu|goal)\s+(?:của\s+)?(?:tôi|mình)\s+là\s+(.{3,80}?)\s*[.!]*\s*$',
     re.IGNORECASE | re.DOTALL,
 )
+# P0-7E Habit / lifestyle — "tôi hay VALUE", "tôi thường VALUE" (incl. "hay đi", "thường đi")
+_RE_HABIT = re.compile(
+    r'^(?:tôi|mình)\s+(?:hay|thường|thường\s+xuyên)\s+(.{2,60}?)\s*[.!]*\s*$',
+    re.IGNORECASE | re.DOTALL,
+)
 
 # ---------------------------------------------------------------------------
 # Query detection patterns
@@ -387,6 +426,14 @@ _RE_LEARNING_Q = re.compile(
 )
 _RE_GOAL_Q = re.compile(
     r'^(?:mục\s+tiêu|goal)\s+(?:của\s+)?(?:tôi|mình)\s+là\s+gì\s*[?？]?\s*$',
+    re.IGNORECASE,
+)
+# P0-7E habit query: "tôi hay làm gì?", "thói quen của tôi là gì?"
+_RE_HABIT_Q = re.compile(
+    r'^(?:'
+    r'(?:tôi|mình)\s+hay\s+làm\s+gì'
+    r'|thói\s+quen\s+(?:của\s+)?(?:tôi|mình)\s+là\s+gì'
+    r')\s*[?？]?\s*$',
     re.IGNORECASE,
 )
 # Relation existence query: "tôi có người yêu chưa?" — captures relation label in group 1
@@ -547,6 +594,10 @@ def detect_profile_query(text: str) -> ProfileQuery | None:
     if _RE_GOAL_Q.match(stripped):
         return ProfileQuery(kind="self_goal")
 
+    # 9b. P0-7E: habit query
+    if _RE_HABIT_Q.match(stripped):
+        return ProfileQuery(kind="self_habit")
+
     # 10. P0-7D: relation existence query
     m = _RE_RELATION_EXIST_Q.match(stripped)
     if m:
@@ -567,18 +618,16 @@ def detect_profile_query(text: str) -> ProfileQuery | None:
 # Detection — AUTO_SAFE extraction
 # ---------------------------------------------------------------------------
 
-def detect_auto_profile_candidate(text: str) -> AutoProfileCandidate | None:
-    """Return an AutoProfileCandidate for AUTO_SAFE extraction, or None.
+def _match_auto_pattern(stripped: str) -> tuple[str, str] | None:
+    """Return (relation, value) if text matches an AUTO_SAFE pattern with valid SHAPE.
 
-    Never fires for questions, note/command/correction prefixes, or vague values.
+    Applies the extraction regexes and shape validity (length/vagueness) plus the
+    occupation-specific multi-word + role-keyword guard, but NOT the unsafe/sensitive
+    guard — callers decide save-vs-block based on ``_is_unsafe_or_sensitive_auto_value``.
+    Never matches questions or note/command/correction prefixes.
     """
-    stripped = text.strip()
-
-    # Reject questions (check BEFORE rstrip — rstrip would remove the '?' itself)
     if '?' in stripped or '？' in stripped:
         return None
-
-    # Reject note/command/correction prefixes
     if not _is_safe_for_auto_save(stripped):
         return None
 
@@ -586,52 +635,44 @@ def detect_auto_profile_candidate(text: str) -> AutoProfileCandidate | None:
     m = _RE_GOAL.match(stripped)
     if m:
         value = m.group(1).strip().rstrip('.!')
-        if _is_valid_auto_value(value):
-            return AutoProfileCandidate(
-                subject="self", relation="goal",
-                value=value, original_text=stripped,
-            )
+        if _is_valid_auto_value_shape(value):
+            return ("goal", value)
 
     # --- Learning focus ---
     m = _RE_LEARNING.match(stripped)
     if m:
         value = m.group(1).strip().rstrip('.!')
-        if _is_valid_auto_value(value):
-            return AutoProfileCandidate(
-                subject="self", relation="learning_focus",
-                value=value, original_text=stripped,
-            )
+        if _is_valid_auto_value_shape(value):
+            return ("learning_focus", value)
 
     # --- Preference (explicit "thích"/"quan tâm đến"/"sở thích") ---
     for pat in (_RE_PREFERENCE_SO_THICH, _RE_PREFERENCE_QUAN_TAM, _RE_PREFERENCE_THICH):
         m = pat.match(stripped)
         if m:
             value = m.group(1).strip().rstrip('.!')
-            if _is_valid_auto_value(value):
-                return AutoProfileCandidate(
-                    subject="self", relation="preference",
-                    value=value, original_text=stripped,
-                )
+            if _is_valid_auto_value_shape(value):
+                return ("preference", value)
+
+    # --- Habit / lifestyle ("tôi hay ...", "tôi thường ...") ---
+    m = _RE_HABIT.match(stripped)
+    if m:
+        value = m.group(1).strip().rstrip('.!')
+        if _is_valid_auto_value_shape(value):
+            return ("habit", value)
 
     # --- Occupation (explicit context: "nghề/công việc/vai trò của tôi là") ---
     m = _RE_OCCUPATION_CONTEXT.match(stripped)
     if m:
         value = m.group(1).strip().rstrip('.!')
-        if _is_valid_auto_value(value):
-            return AutoProfileCandidate(
-                subject="self", relation="occupation",
-                value=value, original_text=stripped,
-            )
+        if _is_valid_auto_value_shape(value):
+            return ("occupation", value)
 
     # --- Occupation ("tôi làm VALUE") ---
     m = _RE_OCCUPATION_TOI_LAM.match(stripped)
     if m:
         value = m.group(1).strip().rstrip('.!')
-        if _is_valid_auto_value(value):
-            return AutoProfileCandidate(
-                subject="self", relation="occupation",
-                value=value, original_text=stripped,
-            )
+        if _is_valid_auto_value_shape(value):
+            return ("occupation", value)
 
     # --- Occupation ("tôi là VALUE") — requires role keyword to avoid description clash ---
     m = _RE_OCCUPATION_TOI_LA.match(stripped)
@@ -639,16 +680,47 @@ def detect_auto_profile_candidate(text: str) -> AutoProfileCandidate | None:
         value = m.group(1).strip().rstrip('.!')
         tokens = value.split()
         if (
-            _is_valid_auto_value(value)
+            _is_valid_auto_value_shape(value)
             and len(tokens) >= 2              # multi-word: "AI engineer", not "Bắc"
             and _has_role_keyword(value)      # contains known role term
         ):
-            return AutoProfileCandidate(
-                subject="self", relation="occupation",
-                value=value, original_text=stripped,
-            )
+            return ("occupation", value)
 
     return None
+
+
+def detect_auto_profile_candidate(text: str) -> AutoProfileCandidate | None:
+    """Return an AutoProfileCandidate for AUTO_SAFE extraction, or None.
+
+    Never fires for questions, note/command/correction prefixes, vague values, or
+    unsafe/sensitive values (those are surfaced by detect_blocked_auto_profile_value).
+    """
+    stripped = text.strip()
+    match = _match_auto_pattern(stripped)
+    if match is None:
+        return None
+    relation, value = match
+    if _is_unsafe_or_sensitive_auto_value(value):
+        return None
+    return AutoProfileCandidate(
+        subject="self", relation=relation, value=value, original_text=stripped,
+    )
+
+
+def detect_blocked_auto_profile_value(text: str) -> BlockedProfileAttempt | None:
+    """Return a BlockedProfileAttempt if text is an auto-profile claim with an unsafe value.
+
+    Fires only when the message matches an AUTO_SAFE pattern (so arbitrary unsupported
+    sentences never trigger the safety response) AND the extracted value is unsafe/sensitive.
+    """
+    stripped = text.strip()
+    match = _match_auto_pattern(stripped)
+    if match is None:
+        return None
+    relation, value = match
+    if not _is_unsafe_or_sensitive_auto_value(value):
+        return None
+    return BlockedProfileAttempt(relation=relation, value=value, original_text=stripped)
 
 
 # ---------------------------------------------------------------------------
@@ -665,15 +737,103 @@ def build_confirmation_prompt(candidate: ProfileFactCandidate) -> str:
     return f'{intro}: "{fact_desc}". Bạn muốn tôi lưu không?'
 
 
+def _preference_ack(value: str) -> str:
+    """Natural preference ack with a light, non-overclaiming contextual note for a few
+    common safe interests; generic otherwise. Rule-based, no advice engine."""
+    v = value.lower()
+    base = f"Đã nhớ là bạn thích {value}."
+    if "cafe" in v or "cà phê" in v:
+        return (
+            f"{base} Cà phê có thể giúp bạn tỉnh táo hơn khi học tập và làm việc, "
+            "nhưng nên uống vừa phải, nhất là buổi chiều/tối."
+        )
+    if "phượt" in v:
+        return (
+            f"{base} Khi nói về lịch trình hoặc di chuyển xa, mình sẽ ưu tiên nhắc bạn "
+            "chuẩn bị an toàn, thời tiết và thời gian nghỉ."
+        )
+    if "thể thao" in v or "the thao" in v:
+        return (
+            f"{base} Đây là thói quen tốt cho sức khỏe nếu duy trì đều và tránh tập quá sức."
+        )
+    return f"{base} Mình sẽ tính đến sở thích này khi gợi ý những việc liên quan."
+
+
 def build_auto_ack_message(candidate: AutoProfileCandidate) -> str:
-    _desc_map = {
-        "occupation": "nghề nghiệp/vai trò",
-        "preference": "sở thích",
-        "goal": "mục tiêu",
-        "learning_focus": "nội dung đang học",
-    }
-    desc = _desc_map.get(candidate.relation, candidate.relation)
-    return f"Đã lưu vào hồ sơ của bạn: {desc} là {candidate.value}."
+    """Natural, category-specific acknowledgement after an AUTO_SAFE save (P0-7E).
+
+    Rule-based templates only. Always begins with "Đã nhớ" (never "Đã lưu vào hồ sơ")
+    and never over-claims medical/legal advice.
+    """
+    rel = candidate.relation
+    value = candidate.value
+    if rel == "preference":
+        return _preference_ack(value)
+    if rel == "occupation":
+        return (
+            f"Đã nhớ bạn là {value}. Thông tin này giúp mình ưu tiên ngữ cảnh kỹ thuật, "
+            "AI agent, LLM và workflow build sản phẩm khi hỗ trợ bạn."
+        )
+    if rel == "learning_focus":
+        return (
+            f"Đã nhớ bạn đang học {value}. Mình có thể giải thích theo hướng thực hành "
+            "hơn khi phù hợp."
+        )
+    if rel == "goal":
+        return (
+            f"Đã nhớ mục tiêu của bạn là {value}. Mình sẽ ưu tiên gợi ý gần với mục tiêu đó."
+        )
+    if rel == "habit":
+        return (
+            f"Đã nhớ là bạn hay {value}. Khi nói về phượt hoặc di chuyển xa, mình sẽ ưu "
+            "tiên nhắc đến an toàn, đồ bảo hộ, thời tiết và lịch trình nghỉ ngơi."
+        )
+    return f"Đã nhớ {rel}: {value}."
+
+
+def build_profile_fact_ack(candidate: ProfileFactCandidate) -> str:
+    """Natural ack after a direct self.name / relation.name AUTO_SAFE save (P0-7E)."""
+    if candidate.subject == "self":
+        return f"Đã nhớ tên bạn là {candidate.value}."
+    label = candidate.relation_label or "người thân"
+    return f"Đã nhớ {label} của bạn tên là {candidate.value}."
+
+
+def build_profile_conflict_message(
+    candidate: ProfileFactCandidate, existing_value: str
+) -> str:
+    """Deterministic guidance when a name/relation claim conflicts with a stored value.
+
+    P0-7E does not silently overwrite; correction/delete/update remains a future phase.
+    """
+    if candidate.subject == "self":
+        if existing_value == candidate.value:
+            return f"Mình vẫn đang nhớ tên bạn là {existing_value}."
+        return (
+            f"Mình đang nhớ tên bạn là {existing_value}. Nếu muốn đổi, hãy nói rõ, "
+            f'ví dụ: "sửa tên tôi thành {candidate.value}".'
+        )
+    label = candidate.relation_label or "người thân"
+    if existing_value == candidate.value:
+        return f"Mình vẫn đang nhớ {label} của bạn tên là {existing_value}."
+    return (
+        f"Mình đang nhớ {label} của bạn tên là {existing_value}. Nếu muốn đổi, hãy nói rõ, "
+        f'ví dụ: "sửa {label} của tôi thành {candidate.value}".'
+    )
+
+
+def build_blocked_value_response(attempt: BlockedProfileAttempt) -> str:
+    """Deterministic safety response for an unsafe/sensitive blocked profile value (P0-7E).
+
+    Names the value, states it will not be saved, and offers a safe reframing. Never gives
+    operational/harmful guidance.
+    """
+    return (
+        f"Tôi hiểu bạn đang nói về {attempt.value}, nhưng đây là nội dung nhạy cảm/có rủi ro "
+        "nghiêm trọng về sức khỏe hoặc pháp lý. Tôi sẽ không lưu nó như một thông tin hồ sơ "
+        "thông thường. Nếu bạn đang nói về chủ đề này trong ngữ cảnh nghiên cứu, viết nội "
+        "dung, hoặc cần hỗ trợ an toàn, hãy nói rõ hơn."
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -684,8 +844,14 @@ def save_confirmed_profile_fact(
     candidate: ProfileFactCandidate,
     store: "MemoryStoreProtocol",
     session_id: str,
+    *,
+    confirmation_source: str = "explicit_user_confirmation",
 ) -> bool:
-    """Write confirmed profile fact to store. Returns True on success."""
+    """Write a name/relation profile fact to store. Returns True on success.
+
+    ``confirmation_source`` is "explicit_user_confirmation" for the legacy confirm flow or
+    "auto_safe" for P0-7E direct auto-save. Schema stays v1; retrieval reads v1 and v2.
+    """
     from agent_core.memory.memory_agent import MemoryAgent
 
     tags = ["user_profile"]
@@ -695,9 +861,11 @@ def save_confirmed_profile_fact(
         "relation": candidate.relation,
         "value": candidate.value,
         "confirmed": True,
-        "confirmation_source": "explicit_user_confirmation",
+        "confirmation_source": confirmation_source,
         "original_text": candidate.original_text,
     }
+    if confirmation_source == "auto_safe":
+        metadata["write_policy"] = "auto_safe"
 
     if candidate.subject == "self":
         tags += ["self", "name"]
@@ -755,6 +923,7 @@ def save_auto_profile_fact(
         "preference": f"bạn thích {candidate.value}",
         "goal": f"mục tiêu của bạn là {candidate.value}",
         "learning_focus": f"bạn đang học {candidate.value}",
+        "habit": f"bạn hay {candidate.value}",
     }
     content = _content_map.get(candidate.relation, f"{candidate.relation}: {candidate.value}")
 
@@ -786,6 +955,41 @@ def save_auto_profile_fact(
 # ---------------------------------------------------------------------------
 # Retrieval / answering
 # ---------------------------------------------------------------------------
+
+def find_existing_profile_value(
+    candidate: ProfileFactCandidate,
+    store: "MemoryStoreProtocol",
+) -> str | None:
+    """Return the stored name value for the candidate's subject/relation, or None.
+
+    Used for P0-7E conflict-safe writes: a direct name/relation claim is only auto-saved
+    when no confirmed value already exists for that slot (never a silent overwrite).
+    """
+    records = list(store.search(MemoryQuery(
+        text="",
+        types=[MemoryType.FACT],
+        tags=["user_profile"],
+        limit=100,
+    )))
+    for rec in records:
+        md = rec.metadata
+        if not (
+            md.get("confirmed")
+            and md.get("profile_schema") in ("user_profile_fact_v1", "user_profile_fact_v2")
+        ):
+            continue
+        if candidate.subject == "self":
+            if md.get("subject") == "self" and md.get("relation") == "name":
+                return md.get("value", "")
+        else:
+            if (
+                md.get("subject") == "relation"
+                and md.get("relation") == "name"
+                and md.get("relation_label") == candidate.relation_label
+            ):
+                return md.get("value", "")
+    return None
+
 
 def answer_profile_query(
     query: ProfileQuery,
@@ -881,6 +1085,8 @@ def answer_profile_query(
                 lines.append(f"- Mục tiêu của bạn là {val}.")
             elif subject == "self" and rel == "learning_focus":
                 lines.append(f"- Bạn đang học {val}.")
+            elif subject == "self" and rel == "habit":
+                lines.append(f"- Bạn hay {val}.")
             elif subject == "relation" and rel == "name":
                 rel_label = rec.metadata.get("relation_label", "người liên quan")
                 lines.append(f"- {rel_label.capitalize()} của bạn tên là {val}.")
@@ -919,6 +1125,14 @@ def answer_profile_query(
                 val = rec.metadata.get("value", "")
                 return f"Mục tiêu của bạn là {val}."
         return "Tôi chưa có thông tin đã lưu về mục tiêu của bạn."
+
+    # --- P0-7E: self_habit ---
+    elif query.kind == "self_habit":
+        for rec in confirmed:
+            if rec.metadata.get("subject") == "self" and rec.metadata.get("relation") == "habit":
+                val = rec.metadata.get("value", "")
+                return f"Bạn hay {val}."
+        return "Tôi chưa có thông tin đã lưu về thói quen/lifestyle của bạn."
 
     # --- P0-7D: relation_existence ---
     elif query.kind == "relation_existence":

@@ -1,5 +1,4 @@
 import type { MessageRecord } from '../api/types';
-import { ProvenancePanel } from './ProvenancePanel';
 
 interface MessageBubbleProps {
   message: MessageRecord;
@@ -21,9 +20,9 @@ export function MessageBubble({ message }: MessageBubbleProps) {
       <div className="message-content">
         {message.content || <span className="message-empty">(empty response)</span>}
       </div>
-      {!isUser && message.provenance && message.provenance.length > 0 && (
-        <ProvenancePanel items={message.provenance} />
-      )}
+      {/* CONV-P0 P0-7E: raw memory provenance (UUIDs) is developer/debug metadata and is
+          intentionally NOT rendered in normal chat. It remains on the API response
+          (message.provenance) for debugging/tests. */}
       <div className="message-meta">
         <span className="message-time">{formatTime(message.created_at)}</span>
         {message.status && !isUser && (

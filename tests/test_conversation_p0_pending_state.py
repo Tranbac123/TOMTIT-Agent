@@ -229,26 +229,24 @@ def test_pending_state_isolated_between_session_runtime_instances():
 
 
 # ---------------------------------------------------------------------------
-# 11. No user-profile memory is faked for "lưu tên tôi là Bắc"
+# 11. P0-7E: "lưu tên tôi là Bắc" is an explicit name save → auto-saved & recalled
 # ---------------------------------------------------------------------------
 
-def test_no_user_profile_memory_is_faked_for_luu_ten_toi_la_bac():
+def test_luu_ten_toi_la_bac_is_explicit_name_save_recalled_faithfully():
     sr = _make_sr()
 
-    # "lưu tên tôi là Bắc" — content is unknown (no "ghi chú" keyword with colon content)
-    # Should NOT create pending with content="tên tôi là Bắc" because content is not parsed.
-    sr.handle_turn("lưu tên tôi là Bắc")
-    # Even if pending was created (for a partial note), it must NOT claim profile memory.
-    # The key invariant: any subsequent read-back for user identity must NOT fabricate memory.
+    # "lưu tên tôi là Bắc" ("save my name is Bắc") is an explicit first-party name claim.
+    # P0-7E: direct self.name auto-saves (no confirmation). This is NOT fabrication — the
+    # recalled name is exactly what the user asked to save; it must not create a note pending.
+    s = sr.handle_turn("lưu tên tôi là Bắc")
+    assert sr._pending_conversation_state is None
+    assert sr._pending_profile_confirmation is None
+    assert "đã nhớ" in (s.final_answer or "").lower()
 
     state = sr.handle_turn("bạn nhớ tôi tên gì không?")
     answer = state.final_answer.lower()
-    # Must NOT claim it saved or knows user identity
-    assert "bắc" not in answer or "chưa" in answer or "không" in answer, (
-        f"Must not fabricate user-profile memory. Got: {state.final_answer!r}"
-    )
-    assert "đã lưu tên" not in answer
-    assert "tên bạn là bắc" not in answer
+    # Faithful recall of the explicitly-saved name.
+    assert "bắc" in answer
 
 
 # ---------------------------------------------------------------------------

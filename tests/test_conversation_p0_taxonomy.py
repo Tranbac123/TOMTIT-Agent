@@ -93,6 +93,28 @@ def test_new_conversation_intents_classified(text, expected):
 # Đọc-ghi-chú beats summarization.
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# P0-7E: greeting typo variants + capability typo (narrow, additive)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        ("alo", IntentName.GREETING),
+        ("ê lo", IntentName.GREETING),
+        ("hêlo", IntentName.GREETING),
+        ("helo", IntentName.GREETING),
+        ("hê lo", IntentName.GREETING),
+        ("lelo", IntentName.UNKNOWN),                       # intentionally NOT a greeting
+        ("bạn là được gì?", IntentName.CAPABILITY_QUERY),   # là↔làm typo
+        ("bạn làm được gì?", IntentName.CAPABILITY_QUERY),  # unaffected
+        ("bạn là ai?", IntentName.IDENTITY_QUERY),          # identity not stolen
+    ],
+)
+def test_p0_7e_greeting_and_capability_typos(text, expected):
+    assert _intent(text) == expected
+
+
 def test_code_review_beats_tim_websearch():
     assert _intent("Tìm bug trong code này") == IntentName.CODE_REVIEW_REQUEST
     assert _intent("Tìm thông tin về FastAPI") == IntentName.WEB_SEARCH  # unaffected

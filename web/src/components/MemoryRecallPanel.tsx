@@ -70,8 +70,13 @@ export function MemoryRecallPanel({
           <div className="recall-result-content">
             {result.content || <span className="recall-empty">No matching memory found.</span>}
           </div>
+          {/* CONV-P0 P0-7E: provenance is developer/debug metadata — collapsed by default
+              so raw memory UUIDs are not shown until explicitly expanded. */}
           {result.provenance && result.provenance.length > 0 && (
-            <ProvenancePanel items={result.provenance} />
+            <details className="provenance-details">
+              <summary className="provenance-summary">Debug provenance</summary>
+              <ProvenancePanel items={result.provenance} />
+            </details>
           )}
         </div>
       )}

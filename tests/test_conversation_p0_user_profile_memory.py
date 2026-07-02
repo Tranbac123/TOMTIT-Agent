@@ -90,53 +90,54 @@ def test_detects_self_name_candidate_minh_la_bac():
 
 
 # ---------------------------------------------------------------------------
-# 5. Confirmation prompt before write
+# 5. P0-7E: direct self-name auto-saves without confirmation
 # ---------------------------------------------------------------------------
 
-def test_profile_candidate_asks_confirmation_before_write():
+def test_self_name_direct_claim_auto_saves_without_confirmation():
     sr = _make_sr()
     s = sr.handle_turn("Tôi tên là Bắc")
 
     assert s.status == AgentStatus.COMPLETED
     answer = s.final_answer or ""
-    assert "lưu" in answer.lower()
+    # P0-7E: auto-saved directly with a natural ack, no confirmation prompt.
+    assert _auto_saved(answer), answer
     assert "Bắc" in answer
-    # Pending must be set, nothing written yet
-    assert sr._pending_profile_confirmation is not None
-    assert sr._pending_profile_confirmation.kind == "profile_fact_confirmation"
-    assert sr._pending_profile_confirmation.candidate.value == "Bắc"
+    assert "lưu không" not in answer.lower()
+    assert sr._pending_profile_confirmation is None
 
 
 # ---------------------------------------------------------------------------
-# 6. Confirmation saves self-name fact
+# 6. P0-7E: self-name is queryable immediately after auto-save
 # ---------------------------------------------------------------------------
 
-def test_profile_confirm_saves_self_name_fact():
+def test_self_name_query_immediately_after_auto_save():
     sr = _make_sr()
     sr.handle_turn("Tôi tên là Bắc")
-    s = sr.handle_turn("có")
+    s = sr.handle_turn("tôi tên là gì?")
 
     assert s.status == AgentStatus.COMPLETED
+    assert "Bắc" in (s.final_answer or "")
     assert sr._pending_profile_confirmation is None
+
+
+# ---------------------------------------------------------------------------
+# 7. P0-7E: conflicting self-name is handled safely (no silent overwrite)
+# ---------------------------------------------------------------------------
+
+def test_self_name_conflict_does_not_silently_overwrite():
+    sr = _make_sr()
+    sr.handle_turn("Tôi tên là Bắc")          # auto-saved
+    s = sr.handle_turn("tôi tên là Nam")       # conflict
+
+    assert s.status == AgentStatus.COMPLETED
     answer = s.final_answer or ""
-    assert "lưu" in answer.lower()
-
-
-# ---------------------------------------------------------------------------
-# 7. Cancel does not save
-# ---------------------------------------------------------------------------
-
-@pytest.mark.parametrize("cancel_text", ["không", "hủy", "bỏ qua", "thôi", "cancel", "no"])
-def test_profile_cancel_does_not_save(cancel_text: str):
-    sr = _make_sr()
-    sr.handle_turn("Tôi tên là Bắc")
-    s = sr.handle_turn(cancel_text)
-
-    assert s.status == AgentStatus.COMPLETED
-    assert sr._pending_profile_confirmation is None
-    # Name must not be in subsequent profile queries
+    # Must acknowledge existing name and not claim a new save.
+    assert "Bắc" in answer
+    assert not _auto_saved(answer), answer
+    # Original name is preserved.
     q = sr.handle_turn("tôi tên là gì?")
-    assert "Bắc" not in (q.final_answer or "")
+    assert "Bắc" in (q.final_answer or "")
+    assert "Nam" not in (q.final_answer or "")
 
 
 # ---------------------------------------------------------------------------
@@ -171,21 +172,20 @@ def test_ban_nho_toi_ten_gi_answers_after_confirmed_save():
 
 
 # ---------------------------------------------------------------------------
-# 11. No profile answer before confirmation
+# 11. P0-7E: no name known before any claim; known after direct auto-save
 # ---------------------------------------------------------------------------
 
-def test_no_profile_answer_before_confirmation():
+def test_no_profile_answer_before_any_claim_then_known_after_autosave():
     sr = _make_sr()
-    # Only issue the candidate — do NOT confirm
+    # Before any claim: honest unknown state (no hallucinated name).
+    before = sr.handle_turn("tôi tên là gì?")
+    assert "Bắc" not in (before.final_answer or "")
+    assert "chưa" in (before.final_answer or "").lower()
+
+    # Direct claim auto-saves; query now returns it.
     sr.handle_turn("Tôi tên là Bắc")
-
-    # Cancel the pending so we can test the query
-    sr.handle_turn("không")
-
-    s = sr.handle_turn("tôi tên là gì?")
-    assert s.status == AgentStatus.COMPLETED
-    # Must NOT claim "Bắc" is the name since it was never confirmed
-    assert "Bắc" not in (s.final_answer or "")
+    after = sr.handle_turn("tôi tên là gì?")
+    assert "Bắc" in (after.final_answer or "")
 
 
 # ---------------------------------------------------------------------------
@@ -222,19 +222,17 @@ def test_luu_ghi_chu_toi_ten_la_bac_does_not_silently_become_profile():
 # 14. Relationship candidate asks confirmation
 # ---------------------------------------------------------------------------
 
-def test_relationship_candidate_ban_gai_toi_ten_la_quy_asks_confirmation():
+def test_relationship_candidate_ban_gai_toi_ten_la_quy_auto_saves():
     sr = _make_sr()
     s = sr.handle_turn("bạn gái tôi tên là Quý")
 
     assert s.status == AgentStatus.COMPLETED
     answer = s.final_answer or ""
+    # P0-7E: narrow relation.name auto-saves directly, no confirmation prompt.
     assert "Quý" in answer
-    assert "lưu" in answer.lower()
-    assert sr._pending_profile_confirmation is not None
-    c = sr._pending_profile_confirmation.candidate
-    assert c.subject == "relation"
-    assert c.value == "Quý"
-    assert c.relation_label == "bạn gái"
+    assert _auto_saved(answer), answer
+    assert "lưu không" not in answer.lower()
+    assert sr._pending_profile_confirmation is None
 
 
 # ---------------------------------------------------------------------------
@@ -316,30 +314,30 @@ def test_profile_memory_isolated_between_runtime_store_instances():
 
 
 # ---------------------------------------------------------------------------
-# 20. Profile pending clears on unrelated identity (bạn là ai?)
+# 20. P0-7E: name auto-save leaves no stuck state; unrelated identity works next
 # ---------------------------------------------------------------------------
 
-def test_profile_pending_clears_on_unrelated_identity():
+def test_name_autosave_then_unrelated_identity_works():
     sr = _make_sr()
-    sr.handle_turn("Tôi tên là Bắc")
-    assert sr._pending_profile_confirmation is not None
+    s0 = sr.handle_turn("Tôi tên là Bắc")
+    assert _auto_saved(s0.final_answer)
+    assert sr._pending_profile_confirmation is None
 
-    # Unrelated identity question about TomTit — should clear profile pending
+    # Unrelated identity question about TomTit — clean response, no leftover state.
     s = sr.handle_turn("bạn là ai?")
     assert s.status == AgentStatus.COMPLETED
-    # TomTit identity
     assert "TomTit" in (s.final_answer or "") or "TOMTIT" in (s.final_answer or "")
     assert sr._pending_profile_confirmation is None
 
 
 # ---------------------------------------------------------------------------
-# 21. Profile pending clears on calculator command
+# 21. P0-7E: name auto-save leaves no stuck state; calculator works next
 # ---------------------------------------------------------------------------
 
-def test_profile_pending_clears_on_calculator_command():
+def test_name_autosave_then_calculator_command_works():
     sr = _make_sr()
     sr.handle_turn("Tôi tên là Bắc")
-    assert sr._pending_profile_confirmation is not None
+    assert sr._pending_profile_confirmation is None
 
     s = sr.handle_turn("calculate 2 + 2")
     assert s.status == AgentStatus.COMPLETED
@@ -354,18 +352,19 @@ def test_profile_pending_clears_on_calculator_command():
 def test_profile_write_failure_does_not_claim_success():
     from unittest.mock import patch
     sr = _make_sr()
-    sr.handle_turn("Tôi tên là Bắc")
 
+    # P0-7E: self.name auto-saves via save_confirmed_profile_fact — patch it to fail.
     with patch(
         "agent_core.runtime.session_runtime.save_confirmed_profile_fact",
         return_value=False,
     ):
-        s = sr.handle_turn("có")
+        s = sr.handle_turn("Tôi tên là Bắc")
 
     assert s.status == AgentStatus.COMPLETED
     answer = (s.final_answer or "").lower()
-    # Must NOT say "Đã lưu" when save failed
-    assert "đã lưu." not in answer or "không thể" in answer or len(s.errors) > 0
+    # Must NOT claim a save when it failed.
+    assert not _auto_saved(s.final_answer), s.final_answer
+    assert "không thể" in answer or len(s.errors) > 0
 
 
 # ---------------------------------------------------------------------------
@@ -700,7 +699,7 @@ def test_auto_save_occupation_saves_and_acks_no_confirmation():
 
     assert s.status == AgentStatus.COMPLETED
     answer = s.final_answer or ""
-    assert "lưu" in answer.lower() or "hồ sơ" in answer.lower()
+    assert "nhớ" in answer.lower()
     # No pending confirmation — this is AUTO_SAFE
     assert sr._pending_profile_confirmation is None
 
@@ -711,7 +710,7 @@ def test_auto_save_preference_saves_and_acks_no_confirmation():
 
     assert s.status == AgentStatus.COMPLETED
     answer = s.final_answer or ""
-    assert "lưu" in answer.lower() or "hồ sơ" in answer.lower()
+    assert "nhớ" in answer.lower()
     assert sr._pending_profile_confirmation is None
 
 
@@ -732,7 +731,7 @@ def test_auto_save_goal_saves_and_acks():
 
     assert s.status == AgentStatus.COMPLETED
     answer = s.final_answer or ""
-    assert "lưu" in answer.lower() or "hồ sơ" in answer.lower()
+    assert "nhớ" in answer.lower()
     assert sr._pending_profile_confirmation is None
 
 
@@ -812,38 +811,32 @@ def test_nghe_nghiep_unknown_state_honest_response():
 # Group F: người yêu / partner confirmation candidate
 # ---------------------------------------------------------------------------
 
-def test_nguoi_yeu_confirmation_candidate_detected():
+def test_nguoi_yeu_auto_saves_directly():
     sr = _make_sr()
     s = sr.handle_turn("người yêu của tôi tên là Quý")
 
     assert s.status == AgentStatus.COMPLETED
     answer = s.final_answer or ""
     assert "Quý" in answer
-    assert "lưu" in answer.lower()
-    assert sr._pending_profile_confirmation is not None
-    c = sr._pending_profile_confirmation.candidate
-    assert c.subject == "relation"
-    assert c.value == "Quý"
+    assert _auto_saved(answer), answer
+    assert "lưu không" not in answer.lower()
+    assert sr._pending_profile_confirmation is None
 
 
-def test_partner_confirmation_candidate_detected():
+def test_partner_auto_saves_directly():
     sr = _make_sr()
     s = sr.handle_turn("partner của tôi là Quý")
 
     assert s.status == AgentStatus.COMPLETED
     answer = s.final_answer or ""
     assert "Quý" in answer
-    assert "lưu" in answer.lower()
-    assert sr._pending_profile_confirmation is not None
-    c = sr._pending_profile_confirmation.candidate
-    assert c.subject == "relation"
-    assert c.value == "Quý"
+    assert _auto_saved(answer), answer
+    assert sr._pending_profile_confirmation is None
 
 
-def test_nguoi_yeu_confirm_then_query_answers():
+def test_nguoi_yeu_auto_save_then_query_answers():
     sr = _make_sr()
     sr.handle_turn("người yêu của tôi tên là Quý")
-    sr.handle_turn("có")
 
     s = sr.handle_turn("người yêu tôi tên gì?")
     assert s.status == AgentStatus.COMPLETED
@@ -872,7 +865,8 @@ def test_profile_summary_includes_auto_saved_occupation():
 # ===========================================================================
 
 def _auto_saved(final_answer: str | None) -> bool:
-    return "đã lưu vào hồ sơ" in (final_answer or "").lower()
+    # P0-7E: AUTO_SAFE acks are natural and begin with "Đã nhớ" (no longer "Đã lưu vào hồ sơ").
+    return "đã nhớ" in (final_answer or "").lower()
 
 
 def test_auto_saves_occupation_toi_la_ai_enginer_typo():
@@ -925,14 +919,16 @@ def test_luu_ghi_chu_toi_la_ai_enginer_still_does_not_auto_save():
     assert not _auto_saved(s.final_answer), s.final_answer
 
 
-def test_toi_la_bac_still_requires_name_confirmation():
+def test_toi_la_bac_auto_saves_name():
     sr = _make_sr()
     s = sr.handle_turn("tôi là Bắc")
     assert s.status == AgentStatus.COMPLETED
-    # Single proper-name token → confirmation-gated name candidate, NOT auto-save.
-    assert not _auto_saved(s.final_answer), s.final_answer
-    assert sr._pending_profile_confirmation is not None
-    assert sr._pending_profile_confirmation.candidate.value == "Bắc"
+    # P0-7E: single proper-name token → direct self.name auto-save (no confirmation).
+    assert _auto_saved(s.final_answer), s.final_answer
+    assert "Bắc" in (s.final_answer or "")
+    assert sr._pending_profile_confirmation is None
+    q = sr.handle_turn("tôi tên là gì?")
+    assert "Bắc" in (q.final_answer or "")
 
 
 def test_toi_la_nguoi_tot_still_does_not_auto_save():
@@ -1050,3 +1046,126 @@ def test_unsafe_guard_helper_blocks_and_allows():
     for good in ["build AI", "AI Agent", "lập trình", "AI enginer", "LLM",
                  "build AI Agent", "đá bóng"]:
         assert not _is_unsafe_or_sensitive_auto_value(good), good
+
+
+# ===========================================================================
+# P0-7E tests — memory UX: natural acks, habit, relation auto-save, safety UX
+# ===========================================================================
+
+def test_relation_direct_claim_auto_saves_without_confirmation():
+    sr = _make_sr()
+    s = sr.handle_turn("bạn gái tôi tên là Quý")
+    assert s.status == AgentStatus.COMPLETED
+    assert _auto_saved(s.final_answer), s.final_answer
+    assert "Quý" in (s.final_answer or "")
+    assert sr._pending_profile_confirmation is None
+
+
+def test_relation_query_after_auto_save():
+    sr = _make_sr()
+    sr.handle_turn("bạn gái tôi tên là Quý")
+    s = sr.handle_turn("bạn gái tôi tên gì?")
+    assert "Quý" in (s.final_answer or "")
+
+
+def test_relation_conflict_does_not_silently_overwrite():
+    sr = _make_sr()
+    sr.handle_turn("bạn gái tôi tên là Quý")     # auto-saved
+    s = sr.handle_turn("bạn gái tôi tên là Lan")  # conflict
+    assert s.status == AgentStatus.COMPLETED
+    answer = s.final_answer or ""
+    assert "Quý" in answer
+    assert not _auto_saved(answer), answer
+    q = sr.handle_turn("bạn gái tôi tên gì?")
+    assert "Quý" in (q.final_answer or "")
+    assert "Lan" not in (q.final_answer or "")
+
+
+def test_safe_preference_post_save_response_is_natural():
+    sr = _make_sr()
+    s = sr.handle_turn("tôi thích build AI")
+    answer = s.final_answer or ""
+    # Natural "Đã nhớ …" phrasing, never the mechanical "Đã lưu vào hồ sơ".
+    assert "đã nhớ" in answer.lower()
+    assert "Đã lưu vào hồ sơ" not in answer
+    assert "build AI" in answer
+
+
+def test_cafe_preference_response_mentions_cafe_without_overclaim():
+    sr = _make_sr()
+    s = sr.handle_turn("tôi thích uống cafe")
+    answer = s.final_answer or ""
+    assert "đã nhớ" in answer.lower()
+    assert "uống cafe" in answer
+    # light contextual note only; must not over-claim as advice/diagnosis
+    assert "cà phê" in answer.lower() or "cafe" in answer.lower()
+    assert "chữa" not in answer.lower()
+
+
+def test_unsafe_cocaine_returns_specific_safe_response_and_does_not_save():
+    sr = _make_sr()
+    s = sr.handle_turn("tôi thích cocaine")
+    answer = s.final_answer or ""
+    assert "cocaine" in answer.lower()
+    assert "không lưu" in answer.lower() or "sẽ không lưu" in answer.lower()
+    assert not _auto_saved(answer), answer
+    assert sr._pending_profile_confirmation is None
+    q = sr.handle_turn("tôi thích gì?")
+    assert "cocaine" not in (q.final_answer or "").lower()
+
+
+def test_habit_toi_hay_di_moto_di_phuot_auto_saves():
+    sr = _make_sr()
+    s = sr.handle_turn("tôi hay đi moto đi phượt")
+    assert s.status == AgentStatus.COMPLETED
+    assert _auto_saved(s.final_answer), s.final_answer
+    assert "moto" in (s.final_answer or "").lower() or "phượt" in (s.final_answer or "").lower()
+    assert sr._pending_profile_confirmation is None
+
+
+def test_habit_appears_in_profile_summary():
+    sr = _make_sr()
+    sr.handle_turn("tôi hay đi moto đi phượt")
+    s = sr.handle_turn("bạn biết gì về tôi?")
+    answer = s.final_answer or ""
+    assert "phượt" in answer.lower()
+
+
+def test_habit_query_unknown_state():
+    sr = _make_sr()
+    s = sr.handle_turn("thói quen của tôi là gì?")
+    assert s.status == AgentStatus.COMPLETED
+    answer = (s.final_answer or "").lower()
+    assert "chưa" in answer
+
+
+def test_habit_query_after_auto_save():
+    sr = _make_sr()
+    sr.handle_turn("tôi hay uống cafe")
+    s = sr.handle_turn("tôi hay làm gì?")
+    assert "uống cafe" in (s.final_answer or "")
+
+
+def test_note_prefix_still_does_not_auto_save_profile():
+    sr = _make_sr()
+    s = sr.handle_turn("note tôi hay đi phượt")
+    assert s.status == AgentStatus.COMPLETED
+    assert not _auto_saved(s.final_answer), s.final_answer
+
+
+def test_detect_blocked_unsafe_only_for_profile_pattern():
+    from agent_core.conversation.profile_memory import (
+        detect_blocked_auto_profile_value,
+    )
+    # matches a preference pattern with unsafe value → blocked attempt
+    assert detect_blocked_auto_profile_value("tôi thích cocaine") is not None
+    # arbitrary unsupported sentence → not a blocked attempt (falls through to router)
+    assert detect_blocked_auto_profile_value("cocaine là gì") is None
+    assert detect_blocked_auto_profile_value("hôm nay trời đẹp") is None
+
+
+def test_habit_detect_unit():
+    c = detect_auto_profile_candidate("tôi thường chơi thể thao")
+    assert c is not None
+    assert c.relation == "habit"
+    assert "thể thao" in c.value.lower()
