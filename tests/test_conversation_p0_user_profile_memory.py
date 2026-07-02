@@ -38,6 +38,7 @@ import pytest
 from agent_core.conversation.profile_memory import (
     AutoProfileCandidate,
     ProfileFactCandidate,
+    collect_profile_snapshot,
     detect_auto_profile_candidate,
     detect_profile_fact_candidate,
     detect_profile_query,
@@ -2107,3 +2108,144 @@ def test_fix5_compound_comparison_runtime():
     assert (sr.handle_turn("2 * 3 == 6").final_answer or "") == "Đúng."
     assert (sr.handle_turn("2 + 3 > 4").final_answer or "") == "Đúng."
     assert (sr.handle_turn("4 != 4").final_answer or "") == "Sai."
+
+
+# ---------------------------------------------------------------------------
+# P0-7F-FIX6 — memory query variants
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("query", [
+    "bạn biết tên tôi không?",
+    "bạn có biết tên tôi không?",
+    "bạn nhớ tên tôi không?",
+    "bạn có nhớ tên tôi không?",
+    "tên của tôi là gì?",
+    "bạn biết tôi là ai không?",
+])
+def test_fix6_self_name_query_variants_return_saved_name(query: str):
+    sr = _make_sr()
+    sr.handle_turn("tôi là Bắc")
+
+    answer = sr.handle_turn(query).final_answer or ""
+
+    assert "rule-based MVP" not in answer
+    assert "bắc" in answer.lower()
+
+
+@pytest.mark.parametrize("query", [
+    "bạn biết tên tôi không?",
+    "bạn nhớ tên tôi không?",
+    "tôi tên là gì?",
+    "tôi là ai?",
+])
+def test_fix6_self_name_query_variants_fresh_session_unknown(query: str):
+    sr = _make_sr()
+
+    answer = sr.handle_turn(query).final_answer or ""
+    low = answer.lower()
+
+    assert "đã nhớ" not in low
+    assert "bắc" not in low
+    assert "chưa" in low or "không" in low
+
+
+@pytest.mark.parametrize(("write", "query", "token"), [
+    ("tôi thích cafe", "tôi có thích uống cafe không?", "cafe"),
+    ("tôi thích uống cafe", "tôi có thích cafe không?", "cafe"),
+    ("tôi thích cafe không đường", "tôi có thích cafe không?", "cafe"),
+    ("tôi thích ăn kem", "tôi có thích kem không?", "kem"),
+])
+def test_fix6_preference_yesno_matches_head_terms(write: str, query: str, token: str):
+    sr = _make_sr()
+    assert "đã nhớ" in (sr.handle_turn(write).final_answer or "").lower()
+
+    answer = sr.handle_turn(query).final_answer or ""
+    low = answer.lower()
+
+    assert "đã nhớ" not in low
+    assert "có" in low
+    assert token in low
+    assert "chưa thấy" not in low
+
+
+def test_fix6_preference_yesno_matches_multi_item_components():
+    sr = _make_sr()
+    assert "đã nhớ" in (sr.handle_turn("tôi thích cả cafe và trà").final_answer or "").lower()
+
+    cafe = sr.handle_turn("tôi có thích cafe không?").final_answer or ""
+    tea = sr.handle_turn("tôi có thích trà không?").final_answer or ""
+
+    assert "có" in cafe.lower() and "cafe" in cafe.lower()
+    assert "có" in tea.lower() and "trà" in tea.lower()
+
+
+def test_fix6_preference_yesno_comparative_only_matches_positive_side():
+    sr = _make_sr()
+    assert "đã nhớ" in (sr.handle_turn("tôi thích cafe hơn trà").final_answer or "").lower()
+
+    cafe = sr.handle_turn("tôi có thích cafe không?").final_answer or ""
+    tea = sr.handle_turn("tôi có thích trà không?").final_answer or ""
+
+    assert "có" in cafe.lower() and "cafe" in cafe.lower()
+    assert not ("có" in tea.lower() and "trà" in tea.lower() and "chưa" not in tea.lower())
+
+
+def test_fix6_preference_yesno_disambiguates_uppercase_ai_from_lowercase_ai():
+    sr = _make_sr()
+    assert "đã nhớ" in (sr.handle_turn("tôi thích AI").final_answer or "").lower()
+
+    professional = sr.handle_turn("tôi có thích AI không?").final_answer or ""
+    affection = sr.handle_turn("tôi có thích ai không?").final_answer or ""
+
+    assert "có" in professional.lower()
+    assert "ai" in professional.lower()
+    assert not (
+        "có" in affection.lower()
+        and "ai" in affection.lower()
+        and "chưa" not in affection.lower()
+    )
+
+
+def test_fix6_related_memory_query_variants_return_saved_values():
+    sr = _make_sr()
+
+    assert "đã nhớ" in (sr.handle_turn("tôi là AI engineer").final_answer or "").lower()
+    work = sr.handle_turn("bạn biết công việc của tôi không?").final_answer or ""
+    assert "AI" in work or "engineer" in work.lower()
+
+    assert "đã nhớ" in (sr.handle_turn("tôi biết bơi").final_answer or "").lower()
+    skill = sr.handle_turn("bạn biết kỹ năng của tôi không?").final_answer or ""
+    assert "bơi" in skill.lower()
+
+    assert "đã nhớ" in (sr.handle_turn("bạn tôi tên là Meo").final_answer or "").lower()
+    friend = sr.handle_turn("bạn biết bạn tôi tên gì không?").final_answer or ""
+    assert "meo" in friend.lower()
+    assert "bắc" not in friend.lower()
+
+    assert "đã nhớ" in (sr.handle_turn("nhà tôi nuôi mèo").final_answer or "").lower()
+    pet = sr.handle_turn("bạn biết nhà tôi nuôi con gì không?").final_answer or ""
+    assert "mèo" in pet.lower()
+
+    assert "đã nhớ" in (sr.handle_turn("người yêu tôi là Quý").final_answer or "").lower()
+    relation = sr.handle_turn("bạn có nhớ người yêu của tôi là ai không?").final_answer or ""
+    assert "quý" in relation.lower()
+
+
+def test_fix6_query_variants_do_not_create_profile_facts():
+    agent, store = build_local_agent()
+    sr = SessionRuntime(agent, store)
+
+    for query in [
+        "bạn biết tên tôi không?",
+        "bạn nhớ tên tôi không?",
+        "tôi có thích cafe không?",
+        "tôi thích uống gì?",
+        "bạn biết công việc của tôi không?",
+        "bạn có nhớ bạn của tôi tên gì không?",
+        "bạn có nhớ tôi nuôi con gì không?",
+    ]:
+        answer = sr.handle_turn(query).final_answer or ""
+        assert "đã nhớ" not in answer.lower()
+
+    snap = collect_profile_snapshot(store)
+    assert snap == type(snap)()

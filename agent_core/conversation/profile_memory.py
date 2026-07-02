@@ -145,6 +145,11 @@ def _get_lookup_labels(query_label: str | None) -> frozenset[str]:
     return _RELATION_SYNONYM_MAP.get(query_label, frozenset({query_label}))
 
 
+def _remember_wrapper(inner: str) -> str:
+    """Build a bounded "bạn biết/nhớ ... không?" query wrapper around an inner pattern."""
+    return r'bạn\s+(?:có\s+)?(?:biết|nhớ)\s+' + inner + r'\s+(?:không|ko|hông|hong)'
+
+
 # ---------------------------------------------------------------------------
 # P0-7D constants — AUTO_SAFE safety guards
 # ---------------------------------------------------------------------------
@@ -381,27 +386,58 @@ _RE_HABIT = re.compile(
 _RE_SELF_NAME_Q = re.compile(
     r'(?:tôi|mình)\s+tên\s+(?:là\s+)?g[ìi]\s*\??'
     r'|tên\s+(?:tôi|mình)\s+(?:là\s+)?g[ìi]\s*\??'
+    r'|tên\s+của\s+(?:tôi|mình)\s+(?:là\s+)?g[ìi]\s*\??'
     r'|bạn\s+nhớ\s+(?:tôi|mình)\s+tên\s+g[ìi]',
     re.IGNORECASE,
 )
 
 # P0-7C FIX: fully anchored
 _RE_SELF_IDENTITY_Q = re.compile(
-    r'^\s*(?:tôi|mình)\s+là\s+ai\s*[?？]?\s*$',
+    (
+        r'^\s*(?:'
+        r'(?:tôi|mình)\s+là\s+ai'
+        r'|' + _remember_wrapper(r'(?:tôi|mình)\s+là\s+ai')
+        + r')\s*[?？]?\s*$'
+    ),
+    re.IGNORECASE,
+)
+_RE_SELF_NAME_REMEMBER_Q = re.compile(
+    r'^\s*(?:'
+    + _remember_wrapper(r'tên\s+(?:của\s+)?(?:tôi|mình)')
+    + r'|'
+    + _remember_wrapper(r'(?:tôi|mình)\s+tên\s+g[ìi]')
+    + r')\s*[?？]?\s*$',
     re.IGNORECASE,
 )
 
 # Relation name query "tên gì?" — includes P0-7C synonyms + optional "của"
 _RE_RELATION_NAME_Q = re.compile(
-    r'^' + _RELATIONS_QUERY_PATTERN
-    + r'(?:\s+của)?\s+(?:tôi|mình)\s+tên\s+(?:là\s+)?g[ìi]\s*[?？]?\s*$',
+    (
+        r'^(?:'
+        + _RELATIONS_QUERY_PATTERN
+        + r'(?:\s+của)?\s+(?:tôi|mình)\s+tên\s+(?:là\s+)?g[ìi]'
+        + r'|'
+        + _remember_wrapper(
+            _RELATIONS_QUERY_PATTERN
+            + r'(?:\s+của)?\s+(?:tôi|mình)\s+tên\s+(?:là\s+)?g[ìi]'
+        )
+        + r')\s*[?？]?\s*$'
+    ),
     re.IGNORECASE,
 )
 
 # P0-7C: relation "là ai?" form
 _RE_RELATION_LA_AI_Q = re.compile(
-    r'^' + _RELATIONS_QUERY_PATTERN
-    + r'(?:\s+của)?\s+(?:tôi|mình)\s+là\s+ai\s*[?？]?\s*$',
+    (
+        r'^(?:'
+        + _RELATIONS_QUERY_PATTERN
+        + r'(?:\s+của)?\s+(?:tôi|mình)\s+là\s+ai'
+        + r'|'
+        + _remember_wrapper(
+            _RELATIONS_QUERY_PATTERN + r'(?:\s+của)?\s+(?:tôi|mình)\s+là\s+ai'
+        )
+        + r')\s*[?？]?\s*$'
+    ),
     re.IGNORECASE,
 )
 
@@ -418,10 +454,14 @@ _RE_PROFILE_SUMMARY_Q = re.compile(
 )
 # P0-7F: skill/ability query — "tôi biết làm gì?", "tôi biết gì?", "tôi có kỹ năng gì?"
 _RE_SKILL_Q = re.compile(
-    r'^(?:'
-    r'(?:tôi|mình)\s+biết\s+(?:làm\s+)?gì'
-    r'|(?:tôi|mình)\s+có\s+(?:những\s+)?kỹ\s+năng\s+gì'
-    r')\s*[?？]?\s*$',
+    (
+        r'^(?:'
+        r'(?:tôi|mình)\s+biết\s+(?:làm\s+)?gì'
+        r'|(?:tôi|mình)\s+có\s+(?:những\s+)?kỹ\s+năng\s+gì'
+        + r'|' + _remember_wrapper(r'kỹ\s+năng\s+(?:của\s+)?(?:tôi|mình)')
+        + r'|' + _remember_wrapper(r'(?:tôi|mình)\s+biết\s+(?:làm\s+)?gì')
+        + r')\s*[?？]?\s*$'
+    ),
     re.IGNORECASE,
 )
 
@@ -434,13 +474,17 @@ _SELF_WORDS = frozenset({"tôi", "mình", "bạn", "tao", "ta"})
 
 # P0-7D query patterns
 _RE_OCCUPATION_Q = re.compile(
-    r'^(?:'
-    r'(?:tôi|mình)\s+làm\s+gì'
-    r'|(?:tôi|mình)\s+làm\s+nghề\s+gì'
-    r'|nghề\s+(?:của\s+)?(?:tôi|mình)\s+là\s+gì'
-    r'|công\s+việc\s+(?:của\s+)?(?:tôi|mình)\s+là\s+gì'
-    r'|vai\s+trò\s+(?:của\s+)?(?:tôi|mình)\s+là\s+gì'
-    r')\s*[?？]?\s*$',
+    (
+        r'^(?:'
+        r'(?:tôi|mình)\s+làm\s+gì'
+        r'|(?:tôi|mình)\s+làm\s+nghề\s+gì'
+        r'|nghề\s+(?:của\s+)?(?:tôi|mình)\s+là\s+gì'
+        r'|công\s+việc\s+(?:của\s+)?(?:tôi|mình)\s+là\s+gì'
+        r'|vai\s+trò\s+(?:của\s+)?(?:tôi|mình)\s+là\s+gì'
+        + r'|' + _remember_wrapper(r'công\s+việc\s+(?:của\s+)?(?:tôi|mình)')
+        + r'|' + _remember_wrapper(r'(?:tôi|mình)\s+làm\s+gì')
+        + r')\s*[?？]?\s*$'
+    ),
     re.IGNORECASE,
 )
 _RE_PREFERENCE_Q = re.compile(
@@ -476,12 +520,24 @@ _RE_DRINK_PREF_Q = re.compile(
 # substring and wrongly answer with the USER's own name. Bare "bạn tên là gì?" (about the
 # assistant) is intentionally NOT matched — it requires an explicit "tôi/mình" possessor.
 _RE_FRIEND_NAME_Q = re.compile(
-    r'^bạn\s+(?:của\s+)?(?:tôi|mình)\s+tên\s+(?:là\s+)?g[ìi]\s*[?？]?\s*$',
+    (
+        r'^(?:'
+        r'bạn\s+(?:của\s+)?(?:tôi|mình)\s+tên\s+(?:là\s+)?g[ìi]'
+        + r'|' + _remember_wrapper(
+            r'bạn\s+(?:của\s+)?(?:tôi|mình)\s+tên\s+(?:là\s+)?g[ìi]'
+        )
+        + r')\s*[?？]?\s*$'
+    ),
     re.IGNORECASE,
 )
 # P0-7F-FIX4 Part D: household-pet query — "nhà tôi nuôi con gì?".
 _RE_PET_Q = re.compile(
-    r'^(?:nhà\s+)?(?:tôi|mình)\s+nuôi\s+(?:con\s+)?gì\s*[?？]?\s*$',
+    (
+        r'^(?:'
+        r'(?:nhà\s+)?(?:tôi|mình)\s+nuôi\s+(?:con\s+)?gì'
+        + r'|' + _remember_wrapper(r'(?:nhà\s+)?(?:tôi|mình)\s+nuôi\s+(?:con\s+)?gì')
+        + r')\s*[?？]?\s*$'
+    ),
     re.IGNORECASE,
 )
 # P0-7F-FIX5 Part C: household-pet yes/no query — "tôi có nuôi mèo không?",
@@ -585,6 +641,11 @@ def _is_name_like_token(value: str) -> bool:
 
 def _normalize_relation_label(raw: str) -> str:
     return re.sub(r'\s+', ' ', raw.strip().lower())
+
+
+def _extract_query_relation_label(text: str) -> str:
+    m = re.search(_RELATIONS_QUERY_PATTERN, text, re.IGNORECASE)
+    return _normalize_relation_label(m.group(1)) if m else ""
 
 
 def _is_polluted_preference(val: str) -> bool:
@@ -729,13 +790,13 @@ def detect_profile_query(text: str) -> ProfileQuery | None:
     # 1. Relation name "tên gì?" form
     m = _RE_RELATION_NAME_Q.match(stripped)
     if m:
-        label = _normalize_relation_label(m.group(1))
+        label = _extract_query_relation_label(stripped)
         return ProfileQuery(kind="relation_name", relation_label=label)
 
     # 2. P0-7C: relation "là ai?" form
     m = _RE_RELATION_LA_AI_Q.match(stripped)
     if m:
-        label = _normalize_relation_label(m.group(1))
+        label = _extract_query_relation_label(stripped)
         return ProfileQuery(kind="relation_name", relation_label=label)
 
     # 3. P0-7C: profile summary
@@ -743,7 +804,7 @@ def detect_profile_query(text: str) -> ProfileQuery | None:
         return ProfileQuery(kind="profile_summary")
 
     # 4. Self-name (unanchored)
-    if _RE_SELF_NAME_Q.search(stripped):
+    if _RE_SELF_NAME_Q.search(stripped) or _RE_SELF_NAME_REMEMBER_Q.match(stripped):
         return ProfileQuery(kind="self_name")
 
     # 5. Self-identity — P0-7C FIX: fully anchored
@@ -1117,11 +1178,15 @@ def answer_yes_no_memory_query(
     """
     snap = collect_profile_snapshot(store)
     target = _norm_cmp(value)
-    prefs = [_norm_cmp(v) for v in snap.preferences_personal + snap.preferences_professional]
+    raw_target = value.strip()
+    pref_values = snap.preferences_personal + snap.preferences_professional
+    prefs = [_norm_cmp(v) for v in pref_values]
     skills = [_norm_cmp(v) for v in snap.skills]
 
     if category == "preference":
-        if target in prefs:
+        if raw_target == "ai":
+            return "Mình chưa có thông tin đã lưu về người bạn thích."
+        if target in prefs or any(_matches_preference_query(v, value) for v in pref_values):
             return f"Có, mình đang nhớ bạn thích {value}."
         if target in skills:
             return (
@@ -1318,6 +1383,59 @@ class ProfileSnapshot:
 
 def _norm_cmp(value: str) -> str:
     return re.sub(r"\s+", " ", value.strip().lower())
+
+
+def _positive_preference_terms(value: str) -> frozenset[str]:
+    """Return bounded terms that a stored positive preference entails for yes/no queries.
+
+    This is intentionally small and deterministic: it handles common food/drink prefixes,
+    simple multi-item "cả A và B", and comparative "A hơn B" without implying the losing
+    side B is liked.
+    """
+    v = _norm_cmp(value)
+    if not v:
+        return frozenset()
+    terms: set[str] = {v}
+    for prefix in ("uống ", "ăn "):
+        if v.startswith(prefix):
+            rest = v[len(prefix):].strip()
+            if rest:
+                terms.add(rest)
+    if v.startswith("cả "):
+        v = v[3:].strip()
+        terms.add(v)
+    if " hơn " in v:
+        left = v.split(" hơn ", 1)[0].strip()
+        if left:
+            terms.add(left)
+        return frozenset(terms)
+    if " và " in v:
+        for part in v.split(" và "):
+            part = part.strip()
+            if part:
+                terms.add(part)
+    if v.endswith(" không đường"):
+        head = v[: -len(" không đường")].strip()
+        if head:
+            terms.add(head)
+    return frozenset(terms)
+
+
+def _preference_query_terms(value: str) -> frozenset[str]:
+    v = _norm_cmp(value)
+    if not v:
+        return frozenset()
+    terms = {v}
+    for prefix in ("uống ", "ăn "):
+        if v.startswith(prefix):
+            rest = v[len(prefix):].strip()
+            if rest:
+                terms.add(rest)
+    return frozenset(terms)
+
+
+def _matches_preference_query(stored_value: str, query_value: str) -> bool:
+    return bool(_positive_preference_terms(stored_value) & _preference_query_terms(query_value))
 
 
 def collect_profile_snapshot(store: "MemoryStoreProtocol") -> ProfileSnapshot:
