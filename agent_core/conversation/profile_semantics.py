@@ -232,6 +232,14 @@ _RE_AFFECTION_RELATION = re.compile(
     r'^(?:tôi|mình)\s+(?:có\s+(?:tình\s+cảm|cảm\s+tình)\s+với|crush)\s+(\S+)',
     re.IGNORECASE,
 )
+# P0-7F-FIX5 Part B: one-sided ("đơn phương") affection phrase — "tôi thích đơn phương X",
+# "tôi (đang) đơn phương X". The literal "đơn phương" precedes the person target (group 1),
+# which distinguishes it from _RE_AFFECTION_EXPLANATION ("tôi thích X đơn phương", target
+# BEFORE "đơn phương"). Person-affinity context → clarify, never an ordinary preference.
+_RE_ONE_SIDED_AFFECTION = re.compile(
+    r'^(?:tôi|mình)\s+(?:đang\s+)?(?:thích\s+)?đơn\s+phương\s+(.+)$',
+    re.IGNORECASE,
+)
 # P0-7F-FIX4 Part D: household pet fact — "nhà tôi (có) nuôi (1 con) mèo", "tôi nuôi mèo".
 # Optional "nhà", optional quantifier, optional "con"; group(1) is the animal.
 _RE_HOUSEHOLD_PET = re.compile(
@@ -374,6 +382,18 @@ def classify_profile_semantic_intent(text: str) -> SemanticProfileIntent | None:
         if value:
             return SemanticProfileIntent(
                 kind="profile_write", category="affection_relation",
+                value=value, sensitivity="person_affinity", write_policy="clarify",
+            )
+
+    # One-sided affection phrase ("tôi thích đơn phương Quý", "tôi đơn phương Quý") —
+    # clarify, never an ordinary preference (P0-7F-FIX5 Part B). Checked before _RE_PREF so
+    # "đơn phương Quý" is not stored as a hobby value.
+    m = _RE_ONE_SIDED_AFFECTION.match(stripped)
+    if m:
+        value = _clean_value(m.group(1))
+        if value:
+            return SemanticProfileIntent(
+                kind="profile_write", category="one_sided_affection",
                 value=value, sensitivity="person_affinity", write_policy="clarify",
             )
 

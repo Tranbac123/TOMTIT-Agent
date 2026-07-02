@@ -493,3 +493,32 @@ def test_household_pet_write(text: str):
     assert c.category == "household_pet"
     assert c.value == "mèo"
     assert c.write_policy == "auto_safe"
+
+
+# ---------------------------------------------------------------------------
+# P0-7F-FIX5 Part B: one-sided affection phrase ("tôi thích đơn phương Quý")
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("text", [
+    "tôi thích đơn phương Quý",
+    "mình thích đơn phương Quý",
+    "tôi đang thích đơn phương Quý",
+    "tôi đơn phương Quý",
+    "mình đơn phương Quý",
+])
+def test_one_sided_affection_is_clarify_not_write(text: str):
+    c = _c(text)
+    assert c is not None
+    assert c.kind == "profile_write"
+    assert c.category == "one_sided_affection"
+    assert c.value == "Quý"
+    assert c.sensitivity == "person_affinity"
+    assert c.write_policy == "clarify"
+
+
+def test_affection_explanation_target_before_don_phuong_unchanged():
+    # "tôi thích X đơn phương" (target BEFORE "đơn phương") stays affection_explanation,
+    # distinct from the new one_sided_affection lane ("đơn phương" BEFORE the target).
+    c = _c("tôi thích quý đơn phương")
+    assert c is not None
+    assert c.category == "affection_explanation"

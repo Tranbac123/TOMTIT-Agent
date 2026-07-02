@@ -28,6 +28,7 @@ from agent_core.conversation.profile_memory import (
     build_followup_response,
     build_near_miss_response,
     build_negation_no_affection_response,
+    build_one_sided_affection_response,
     build_person_affinity_response,
     build_profile_conflict_message,
     build_profile_fact_ack,
@@ -819,6 +820,11 @@ class SessionRuntime:
                 return self._complete_conv(
                     state, "conv:affection_relation",
                     build_affection_relation_response(intent.value or ""),
+                )
+            if intent.category == "one_sided_affection":
+                return self._complete_conv(
+                    state, "conv:one_sided_affection",
+                    build_one_sided_affection_response(intent.value or ""),
                 )
             if intent.sensitivity == "person_affinity":
                 return self._complete_conv(

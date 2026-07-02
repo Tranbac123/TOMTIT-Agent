@@ -103,6 +103,8 @@ class ProfileQuery:
         "third_party_affection",
         # P0-7F-FIX4
         "friend_name", "self_pet",
+        # P0-7F-FIX5
+        "self_pet_yesno",
     ]
     value: str | None = None          # for inverse_value: the name to look up
     relation_label: str | None = None  # for relation_name / relation_existence
@@ -482,6 +484,19 @@ _RE_PET_Q = re.compile(
     r'^(?:nhà\s+)?(?:tôi|mình)\s+nuôi\s+(?:con\s+)?gì\s*[?？]?\s*$',
     re.IGNORECASE,
 )
+# P0-7F-FIX5 Part C: household-pet yes/no query — "tôi có nuôi mèo không?",
+# "nhà tôi có nuôi chó không?". Animal is group(1); answered against stored pets. Checked
+# before the household-pet WRITE pattern (which would otherwise capture "mèo không").
+_RE_PET_YESNO_Q = re.compile(
+    r'^(?:nhà\s+)?(?:tôi|mình)\s+có\s+nuôi\s+(?:con\s+)?(.+?)\s+(?:không|ko)\s*[?？]?\s*$',
+    re.IGNORECASE,
+)
+# P0-7F-FIX5 Part D: affection-query alias — "người tôi thích là ai?",
+# "người mình thích tên là ai?". Routes to the same self_affection lane as "tôi thích ai?".
+_RE_AFFECTION_ALIAS_Q = re.compile(
+    r'^người\s+(?:mà\s+)?(?:tôi|mình)\s+thích\s+(?:tên\s+)?là\s+ai\s*[?？]?\s*$',
+    re.IGNORECASE,
+)
 
 # P0-7F-FIX2/FIX3: values that leaked into the preference store before the write guards
 # were in place. Filtered at read time (never deleted from durable store).
@@ -703,6 +718,14 @@ def detect_profile_query(text: str) -> ProfileQuery | None:
     if _RE_PET_Q.match(stripped):
         return ProfileQuery(kind="self_pet")
 
+    # 0.7. P0-7F-FIX5 Part C: household-pet yes/no query ("tôi có nuôi mèo không?").
+    #      Before the semantic household-pet WRITE (priority 4.5) reads it as a fact.
+    m = _RE_PET_YESNO_Q.match(stripped)
+    if m:
+        animal = re.sub(r"\s+", " ", m.group(1).strip().rstrip(".!?？ ")).strip()
+        if animal:
+            return ProfileQuery(kind="self_pet_yesno", value=animal)
+
     # 1. Relation name "tên gì?" form
     m = _RE_RELATION_NAME_Q.match(stripped)
     if m:
@@ -731,8 +754,9 @@ def detect_profile_query(text: str) -> ProfileQuery | None:
     if _RE_OCCUPATION_Q.match(stripped):
         return ProfileQuery(kind="self_occupation")
 
-    # 7. P0-7F-FIX2: affection query ("tôi thích ai?") — before general preference query
-    if _RE_AFFECTION_Q.match(stripped):
+    # 7. P0-7F-FIX2: affection query ("tôi thích ai?") — before general preference query.
+    #    P0-7F-FIX5 Part D adds the "người tôi thích là ai?" alias to the same lane.
+    if _RE_AFFECTION_Q.match(stripped) or _RE_AFFECTION_ALIAS_Q.match(stripped):
         return ProfileQuery(kind="self_affection")
 
     # 7b. P0-7F-FIX2: drink/food preference query ("tôi thích uống gì?")
@@ -1067,6 +1091,19 @@ def build_affection_relation_response(value: str) -> str:
         f"Mình hiểu bạn có tình cảm với {value}. Mình sẽ không lưu đây là sở thích thông "
         f'thường. Nếu bạn muốn lưu rõ quan hệ, hãy nói: "người yêu của tôi là {value}" '
         f'hoặc "bạn gái của tôi là {value}".'
+    )
+
+
+def build_one_sided_affection_response(value: str) -> str:
+    """Response for a one-sided ("đơn phương") affection phrase (P0-7F-FIX5 Part B).
+
+    Acknowledges the unrequited feeling, refuses to store it as an ordinary preference, and
+    offers the explicit relationship phrasing that WOULD be saved. Never saved automatically.
+    """
+    return (
+        f"Mình hiểu bạn đang nói về tình cảm đơn phương với {value}. Mình sẽ không lưu đây "
+        'là sở thích thông thường. Nếu bạn muốn lưu rõ quan hệ, hãy nói: "người yêu của tôi '
+        f'là {value}" hoặc "người tôi thích tên là {value}".'
     )
 
 
@@ -1558,6 +1595,19 @@ def answer_profile_query(
         if snap.pets:
             return f"Nhà bạn có nuôi {', '.join(snap.pets)}."
         return "Mình chưa có thông tin đã lưu về vật nuôi trong nhà bạn."
+
+    # --- P0-7F-FIX5 Part C: self_pet_yesno ("tôi có nuôi mèo không?") ---
+    elif query.kind == "self_pet_yesno":
+        snap = collect_profile_snapshot(store)
+        target = _norm_cmp(query.value or "")
+        pets_norm = [_norm_cmp(p) for p in snap.pets]
+        matched = bool(target) and any(
+            target == p or target in p.split() or p in target.split()
+            for p in pets_norm
+        )
+        if matched:
+            return f"Có, mình đang nhớ nhà bạn có nuôi {query.value}."
+        return f"Mình chưa thấy thông tin đã lưu rằng nhà bạn có nuôi {query.value}."
 
     # --- P0-7F-FIX2: self_drink_preference ("tôi thích uống gì?") ---
     elif query.kind == "self_drink_preference":

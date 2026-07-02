@@ -1952,3 +1952,158 @@ def test_fix4_regression_guards():
     assert "AI" in work and "Bạn là AI" not in work
 
     assert "rule-based MVP" not in (sr.handle_turn("thời thiết hôm nay thế nào").final_answer or "")
+
+
+# ===========================================================================
+# P0-7F-FIX5 — narrow semantic regression (runtime)
+# ===========================================================================
+
+# --- Part B: one-sided ("đơn phương") affection is not an ordinary preference ---
+
+@pytest.mark.parametrize("text", [
+    "tôi thích đơn phương Quý",
+    "mình thích đơn phương Quý",
+    "tôi đơn phương Quý",
+])
+def test_fix5_one_sided_affection_not_saved(text: str):
+    sr = _make_sr()
+    answer = sr.handle_turn(text).final_answer or ""
+    low = answer.lower()
+    assert "đã nhớ là bạn thích" not in low
+    assert "rule-based MVP" not in answer
+    assert "đơn phương" in low or "tình cảm" in low or "không lưu" in low
+
+
+def test_fix5_one_sided_affection_not_in_preference_summary():
+    sr = _make_sr()
+    sr.handle_turn("tôi thích đơn phương Quý")
+    summary = sr.handle_turn("tôi thích gì?").final_answer or ""
+    assert "đơn phương" not in summary.lower()
+
+
+def test_fix5_build_one_sided_affection_response():
+    from agent_core.conversation.profile_memory import build_one_sided_affection_response
+    msg = build_one_sided_affection_response("Quý")
+    assert "đơn phương" in msg.lower()
+    assert "Quý" in msg
+    assert "người yêu của tôi" in msg
+
+
+# --- Part C: household-pet yes/no query ---
+
+def test_fix5_pet_yesno_match_returns_yes():
+    sr = _make_sr()
+    sr.handle_turn("nhà tôi nuôi mèo")
+    answer = sr.handle_turn("tôi có nuôi mèo không?").final_answer or ""
+    low = answer.lower()
+    assert "có" in low
+    assert "mèo" in low
+
+
+@pytest.mark.parametrize("text", [
+    "tôi có nuôi mèo không?",
+    "mình có nuôi mèo không?",
+    "nhà tôi có nuôi mèo không?",
+    "nhà mình có nuôi mèo không?",
+])
+def test_fix5_pet_yesno_variants_match(text: str):
+    sr = _make_sr()
+    sr.handle_turn("nhà tôi nuôi mèo")
+    answer = sr.handle_turn(text).final_answer or ""
+    assert "có" in answer.lower()
+    assert "mèo" in answer.lower()
+
+
+def test_fix5_pet_yesno_no_match_is_unknown():
+    sr = _make_sr()
+    sr.handle_turn("nhà tôi nuôi mèo")
+    answer = sr.handle_turn("tôi có nuôi chó không?").final_answer or ""
+    low = answer.lower()
+    assert "đã nhớ" not in low
+    assert "chưa" in low or "không" in low
+    assert "chó" in low
+
+
+def test_fix5_pet_yesno_fresh_session_no_save():
+    sr = _make_sr()
+    answer = sr.handle_turn("tôi có nuôi mèo không?").final_answer or ""
+    low = answer.lower()
+    assert "đã nhớ" not in low
+    assert "chưa" in low or "không" in low
+    # The question must not have been stored as a pet fact.
+    follow = sr.handle_turn("nhà tôi nuôi con gì?").final_answer or ""
+    assert "chưa" in follow.lower() or "không" in follow.lower()
+
+
+def test_fix5_pet_yesno_query_detected():
+    q = detect_profile_query("tôi có nuôi mèo không?")
+    assert q is not None
+    assert q.kind == "self_pet_yesno"
+    assert q.value == "mèo"
+
+
+# --- Part D: affection-query alias ("người tôi thích là ai?") ---
+
+@pytest.mark.parametrize("text", [
+    "người tôi thích là ai?",
+    "người mình thích là ai?",
+    "người tôi thích tên là ai?",
+])
+def test_fix5_affection_alias_query_detected(text: str):
+    q = detect_profile_query(text)
+    assert q is not None
+    assert q.kind == "self_affection"
+
+
+def test_fix5_affection_alias_returns_target():
+    sr = _make_sr()
+    sr.handle_turn("người yêu tôi là Quý")
+    answer = sr.handle_turn("người tôi thích là ai?").final_answer or ""
+    assert "quý" in answer.lower()
+    assert "rule-based MVP" not in answer
+
+
+def test_fix5_affection_alias_unknown_no_generic_fallback():
+    sr = _make_sr()
+    answer = sr.handle_turn("người tôi thích là ai?").final_answer or ""
+    low = answer.lower()
+    assert "rule-based MVP" not in answer
+    assert "chưa" in low or "không" in low
+
+
+# --- Part E: regression guards for FIX5 ---
+
+def test_fix5_regression_guards():
+    sr = _make_sr()
+
+    assert "đã nhớ" in (sr.handle_turn("tôi thích kem").final_answer or "").lower()
+    assert "đã nhớ" not in (sr.handle_turn("tôi thích Quý").final_answer or "").lower()
+
+    ai = sr.handle_turn("tôi thích AI").final_answer or ""
+    assert "đã nhớ" in ai.lower() and "AI" in ai
+
+    assert "đã nhớ" not in (sr.handle_turn("tôi thích ai").final_answer or "").lower()
+    assert "đã nhớ" not in (sr.handle_turn("tôi thích cafe không").final_answer or "").lower()
+    assert "đã nhớ" in (sr.handle_turn("tôi thích cafe không đường").final_answer or "").lower()
+
+    assert "đã nhớ" in (sr.handle_turn("bạn tôi tên là Meo").final_answer or "").lower()
+    friend = sr.handle_turn("bạn của tôi tên là gì?").final_answer or ""
+    assert "meo" in friend.lower()
+
+    sr.handle_turn("nhà tôi nuôi mèo")
+    assert "mèo" in (sr.handle_turn("nhà tôi nuôi con gì?").final_answer or "").lower()
+
+    open_qa = sr.handle_turn("AI là gì?").final_answer or ""
+    assert "đã nhớ" not in open_qa.lower()
+    assert "kiến thức mở" in open_qa.lower() or "chưa hỗ trợ" in open_qa.lower()
+
+    identity = sr.handle_turn("tomtit là gì?").final_answer or ""
+    assert "rule-based MVP" not in identity
+    assert "tomtit" in identity.lower() or "agent" in identity.lower()
+
+
+def test_fix5_compound_comparison_runtime():
+    sr = _make_sr()
+    assert (sr.handle_turn("2 * 3 == 6").final_answer or "") == "Đúng."
+    assert (sr.handle_turn("2 + 3 > 4").final_answer or "") == "Đúng."
+    assert (sr.handle_turn("4 != 4").final_answer or "") == "Sai."
