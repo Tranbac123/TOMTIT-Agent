@@ -604,8 +604,10 @@ _RE_AFFECTION_ALIAS_Q = re.compile(
 # whichever equals the saved self-name to the current user and answers from affection /
 # external-affection memory. Checked AFTER _RE_THIRD_PARTY_AFFECTION_Q (which owns the
 # "... có thích tôi/mình không?" form), so the object here is never a bare self-word.
+# P0-7G-FIX4: subject uses .+? (non-greedy) to capture multi-word names ("Bắc Trần");
+# single-word names still captured correctly because .+? stops at the first " có ".
 _RE_NAMED_AFFECTION_YESNO_Q = re.compile(
-    r'^(\S+)\s+có\s+(?:thích|yêu|thương|quý)\s+(\S+)\s+'
+    r'^(.+?)\s+có\s+(?:thích|yêu|thương|quý)\s+(\S+)\s+'
     r'(?:không|ko|hông|hong|chưa)\s*[?？]?\s*$',
     re.IGNORECASE,
 )

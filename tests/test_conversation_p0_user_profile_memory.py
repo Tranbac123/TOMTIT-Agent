@@ -2760,3 +2760,93 @@ def test_p0_7g_fix3a_friend_write_does_not_overwrite_user_name():
     name = (sr.handle_turn("tôi là ai?").final_answer or "").lower()
     assert "bắc" in name
     assert "nam" not in name
+
+
+# ===========================================================================
+# CONV-P0 P0-7G-FIX4 — self-name alias affection query
+# ===========================================================================
+
+def test_p0_7g_fix4_single_name_alias_affection():
+    # C1: single-word self-name alias maps to user for affection query.
+    sr = _make_sr()
+    sr.handle_turn("tôi là Bắc")
+    sr.handle_turn("tôi thích Quý")
+    ans = (sr.handle_turn("Bắc có thích Quý không?").final_answer or "").lower()
+    assert "rule-based mvp" not in ans
+    assert "tôi chưa xử lý" not in ans
+    assert "đã nhớ" not in ans
+    assert "đã lưu" not in ans
+    assert "quý" in ans
+    assert "có" in ans or "thích" in ans
+
+
+def test_p0_7g_fix4_full_name_alias_affection():
+    # C2: multi-word full-name alias maps to user for affection query.
+    sr = _make_sr()
+    sr.handle_turn("tôi là Bắc Trần")
+    sr.handle_turn("tôi thích Quý")
+    ans = (sr.handle_turn("Bắc Trần có thích Quý không?").final_answer or "").lower()
+    assert "rule-based mvp" not in ans
+    assert "tôi chưa xử lý" not in ans
+    assert "đã nhớ" not in ans
+    assert "đã lưu" not in ans
+    assert "quý" in ans
+    assert "có" in ans or "thích" in ans
+
+
+def test_p0_7g_fix4_fresh_unknown_alias_stays_unknown():
+    # C3: without a saved self-name, unknown subject stays unknown and no fact is saved.
+    sr = _make_sr()
+    ans = (sr.handle_turn("Bắc có thích Quý không?").final_answer or "").lower()
+    assert "đã nhớ" not in ans
+    assert "đã lưu" not in ans
+    assert "chưa" in ans or "không" in ans
+    summary = (sr.handle_turn("bạn nhớ gì về tôi?").final_answer or "").lower()
+    assert "đã nhớ" not in summary
+    assert "bắc có thích quý không" not in summary
+    assert "thích quý" not in summary
+
+
+def test_p0_7g_fix4_reverse_affection_not_inferred():
+    # C4: user liking Quý does not imply Quý likes user.
+    sr = _make_sr()
+    sr.handle_turn("tôi là Bắc")
+    sr.handle_turn("tôi thích Quý")
+    ans = (sr.handle_turn("Quý có thích Bắc không?").final_answer or "").lower()
+    assert "đã nhớ" not in ans
+    assert "đã lưu" not in ans
+    assert "chưa" in ans or "không" in ans
+
+
+def test_p0_7g_fix4_explicit_external_affection_via_toi():
+    # C5a: explicit external affection ("Quý thích tôi") makes "Quý có thích Bắc không?" yes.
+    sr = _make_sr()
+    sr.handle_turn("tôi là Bắc")
+    ack = (sr.handle_turn("Quý thích tôi").final_answer or "").lower()
+    assert "đã nhớ" in ack
+    ans = (sr.handle_turn("Quý có thích Bắc không?").final_answer or "").lower()
+    assert "rule-based mvp" not in ans
+    assert "quý" in ans
+    assert "có" in ans or "thích" in ans
+
+
+def test_p0_7g_fix4_explicit_external_affection_via_name():
+    # C5b: explicit external affection ("Quý thích Bắc") makes "Quý có thích Bắc không?" yes.
+    sr = _make_sr()
+    sr.handle_turn("tôi là Bắc")
+    ack = (sr.handle_turn("Quý thích Bắc").final_answer or "").lower()
+    assert "đã nhớ" in ack
+    ans = (sr.handle_turn("Quý có thích Bắc không?").final_answer or "").lower()
+    assert "rule-based mvp" not in ans
+    assert "quý" in ans
+    assert "có" in ans or "thích" in ans
+
+
+def test_p0_7g_fix4_no_memory_pollution():
+    # C6: unknown alias query does not pollute profile summary.
+    sr = _make_sr()
+    sr.handle_turn("Bắc có thích Quý không?")
+    summary = (sr.handle_turn("bạn nhớ gì về tôi?").final_answer or "").lower()
+    assert "đã nhớ" not in summary
+    assert "bắc có thích quý không" not in summary
+    assert "thích quý" not in summary
