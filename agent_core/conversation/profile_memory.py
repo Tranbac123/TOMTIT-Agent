@@ -1369,7 +1369,7 @@ def answer_yes_no_memory_query(
             # P0-7G: lowercase "ai" is the person question word — route to affection state.
             if snap.affections:
                 return f"Có, mình đang nhớ là bạn thích {snap.affections[0]}."
-            return "Mình chưa có thông tin đã lưu về người bạn thích."
+            return "Mình chưa có thông tin về người bạn thích."
         # P0-7G: person affection ("tôi có thích Quý không?") answers from affection memory.
         if target in affections:
             return f"Có, mình đang nhớ là bạn thích {value}."
@@ -1382,7 +1382,7 @@ def answer_yes_no_memory_query(
             return (
                 f'Mình đang nhớ bạn biết {value}, nhưng chưa lưu "{value}" như một sở thích.'
             )
-        return f"Mình chưa thấy thông tin đã lưu rằng bạn thích {value}."
+        return f"Mình chưa thấy thông tin rằng bạn thích {value}."
 
     if category == "skill":
         if target in skills:
@@ -1391,9 +1391,9 @@ def answer_yes_no_memory_query(
             return (
                 f'Mình đang nhớ bạn thích {value}, nhưng chưa lưu là bạn biết "{value}".'
             )
-        return f"Mình chưa thấy thông tin đã lưu rằng bạn biết {value}."
+        return f"Mình chưa thấy thông tin rằng bạn biết {value}."
 
-    return f"Mình chưa thấy thông tin đã lưu về {value}."
+    return f"Mình chưa thấy thông tin về {value}."
 
 
 # ---------------------------------------------------------------------------
@@ -1839,7 +1839,7 @@ def _answer_named_affection_yesno(
         # "do I like OBJ?"
         if any(_norm_cmp(obj) == _norm_cmp(v) for v in snap.affections):
             return f"Có, mình đang nhớ là bạn thích {obj}."
-        return f"Mình chưa có thông tin đã lưu về việc bạn thích {obj}."
+        return f"Mình chưa có thông tin về việc bạn thích {obj}."
     if obj_user and not subj_user:
         # "does SUBJ like me?"
         if any(_norm_cmp(subject) == _norm_cmp(v) for v in snap.external_affections):
@@ -1849,7 +1849,7 @@ def _answer_named_affection_yesno(
             "thông tin đó."
         )
     # Neither side is the current user → do not infer for unrelated third parties.
-    return "Mình chưa có thông tin đã lưu về việc này."
+    return "Mình chưa có thông tin về việc này."
 
 
 def answer_profile_query(
@@ -1913,7 +1913,7 @@ def answer_profile_query(
         # P0-7F: no relation fact → specific unknown-state answer (was: fall through to a
         # generic user-memory fallback, which read as "I don't support memory").
         label = query.relation_label or "người yêu/bạn gái"
-        return f"Tôi chưa có thông tin đã lưu về {label} của bạn."
+        return f"Tôi chưa có thông tin về {label} của bạn."
 
     # --- inverse_value / reverse_entity (P0-7G): "Quý là ai?" / "ai là Quý?" ---
     elif query.kind in ("inverse_value", "reverse_entity"):
@@ -1966,13 +1966,13 @@ def answer_profile_query(
             if rec.metadata.get("subject") == "self" and rec.metadata.get("relation") == "occupation":
                 val = rec.metadata.get("value", "")
                 return f"Mình đang nhớ công việc/lĩnh vực của bạn là {val}."
-        return "Tôi chưa có thông tin đã lưu về nghề nghiệp/vai trò của bạn."
+        return "Tôi chưa có thông tin về nghề nghiệp/vai trò của bạn."
 
     # --- P0-7D/7F: self_preference — aggregate ALL preferences (personal + professional) ---
     elif query.kind == "self_preference":
         snap = collect_profile_snapshot(store)
         if not snap.preferences_personal and not snap.preferences_professional:
-            return "Tôi chưa có thông tin đã lưu về sở thích của bạn."
+            return "Tôi chưa có thông tin về sở thích của bạn."
         parts: list[str] = []
         if snap.preferences_personal:
             parts.append(
@@ -1990,7 +1990,7 @@ def answer_profile_query(
     elif query.kind == "self_skill":
         snap = collect_profile_snapshot(store)
         if not snap.skills:
-            return "Tôi chưa có thông tin đã lưu về kỹ năng của bạn."
+            return "Tôi chưa có thông tin về kỹ năng của bạn."
         return "Bạn biết " + ", ".join(snap.skills) + "."
 
     # --- P0-7D: self_learning_focus ---
@@ -1999,7 +1999,7 @@ def answer_profile_query(
             if rec.metadata.get("subject") == "self" and rec.metadata.get("relation") == "learning_focus":
                 val = rec.metadata.get("value", "")
                 return f"Bạn đang học {val}."
-        return "Tôi chưa có thông tin đã lưu về nội dung bạn đang học."
+        return "Tôi chưa có thông tin về nội dung bạn đang học."
 
     # --- P0-7D: self_goal ---
     elif query.kind == "self_goal":
@@ -2007,7 +2007,7 @@ def answer_profile_query(
             if rec.metadata.get("subject") == "self" and rec.metadata.get("relation") == "goal":
                 val = rec.metadata.get("value", "")
                 return f"Mục tiêu của bạn là {val}."
-        return "Tôi chưa có thông tin đã lưu về mục tiêu của bạn."
+        return "Tôi chưa có thông tin về mục tiêu của bạn."
 
     # --- P0-7E: self_habit ---
     elif query.kind == "self_habit":
@@ -2015,7 +2015,7 @@ def answer_profile_query(
             if rec.metadata.get("subject") == "self" and rec.metadata.get("relation") == "habit":
                 val = rec.metadata.get("value", "")
                 return f"Bạn hay {val}."
-        return "Tôi chưa có thông tin đã lưu về thói quen/lifestyle của bạn."
+        return "Tôi chưa có thông tin về thói quen/lifestyle của bạn."
 
     # --- P0-7D: relation_existence ---
     elif query.kind == "relation_existence":
@@ -2029,7 +2029,7 @@ def answer_profile_query(
             ):
                 name = rec.metadata.get("value", "")
                 return f"Bạn có {stored_label} tên là {name}."
-        return "Tôi chưa có thông tin đã lưu về việc này."
+        return "Tôi chưa có thông tin về việc này."
 
     # --- P0-7F-FIX2 / P0-7G: self_affection ("tôi thích ai?") ---
     elif query.kind == "self_affection":
@@ -2041,7 +2041,7 @@ def answer_profile_query(
         affection_vals = [name for label, name in snap.relations if label in _AFFECTION_LABELS]
         if affection_vals:
             return f"Mình đang nhớ {affection_vals[0]} là người bạn thích/quan tâm."
-        return "Mình chưa có thông tin đã lưu về người bạn thích."
+        return "Mình chưa có thông tin về người bạn thích."
 
     # --- P0-7F-FIX3 / P0-7G: third_party_affection ("quý có thích tôi không?") ---
     elif query.kind == "third_party_affection":
@@ -2071,14 +2071,14 @@ def answer_profile_query(
             ):
                 name = rec.metadata.get("value", "")
                 return f"Bạn của bạn tên là {name}."
-        return "Mình chưa có thông tin đã lưu về tên bạn của bạn."
+        return "Mình chưa có thông tin về tên bạn của bạn."
 
     # --- P0-7F-FIX4 Part D: self_pet ("nhà tôi nuôi con gì?") ---
     elif query.kind == "self_pet":
         snap = collect_profile_snapshot(store)
         if snap.pets:
             return f"Nhà bạn có nuôi {', '.join(snap.pets)}."
-        return "Mình chưa có thông tin đã lưu về vật nuôi trong nhà bạn."
+        return "Mình chưa có thông tin về vật nuôi trong nhà bạn."
 
     # --- P0-7F-FIX5 Part C: self_pet_yesno ("tôi có nuôi mèo không?") ---
     elif query.kind == "self_pet_yesno":
@@ -2091,7 +2091,7 @@ def answer_profile_query(
         )
         if matched:
             return f"Có, mình đang nhớ nhà bạn có nuôi {query.value}."
-        return f"Mình chưa thấy thông tin đã lưu rằng nhà bạn có nuôi {query.value}."
+        return f"Mình chưa thấy thông tin rằng nhà bạn có nuôi {query.value}."
 
     # --- P0-7F-FIX2: self_drink_preference ("tôi thích uống gì?") ---
     elif query.kind == "self_drink_preference":
@@ -2102,6 +2102,6 @@ def answer_profile_query(
         ]
         if drink_prefs:
             return "Bạn thích " + ", ".join(drink_prefs) + "."
-        return "Mình chưa có thông tin đã lưu về đồ uống/ăn bạn thích."
+        return "Mình chưa có thông tin về đồ uống/ăn bạn thích."
 
     return None

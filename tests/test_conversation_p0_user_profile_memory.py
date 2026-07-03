@@ -2521,3 +2521,76 @@ def test_p0_7g_fix1_object_user_external_affection_still_saved():
     assert "đã nhớ" in ack2 and "quý" in ack2
     yn2 = (sr2.handle_turn("Quý có thích tôi không?").final_answer or "").lower()
     assert "có" in yn2 and "quý" in yn2
+
+
+# ===========================================================================
+# CONV-P0 P0-7G-FIX2 — unknown-state replies must not use write wording
+# ===========================================================================
+
+# Manual regression spec has a no-write guard that rejects "đã lưu"/"đã nhớ" in
+# answers to questions. Unknown-state ("chưa có thông tin ...") replies used to
+# contain "đã lưu" as part of "chưa có thông tin đã lưu", tripping that guard.
+# These tests pin the wording so unknown-state replies stay write-word-free while
+# still reading as unknown ("chưa"/"không").
+
+_FRESH_UNKNOWN_QUERIES = [
+    "tôi có thích cafe không?",
+    "tôi có thích ai không?",
+    "người yêu của tôi là ai?",
+    "bạn của tôi tên là gì?",
+    "nhà tôi nuôi con gì?",
+    "bạn biết tên tôi không?",
+]
+
+
+@pytest.mark.parametrize("query", _FRESH_UNKNOWN_QUERIES)
+def test_p0_7g_fix2_fresh_unknown_query_has_no_write_wording(query: str):
+    sr = _make_sr()
+    ans = sr.handle_turn(query).final_answer or ""
+    low = ans.lower()
+    assert "đã lưu" not in low
+    assert "đã nhớ" not in low
+    assert "chưa" in low or "không" in low
+
+
+def test_p0_7g_fix2_comparative_losing_side_unknown_no_write_wording():
+    # "tôi thích cafe hơn trà" must not imply liking trà, and the unknown reply
+    # for trà must not contain write wording.
+    sr = _make_sr()
+    sr.handle_turn("tôi thích cafe hơn trà")
+    ans = (sr.handle_turn("tôi có thích trà không?").final_answer or "").lower()
+    assert "đã lưu" not in ans
+    assert "đã nhớ" not in ans
+    assert "chưa" in ans or "không" in ans
+
+
+def test_p0_7g_fix2_external_third_party_unknown_no_write_wording():
+    sr = _make_sr()
+    sr.handle_turn("tôi là bắc")
+    sr.handle_turn("Quý thích Nam")
+    ans = (sr.handle_turn("Quý có thích Nam không?").final_answer or "").lower()
+    assert "đã lưu" not in ans
+    assert "đã nhớ" not in ans
+    assert "chưa" in ans or "không" in ans
+
+
+def test_p0_7g_fix2_actual_writes_still_confirm():
+    # Regression guard: real writes must still confirm with "Đã nhớ".
+    sr = _make_sr()
+    ans = (sr.handle_turn("tôi thích cafe").final_answer or "").lower()
+    assert "đã nhớ" in ans and "cafe" in ans
+
+    ans = (sr.handle_turn("tôi không thích ăn cá").final_answer or "").lower()
+    assert "đã nhớ" in ans and "không thích" in ans
+
+
+def test_p0_7g_fix2_critical50_ai_query_unknown_no_write_wording():
+    # Original Critical 50 failure point: after saving name + AI interest, the
+    # affection question "tôi có thích ai không?" is unknown and must be write-free.
+    sr = _make_sr()
+    sr.handle_turn("tôi là Bắc")
+    sr.handle_turn("tôi thích AI")
+    ans = (sr.handle_turn("tôi có thích ai không?").final_answer or "").lower()
+    assert "đã lưu" not in ans
+    assert "đã nhớ" not in ans
+    assert "chưa" in ans or "không" in ans
