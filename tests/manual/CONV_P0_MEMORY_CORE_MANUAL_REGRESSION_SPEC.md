@@ -1754,6 +1754,62 @@ bạn gái của Nam là ai?
 
 ---
 
+## P0-7H-FIX3: Multi-Job Occupation Preservation
+
+When a user reports multiple occupations, all must be recalled together.
+
+### Required behaviors
+
+#### Multi-job additive recall
+
+```
+tôi làm AI
+ngoài AI tôi còn làm blogger
+tôi làm gì?
+=> AI, blogger (both must appear)
+```
+
+```
+tôi làm AI
+tôi còn làm nông nữa
+tôi làm gì?
+=> AI, nông (both must appear)
+```
+
+#### Deduplicate
+
+```
+tôi làm AI
+ngoài AI tôi còn làm AI
+tôi làm gì?
+=> AI only once
+```
+
+#### Single occupation still works
+
+```
+tôi làm blogger
+tôi làm gì?
+=> blogger
+```
+
+#### Summary includes all occupations
+
+```
+tôi làm AI
+ngoài AI tôi còn làm blogger
+bạn đã nhớ gì về tôi
+=> includes both AI and blogger
+```
+
+### Classification rule
+
+```text
+If additive occupation input causes recall/summary to drop the prior occupation, classify as NEEDS_FIX.
+```
+
+---
+
 ## 10. Merge Gate Policy
 
 Passing this file does not automatically merge.

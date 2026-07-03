@@ -224,6 +224,12 @@ _RE_OCC_NGOAI = re.compile(
     r'^ngoài\s+\S+\s+(?:tôi|mình)\s+còn\s+làm\s+(.+)$',
     re.IGNORECASE | re.DOTALL,
 )
+# P0-7H-FIX3: "tôi còn làm nông nữa" — additive occupation without "ngoài X" prefix.
+# Group 1 is the occupation value (before optional trailing "nữa").
+_RE_OCC_CON_LAM = re.compile(
+    r'^(?:tôi|mình)\s+còn\s+làm\s+(.+?)(?:\s+nữa)?\s*[.!]*\s*$',
+    re.IGNORECASE | re.DOTALL,
+)
 # P0-7H: "tôi ghét hút thuốc" — durable negative preference (same storage as "không thích").
 _RE_GHET = re.compile(
     r'^(?:tôi|mình)\s+ghét\s+(.+)$',
@@ -642,6 +648,19 @@ def classify_profile_semantic_intent(text: str) -> SemanticProfileIntent | None:
 
     # P0-7H: "ngoài AI tôi còn làm blogger" — occupation alongside existing role.
     m = _RE_OCC_NGOAI.match(stripped)
+    if m:
+        value = _clean_value(m.group(1))
+        if (
+            _valid_value(value)
+            and _has_professional_token(value)
+            and not _is_unsafe_or_sensitive_auto_value(value)
+        ):
+            return SemanticProfileIntent(
+                kind="profile_write", category="occupation", value=value, write_policy="auto_safe",
+            )
+
+    # P0-7H-FIX3: "tôi còn làm nông nữa" — additive occupation without "ngoài X" prefix.
+    m = _RE_OCC_CON_LAM.match(stripped)
     if m:
         value = _clean_value(m.group(1))
         if (

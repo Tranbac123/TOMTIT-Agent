@@ -3289,3 +3289,62 @@ def test_p0_7h_fix2_manual_spec_has_role_occupation_phrase_and_no_trailing_white
         "manual spec missing alternative correction case"
     trailing = [i + 1 for i, line in enumerate(text.splitlines()) if line.rstrip() != line]
     assert not trailing, f"manual spec has trailing whitespace at lines: {trailing[:20]}"
+
+
+# ---------------------------------------------------------------------------
+# P0-7H-FIX3 tests
+# ---------------------------------------------------------------------------
+
+def test_p0_7h_fix3_multi_job_ngoai_ai_con_lam_blogger_preserves_ai():
+    # "tôi làm AI" then "ngoài AI tôi còn làm blogger" → recall must include both.
+    sr = _make_sr()
+    sr.handle_turn("tôi làm AI")
+    sr.handle_turn("ngoài AI tôi còn làm blogger")
+    ans = (sr.handle_turn("tôi làm gì?").final_answer or "").lower()
+    assert "ai" in ans, f"prior occupation AI missing from recall: {ans}"
+    assert "blogger" in ans, f"new occupation blogger missing from recall: {ans}"
+
+
+def test_p0_7h_fix3_multi_job_toi_con_lam_nong_preserves_ai():
+    # "tôi làm AI" then "tôi còn làm nông nữa" → recall must include both.
+    sr = _make_sr()
+    sr.handle_turn("tôi làm AI")
+    sr.handle_turn("tôi còn làm nông nữa")
+    ans = (sr.handle_turn("tôi làm gì?").final_answer or "").lower()
+    assert "ai" in ans, f"prior occupation AI missing from recall: {ans}"
+    assert "nông" in ans, f"new occupation nông missing from recall: {ans}"
+
+
+def test_p0_7h_fix3_multi_job_dedupes_duplicate_occupation():
+    # Same occupation added twice → recall shows it only once.
+    sr = _make_sr()
+    sr.handle_turn("tôi làm AI")
+    sr.handle_turn("ngoài AI tôi còn làm AI")
+    ans = (sr.handle_turn("tôi làm gì?").final_answer or "").lower()
+    assert "ai" in ans, f"occupation AI missing from recall: {ans}"
+    assert "ai, ai" not in ans, f"AI duplicated in recall answer: {ans}"
+
+
+def test_p0_7h_fix3_summary_includes_multiple_occupations():
+    # profile_summary must include all occupations after multi-job save.
+    sr = _make_sr()
+    sr.handle_turn("tôi làm AI")
+    sr.handle_turn("ngoài AI tôi còn làm blogger")
+    summary = (sr.handle_turn("bạn đã nhớ gì về tôi").final_answer or "").lower()
+    assert "ai" in summary, f"AI missing from summary: {summary}"
+    assert "blogger" in summary, f"blogger missing from summary: {summary}"
+
+
+def test_p0_7h_fix3_manual_spec_contains_multi_job_addendum():
+    import pathlib
+    spec_path = pathlib.Path(__file__).parent / "manual" / "CONV_P0_MEMORY_CORE_MANUAL_REGRESSION_SPEC.md"
+    text = spec_path.read_text(encoding="utf-8").lower()
+    required = [
+        "p0-7h-fix3",
+        "multi-job occupation",
+        "ngoài ai tôi còn làm blogger",
+        "tôi còn làm nông nữa",
+        "needs_fix",
+    ]
+    missing = [tok for tok in required if tok not in text]
+    assert not missing, f"Manual spec missing FIX3 tokens: {missing}"

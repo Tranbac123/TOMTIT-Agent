@@ -2223,13 +2223,12 @@ def answer_profile_query(
             return "Tôi chưa có thông tin hồ sơ nào đã được xác nhận về bạn."
         return "Tôi đang nhớ những thông tin sau về bạn:\n" + "\n".join(lines)
 
-    # --- P0-7D: self_occupation ---
+    # --- P0-7D: self_occupation — aggregate all confirmed occupation records (P0-7H-FIX3) ---
     elif query.kind == "self_occupation":
-        for rec in confirmed:
-            if rec.metadata.get("subject") == "self" and rec.metadata.get("relation") == "occupation":
-                val = rec.metadata.get("value", "")
-                return f"Mình đang nhớ công việc/lĩnh vực của bạn là {val}."
-        return "Tôi chưa có thông tin về nghề nghiệp/vai trò của bạn."
+        snap = collect_profile_snapshot(store)
+        if not snap.occupation:
+            return "Tôi chưa có thông tin về nghề nghiệp/vai trò của bạn."
+        return "Mình đang nhớ công việc/lĩnh vực của bạn là " + ", ".join(snap.occupation) + "."
 
     # --- P0-7D/7F: self_preference — aggregate ALL preferences (personal + professional) ---
     elif query.kind == "self_preference":
