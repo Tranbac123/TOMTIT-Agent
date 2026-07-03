@@ -3058,3 +3058,129 @@ def test_p0_7g_fix4b_1token_2token_regression():
     assert "rule-based mvp" not in ans2
     assert "quý" in ans2
     assert "có" in ans2 or "thích" in ans2
+
+
+# ---------------------------------------------------------------------------
+# P0-7H tests
+# ---------------------------------------------------------------------------
+
+def test_p0_7h_a1_relation_yesno_query():
+    # A1: "Quý có phải là bạn gái của tôi không?" — yes when stored.
+    sr = _make_sr()
+    sr.handle_turn("bạn gái của tôi là Quý")
+    ans = (sr.handle_turn("Quý có phải là bạn gái của tôi không?").final_answer or "").lower()
+    assert "rule-based mvp" not in ans, f"generic fallback: {ans}"
+    assert "có" in ans
+    assert "bạn gái" in ans
+
+
+def test_p0_7h_a1_relation_yesno_no_info():
+    # A1: no relation stored → safe "chưa có thông tin" response (not generic fallback).
+    sr = _make_sr()
+    ans = (sr.handle_turn("Quý có phải là bạn gái của tôi không?").final_answer or "").lower()
+    assert "rule-based mvp" not in ans, f"generic fallback: {ans}"
+    assert "chưa" in ans or "không có" in ans
+
+
+def test_p0_7h_a2_relation_update_save():
+    # A2: "sửa bạn gái của tôi thành May" → relation updated.
+    sr = _make_sr()
+    sr.handle_turn("bạn gái của tôi là Quý")
+    ans = (sr.handle_turn("sửa bạn gái của tôi thành May").final_answer or "").lower()
+    assert "rule-based mvp" not in ans, f"generic fallback: {ans}"
+    assert "may" in ans or "cập nhật" in ans or "đã" in ans
+    # Verify the updated value is now stored
+    follow = (sr.handle_turn("bạn gái của tôi tên gì?").final_answer or "").lower()
+    assert "may" in follow
+
+
+def test_p0_7h_a3_relation_removal():
+    # A3: "cập nhật Quý không phải là bạn gái của tôi" → relation removed.
+    sr = _make_sr()
+    sr.handle_turn("bạn gái của tôi là Quý")
+    ans = (sr.handle_turn("cập nhật Quý không phải là bạn gái của tôi").final_answer or "").lower()
+    assert "rule-based mvp" not in ans, f"generic fallback: {ans}"
+    assert "xóa" in ans or "đã" in ans or "bỏ" in ans or "không" in ans
+
+
+def test_p0_7h_a4_occ_bloger():
+    # A4: "tôi làm bloger" → occupation saved (no generic fallback).
+    sr = _make_sr()
+    ans = (sr.handle_turn("tôi làm bloger").final_answer or "").lower()
+    assert "rule-based mvp" not in ans, f"generic fallback: {ans}"
+    assert "bloger" in ans or "đã" in ans or "công việc" in ans or "lĩnh vực" in ans
+
+
+def test_p0_7h_a4_occ_nong():
+    # A4: "tôi làm nông" → occupation saved (no generic fallback).
+    sr = _make_sr()
+    ans = (sr.handle_turn("tôi làm nông").final_answer or "").lower()
+    assert "rule-based mvp" not in ans, f"generic fallback: {ans}"
+    assert "nông" in ans or "đã" in ans or "công việc" in ans or "lĩnh vực" in ans
+
+
+def test_p0_7h_a4_occ_ngoai_ai():
+    # A4: "ngoài AI tôi còn làm blogger" → occupation saved (no generic fallback).
+    sr = _make_sr()
+    ans = (sr.handle_turn("ngoài AI tôi còn làm blogger").final_answer or "").lower()
+    assert "rule-based mvp" not in ans, f"generic fallback: {ans}"
+    assert "blogger" in ans or "đã" in ans or "công việc" in ans or "lĩnh vực" in ans
+
+
+def test_p0_7h_a4_occ_nong_dan():
+    # A4: "tôi là nông dân" → occupation saved (no generic fallback).
+    sr = _make_sr()
+    ans = (sr.handle_turn("tôi là nông dân").final_answer or "").lower()
+    assert "rule-based mvp" not in ans, f"generic fallback: {ans}"
+    assert "nông dân" in ans or "đã" in ans or "công việc" in ans or "lĩnh vực" in ans
+
+
+def test_p0_7h_a5_name_not_corrupted_by_occupation():
+    # A5: "tôi là bb" then "tôi là nông dân" → name must stay "bb", not corrupted.
+    sr = _make_sr()
+    sr.handle_turn("tôi là bb")
+    sr.handle_turn("tôi là nông dân")
+    ans = (sr.handle_turn("tôi là ai?").final_answer or "").lower()
+    assert "bb" in ans, f"name corrupted — got: {ans}"
+    assert "nông dân" not in ans, f"occupation leaked into name: {ans}"
+
+
+def test_p0_7h_a5_occupation_after_name_save():
+    # A5: "tôi là bb" then "tôi là nông dân" → occupation query returns "nông dân".
+    sr = _make_sr()
+    sr.handle_turn("tôi là bb")
+    sr.handle_turn("tôi là nông dân")
+    ans = (sr.handle_turn("tôi làm gì?").final_answer or "").lower()
+    assert "nông dân" in ans, f"occupation not saved — got: {ans}"
+
+
+def test_p0_7h_a7_ghet_negative_pref():
+    # A7: "tôi ghét hút thuốc" → negative preference saved (no generic fallback).
+    sr = _make_sr()
+    ans = (sr.handle_turn("tôi ghét hút thuốc").final_answer or "").lower()
+    assert "rule-based mvp" not in ans, f"generic fallback: {ans}"
+    assert "hút thuốc" in ans or "đã" in ans or "không thích" in ans
+
+
+def test_p0_7h_a7_ghet_query():
+    # A7: "tôi ghét hút thuốc" then "tôi không thích gì?" → lists "hút thuốc".
+    sr = _make_sr()
+    sr.handle_turn("tôi ghét hút thuốc")
+    ans = (sr.handle_turn("tôi không thích gì?").final_answer or "").lower()
+    assert "hút thuốc" in ans, f"dislike not recalled: {ans}"
+
+
+def test_p0_7h_no_regression_rel_save():
+    # Regression: "bạn gái của tôi là Quý" → relation saved (existing behavior preserved).
+    sr = _make_sr()
+    sr.handle_turn("bạn gái của tôi là Quý")
+    ans = (sr.handle_turn("bạn gái của tôi tên gì?").final_answer or "").lower()
+    assert "quý" in ans, f"relation save regression: {ans}"
+
+
+def test_p0_7h_no_regression_occupation_existing():
+    # Regression: "tôi là AI engineer" → occupation saved (existing keyword-gated path).
+    sr = _make_sr()
+    ans = (sr.handle_turn("tôi là AI engineer").final_answer or "").lower()
+    assert "rule-based mvp" not in ans, f"generic fallback: {ans}"
+    assert "ai engineer" in ans or "công việc" in ans or "đã" in ans or "lĩnh vực" in ans

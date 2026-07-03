@@ -111,6 +111,8 @@ class ProfileQuery:
         "reverse_entity", "named_affection_yesno",
         # P0-7G-FIX3
         "self_dislike",
+        # P0-7H
+        "relation_yesno",
     ]
     value: str | None = None          # for inverse_value: the name to look up
     relation_label: str | None = None  # for relation_name / relation_existence
@@ -171,8 +173,11 @@ _ROLE_KEYWORDS: frozenset[str] = frozenset({
     "data", "backend", "frontend", "fullstack", "devops", "ai", "ml",
     "ux", "ui", "qa", "sre", "cto", "ceo", "cfo", "vp",
     "enginer",   # typo accepted per spec
+    "blogger", "bloger",  # P0-7H: occupation variants (bloger = common typo of blogger)
+    "founder", "startup",
     "kỹ sư", "lập trình", "bác sĩ", "giáo viên", "chuyên gia",
     "nhà nghiên cứu", "nhà thiết kế", "giám đốc", "kế toán", "nhà báo",
+    "nông dân", "sinh viên",  # P0-7H: Vietnamese occupation phrases
 })
 
 # Vague reference words that should not be saved as preference/occupation values.
@@ -210,18 +215,25 @@ _ROLE_KEYWORD_TOKENS: frozenset[str] = frozenset(k for k in _ROLE_KEYWORDS if " 
 _ROLE_KEYWORD_PHRASES: frozenset[str] = frozenset(k for k in _ROLE_KEYWORDS if " " in k)
 _RE_ASCII_TOKEN = re.compile(r"[a-z0-9]+")
 
+# P0-7H: Vietnamese single-word occupation terms whose diacritics prevent ASCII-token matching.
+# Matched as whole Unicode words (split on whitespace) to avoid substring over-match.
+_VN_ROLE_KEYWORD_SINGLE: frozenset[str] = frozenset({"nông"})
+
 
 def _has_role_keyword(value: str) -> bool:
     """True if value contains a known role/profession keyword.
 
     Single-word keywords are matched against whole ASCII tokens (so "ai enginer" matches
     but "con trai" does not); multi-word phrases are matched as substrings.
+    Vietnamese diacritic single-word terms are matched as whole Unicode words.
     """
     value_lower = value.lower()
     if any(phrase in value_lower for phrase in _ROLE_KEYWORD_PHRASES):
         return True
     tokens = _RE_ASCII_TOKEN.findall(value_lower)
-    return any(tok in _ROLE_KEYWORD_TOKENS for tok in tokens)
+    if any(tok in _ROLE_KEYWORD_TOKENS for tok in tokens):
+        return True
+    return any(w in _VN_ROLE_KEYWORD_SINGLE for w in value_lower.split())
 
 
 # P0-7D-FIX2: rule-based unsafe/sensitive value guard for AUTO_SAFE writes.
@@ -475,6 +487,31 @@ _RE_RELATION_LA_AI_Q = re.compile(
         )
         + r')\s*[?？]?\s*$'
     ),
+    re.IGNORECASE,
+)
+
+# P0-7H: relation yes/no query — "Quý có phải là bạn gái của tôi không?"
+# Person name (group 1) + relation label (group 2); runtime checks stored relation.
+_RE_RELATION_YESNO_Q = re.compile(
+    r'^(\S+)\s+có\s+phải\s+là\s+'
+    r'(bạn\s+gái|bạn\s+trai|người\s+yêu|vợ|chồng|partner)\s+'
+    r'(?:của\s+)?(?:tôi|mình)\s+(?:không|ko|hông|hong)\s*[?？]?\s*$',
+    re.IGNORECASE,
+)
+
+# P0-7H: relation update command — "sửa bạn gái của tôi thành May"
+_RE_RELATION_UPDATE_CMD = re.compile(
+    r'^(?:sửa|đổi|cập\s+nhật|thay\s+đổi)\s+'
+    r'(bạn\s+gái|bạn\s+trai|người\s+yêu|vợ|chồng|partner)\s+'
+    r'(?:của\s+)?(?:tôi|mình)\s+(?:thành|sang|là)\s+(\S+)\s*[.!]*\s*$',
+    re.IGNORECASE,
+)
+
+# P0-7H: relation removal command — "cập nhật Quý không phải là bạn gái của tôi"
+_RE_RELATION_REMOVAL_CMD = re.compile(
+    r'^(?:cập\s+nhật|sửa|đổi)\s+(\S+)\s+không\s+phải\s+là\s+'
+    r'(bạn\s+gái|bạn\s+trai|người\s+yêu|vợ|chồng|partner)\s+'
+    r'(?:của\s+)?(?:tôi|mình)\s*[.!]*\s*$',
     re.IGNORECASE,
 )
 
@@ -945,6 +982,14 @@ def detect_profile_query(text: str) -> ProfileQuery | None:
         animal = re.sub(r"\s+", " ", m.group(1).strip().rstrip(".!?？ ")).strip()
         if animal:
             return ProfileQuery(kind="self_pet_yesno", value=animal)
+
+    # 0.8. P0-7H: relation yes/no ("Quý có phải là bạn gái của tôi không?").
+    m = _RE_RELATION_YESNO_Q.match(stripped)
+    if m:
+        person = re.sub(r"\s+", " ", m.group(1).strip().rstrip("?")).strip()
+        label = _normalize_relation_label(m.group(2))
+        if person:
+            return ProfileQuery(kind="relation_yesno", value=person, relation_label=label)
 
     # 1. Relation name "tên gì?" form
     m = _RE_RELATION_NAME_Q.match(stripped)
@@ -1663,6 +1708,89 @@ def save_self_name_update(
 
 
 # ---------------------------------------------------------------------------
+# P0-7H relation update / removal
+# ---------------------------------------------------------------------------
+
+def detect_relation_update_cmd(text: str) -> tuple[str, str] | None:
+    """Return (relation_label, new_name) for an explicit relation update command, else None.
+
+    Handles "sửa bạn gái của tôi thành May", "đổi người yêu của tôi thành Nam".
+    """
+    m = _RE_RELATION_UPDATE_CMD.match(text.strip())
+    if not m:
+        return None
+    label = _normalize_relation_label(m.group(1))
+    name = re.sub(r"\s+", " ", m.group(2).strip().rstrip(".!?")).strip()
+    if not name or _is_unsafe_or_sensitive_auto_value(name):
+        return None
+    return label, name
+
+
+def detect_relation_removal_cmd(text: str) -> tuple[str, str] | None:
+    """Return (relation_label, person_name) for an explicit relation removal command, else None.
+
+    Handles "cập nhật Quý không phải là bạn gái của tôi".
+    """
+    m = _RE_RELATION_REMOVAL_CMD.match(text.strip())
+    if not m:
+        return None
+    person = re.sub(r"\s+", " ", m.group(1).strip().rstrip(".!?")).strip()
+    label = _normalize_relation_label(m.group(2))
+    if not person:
+        return None
+    return label, person
+
+
+def delete_relation_fact(label: str, store: "MemoryStoreProtocol") -> str | None:
+    """Delete the stored relation fact for the given label. Returns the deleted value, or None if not found."""
+    lookup_labels = _get_lookup_labels(label) or frozenset({label})
+    records = list(store.search(MemoryQuery(
+        text="", types=[MemoryType.FACT], tags=["user_profile"], limit=100,
+    )))
+    for rec in records:
+        md = rec.metadata
+        if not (md.get("confirmed") and md.get("profile_schema") in (
+            "user_profile_fact_v1", "user_profile_fact_v2"
+        )):
+            continue
+        if (
+            md.get("subject") == "relation"
+            and md.get("relation") == "name"
+            and md.get("relation_label") in lookup_labels
+        ):
+            store.delete(rec.id, reason="user_removal")
+            return md.get("value", "")
+    return None
+
+
+def save_relation_update(
+    label: str, new_name: str,
+    store: "MemoryStoreProtocol", session_id: str,
+    *, original_text: str = "",
+) -> bool:
+    """Delete any existing relation record for label, then save new_name. Returns True on success."""
+    delete_relation_fact(label, store)
+    candidate = ProfileFactCandidate(
+        subject="relation", relation="name",
+        value=new_name, relation_label=label,
+        original_text=original_text,
+    )
+    return save_confirmed_profile_fact(candidate, store, session_id, confirmation_source="auto_safe")
+
+
+def build_relation_update_ack(label: str, new_name: str) -> str:
+    return f"Đã cập nhật {label} của bạn thành {new_name}."
+
+
+def build_relation_removal_ack(label: str) -> str:
+    return f"Đã xóa thông tin {label} của bạn."
+
+
+def build_relation_removal_not_found() -> str:
+    return "Tôi chưa lưu thông tin về đối tượng này."
+
+
+# ---------------------------------------------------------------------------
 # Retrieval / answering
 # ---------------------------------------------------------------------------
 
@@ -2082,6 +2210,23 @@ def answer_profile_query(
             ):
                 name = rec.metadata.get("value", "")
                 return f"Bạn có {stored_label} tên là {name}."
+        return "Tôi chưa có thông tin về việc này."
+
+    # --- P0-7H: relation_yesno ("Quý có phải là bạn gái của tôi không?") ---
+    elif query.kind == "relation_yesno":
+        lookup_labels = _get_lookup_labels(query.relation_label) or frozenset({query.relation_label or ""})
+        for rec in confirmed:
+            stored_label = rec.metadata.get("relation_label", "")
+            if (
+                rec.metadata.get("subject") == "relation"
+                and rec.metadata.get("relation") == "name"
+                and stored_label in lookup_labels
+            ):
+                stored_name = rec.metadata.get("value", "")
+                label = stored_label or query.relation_label or ""
+                if _norm_cmp(stored_name) == _norm_cmp(query.value or ""):
+                    return f"Có, {label} của bạn tên là {stored_name}."
+                return f"Không, {label} của bạn là {stored_name}, không phải {query.value}."
         return "Tôi chưa có thông tin về việc này."
 
     # --- P0-7F-FIX2 / P0-7G: self_affection ("tôi thích ai?") ---

@@ -37,12 +37,18 @@ from agent_core.conversation.profile_memory import (
     build_person_affinity_response,
     build_profile_conflict_message,
     build_profile_fact_ack,
+    build_relation_removal_ack,
+    build_relation_removal_not_found,
+    build_relation_update_ack,
     build_unrelated_external_affection_response,
     collect_profile_snapshot,
+    delete_relation_fact,
     detect_auto_profile_candidate,
     detect_blocked_auto_profile_value,
     detect_profile_fact_candidate,
     detect_profile_query,
+    detect_relation_removal_cmd,
+    detect_relation_update_cmd,
     detect_self_name_phrase_update,
     detect_self_name_update,
     find_existing_profile_value,
@@ -51,6 +57,7 @@ from agent_core.conversation.profile_memory import (
     save_auto_profile_fact,
     save_confirmed_profile_fact,
     save_external_affection_fact,
+    save_relation_update,
     save_self_name_update,
 )
 from agent_core.conversation.profile_semantics import (
@@ -287,6 +294,13 @@ class SessionRuntime:
         profile_answer = self._maybe_answer_profile_query(user_message, state)
         if profile_answer is not None:
             return profile_answer
+
+        # CONV-P0 P0-7H priority 4.3: explicit relation update/removal commands
+        # ("sửa bạn gái của tôi thành May", "cập nhật Quý không phải là bạn gái của tôi").
+        # Must run before P4.5 and before P7 (auto-save rejects the "sửa"/"cập nhật" prefix).
+        rel_cmd = self._maybe_handle_relation_cmd(user_message, state)
+        if rel_cmd is not None:
+            return rel_cmd
 
         # CONV-P0 P0-7F priority 4.5: semantic profile layer — skill/occupation/preference
         # split/person-affinity/muốn desires/relationship variants + yes-no + "gì nữa" follow-up.
@@ -865,6 +879,59 @@ class SessionRuntime:
         return self._complete_conv(
             state, "conv:auto_profile_name_saved", build_profile_fact_ack(candidate)
         )
+
+    def _maybe_handle_relation_cmd(
+        self, user_message: str, state: AgentState
+    ) -> AgentState | None:
+        """P0-7H priority 4.3: explicit relation update/removal commands.
+
+        "sửa bạn gái của tôi thành May" (A2) and
+        "cập nhật Quý không phải là bạn gái của tôi" (A3).
+        Intercepted before the auto-save gate which rejects the "sửa"/"cập nhật" prefix.
+        """
+        stripped = user_message.strip()
+
+        upd = detect_relation_update_cmd(stripped)
+        if upd is not None:
+            label, new_name = upd
+            ok = save_relation_update(
+                label, new_name, self._store, state.session_id, original_text=stripped
+            )
+            if ok:
+                self._confirmed_profile_fact_count += 1
+                return self._complete_conv(
+                    state, "conv:relation_updated", build_relation_update_ack(label, new_name)
+                )
+            return None
+
+        rem = detect_relation_removal_cmd(stripped)
+        if rem is not None:
+            label, person_name = rem
+            existing = find_existing_profile_value(
+                ProfileFactCandidate(
+                    subject="relation", relation="name",
+                    value="", relation_label=label,
+                ),
+                self._store,
+            )
+            if existing is None:
+                return self._complete_conv(
+                    state, "conv:relation_removal_not_found",
+                    build_relation_removal_not_found(),
+                )
+            if self._norm(existing) != self._norm(person_name):
+                return self._complete_conv(
+                    state, "conv:relation_removal_mismatch",
+                    f"Tôi đang nhớ {label} của bạn tên là {existing}, không phải {person_name}.",
+                )
+            deleted = delete_relation_fact(label, self._store)
+            if deleted is not None:
+                return self._complete_conv(
+                    state, "conv:relation_removed", build_relation_removal_ack(label)
+                )
+            return None
+
+        return None
 
     def _maybe_handle_semantic_profile(
         self, user_message: str, state: AgentState

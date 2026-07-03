@@ -75,7 +75,12 @@ _PROFESSIONAL_TOKENS: frozenset[str] = frozenset({
     "backend", "frontend", "fullstack", "devops", "agent", "startup", "web",
     "data", "research", "model", "app", "software", "engineer", "engineering",
     "python", "java", "golang", "rust", "react", "sql", "cloud", "api",
+    "blogger", "bloger",  # P0-7H: occupation variants
+    "founder",
 })
+
+# P0-7H: Vietnamese single-word occupation terms whose diacritics prevent ASCII-word matching.
+_VN_PROFESSIONAL_SINGLE: frozenset[str] = frozenset({"nông"})
 
 # Personal activity cues → preference.personal.
 _PERSONAL_TOKENS: frozenset[str] = frozenset({
@@ -116,7 +121,10 @@ def _has_professional_token(value: str) -> bool:
         return True
     words = _RE_ASCII_WORD.findall(v)
     single = {t for t in _PROFESSIONAL_TOKENS if " " not in t}
-    return any(w in single for w in words)
+    if any(w in single for w in words):
+        return True
+    # P0-7H: Vietnamese single-word occupation terms matched as whole Unicode words
+    return any(w in _VN_PROFESSIONAL_SINGLE for w in v.split())
 
 
 def _has_personal_token(value: str) -> bool:
@@ -208,6 +216,17 @@ _RE_SKILL = re.compile(
 )
 _RE_OCC_LAM = re.compile(
     r'^(?:tôi|mình)\s+(?:đang\s+)?làm\s+(?:nghề\s+)?(.+)$',
+    re.IGNORECASE | re.DOTALL,
+)
+# P0-7H: "ngoài AI tôi còn làm blogger" — occupation alongside existing role.
+# Group 1 is the new/additional occupation (after "còn làm").
+_RE_OCC_NGOAI = re.compile(
+    r'^ngoài\s+\S+\s+(?:tôi|mình)\s+còn\s+làm\s+(.+)$',
+    re.IGNORECASE | re.DOTALL,
+)
+# P0-7H: "tôi ghét hút thuốc" — durable negative preference (same storage as "không thích").
+_RE_GHET = re.compile(
+    r'^(?:tôi|mình)\s+ghét\s+(.+)$',
     re.IGNORECASE | re.DOTALL,
 )
 _RE_WANT = re.compile(
@@ -423,6 +442,22 @@ def classify_profile_semantic_intent(text: str) -> SemanticProfileIntent | None:
                     value=value, write_policy="auto_safe",
                 )
 
+    # P0-7H: "tôi ghét X" — durable negative preference (same category as "không thích X").
+    m = _RE_GHET.match(stripped)
+    if m:
+        value = _clean_value(m.group(1))
+        if value and not _is_interrogative_value(value):
+            if _is_person_affinity_value(value):
+                return SemanticProfileIntent(
+                    kind="profile_write", category="negation_no_affection", value=None,
+                    sensitivity="safe", write_policy="clarify",
+                )
+            if not _is_unsafe_or_sensitive_auto_value(value):
+                return SemanticProfileIntent(
+                    kind="profile_write", category="negative_preference",
+                    value=value, write_policy="auto_safe",
+                )
+
     # P0-7G: user-reported external affection ("Quý thích tôi"). Subject must not be a
     # self word or a relation prefix; the runtime decides (against the saved self-name)
     # whether the object is the current user before saving.
@@ -594,6 +629,19 @@ def classify_profile_semantic_intent(text: str) -> SemanticProfileIntent | None:
     # Occupation shorthand "tôi làm X" — require a professional token to avoid
     # "tôi làm bài tập" / "tôi làm việc này" false positives.
     m = _RE_OCC_LAM.match(stripped)
+    if m:
+        value = _clean_value(m.group(1))
+        if (
+            _valid_value(value)
+            and _has_professional_token(value)
+            and not _is_unsafe_or_sensitive_auto_value(value)
+        ):
+            return SemanticProfileIntent(
+                kind="profile_write", category="occupation", value=value, write_policy="auto_safe",
+            )
+
+    # P0-7H: "ngoài AI tôi còn làm blogger" — occupation alongside existing role.
+    m = _RE_OCC_NGOAI.match(stripped)
     if m:
         value = _clean_value(m.group(1))
         if (
