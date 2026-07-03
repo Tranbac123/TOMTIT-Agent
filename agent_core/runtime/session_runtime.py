@@ -78,6 +78,14 @@ _CONV_DIRECT_ROUTES = (ConversationRoute.DIRECT_RESPONSE, ConversationRoute.CLAR
 # P0-7G: object words that mean "the user" in an external affection statement ("Quý thích tôi").
 _EXTERNAL_AFFECTION_SELF_WORDS = frozenset({"tôi", "mình", "tao", "ta"})
 
+# P0-7G-FIX4B: loose pattern for exact saved-name fallback (object captured as .+? instead of
+# the bounded \S+(?:\s+\S+)? used in profile_semantics). Only used when saved self-name has
+# 3+ tokens; an exact norm comparison prevents overmatch on long non-name phrases.
+_RE_EXTERNAL_AFFECTION_LOOSE = re.compile(
+    r'^(\S+)\s+(?:thích|yêu|thương|crush|quý\s+mến)\s+(.+?)\s*[.!]*\s*$',
+    re.IGNORECASE,
+)
+
 if TYPE_CHECKING:
     from agent_core.confirmation.models import ConfirmedSaveOperation
     from agent_core.session_persistence.base import SessionStoreProtocol
@@ -285,6 +293,15 @@ class SessionRuntime:
         semantic = self._maybe_handle_semantic_profile(user_message, state)
         if semantic is not None:
             return semantic
+
+        # CONV-P0 P0-7G-FIX4B priority 4.6: exact saved-name external affection fallback.
+        # Handles "Quý thích Nguyễn Văn Bắc" (3+ token name) when profile_semantics
+        # bounded regex (\S+(?:\s+\S+)?) cannot capture the full object. Only activates
+        # when the current saved self-name has 3+ tokens; uses exact-norm comparison to
+        # prevent overmatch on long non-name phrases like "giải thích cho tôi về AI".
+        ext_aff_exact = self._maybe_handle_exact_name_external_affection(user_message, state)
+        if ext_aff_exact is not None:
+            return ext_aff_exact
 
         # CONV-P0 P0-7G priority 4.8: explicit/implicit self-name update — supersede the
         # stored name ("sửa tên tôi thành ...", "tôi là <full name>" when a name exists).
@@ -965,6 +982,36 @@ class SessionRuntime:
         self._confirmed_profile_fact_count += 1
         return self._complete_conv(
             state, "conv:semantic_profile_saved", build_auto_ack_message(candidate)
+        )
+
+    def _maybe_handle_exact_name_external_affection(
+        self, user_message: str, state: AgentState
+    ) -> AgentState | None:
+        """P0-7G-FIX4B: exact saved-name fallback for 3+ token self-names.
+
+        profile_semantics._RE_EXTERNAL_AFFECTION is bounded to 1-2 token objects to avoid
+        overmatching long phrases. For saved names with 3+ tokens (e.g. "Nguyễn Văn Bắc"),
+        match the object exactly against the saved name via _norm comparison.
+        """
+        current = collect_profile_snapshot(self._store).name
+        if not current or len(current.split()) < 3:
+            return None
+        m = _RE_EXTERNAL_AFFECTION_LOOSE.match(user_message.strip())
+        if not m:
+            return None
+        admirer = m.group(1).strip()
+        obj = m.group(2).strip()
+        if admirer.lower() in _EXTERNAL_AFFECTION_SELF_WORDS:
+            return None
+        if self._norm(obj) != self._norm(current):
+            return None
+        if not save_external_affection_fact(
+            admirer, self._store, state.session_id, original_text=user_message.strip()
+        ):
+            return None
+        self._confirmed_profile_fact_count += 1
+        return self._complete_conv(
+            state, "conv:external_affection_saved", build_external_affection_ack(admirer)
         )
 
     def _handle_external_affection(

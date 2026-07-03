@@ -2933,3 +2933,128 @@ def test_p0_7g_fix4a_no_pollution_full_name_query():
     summary = (sr.handle_turn("bạn nhớ gì về tôi?").final_answer or "").lower()
     assert "quý có thích" not in summary
     assert "bắc trần" not in summary or "tên" in summary
+
+
+# ===========================================================================
+# CONV-P0 P0-7G-FIX4B — supported 3-token self-name in external affection
+# ===========================================================================
+
+def test_p0_7g_fix4b_3token_name_save_recall():
+    # C1: 3-token name is saved and recalled correctly.
+    sr = _make_sr()
+    sr.handle_turn("tôi là Nguyễn Văn Bắc")
+    ans = (sr.handle_turn("tôi là ai?").final_answer or "").lower()
+    assert "nguyễn văn bắc" in ans
+
+
+def test_p0_7g_fix4b_3token_subject_alias():
+    # C2: 3-token self-name as subject alias maps to user for affection query.
+    sr = _make_sr()
+    sr.handle_turn("tôi là Nguyễn Văn Bắc")
+    sr.handle_turn("tôi thích Quý")
+    ans = (sr.handle_turn("Nguyễn Văn Bắc có thích Quý không?").final_answer or "").lower()
+    assert "rule-based mvp" not in ans
+    assert "tôi chưa xử lý" not in ans
+    assert "quý" in ans
+    assert "có" in ans or "thích" in ans
+
+
+def test_p0_7g_fix4b_3token_reverse_unknown():
+    # C3: reverse query for 3-token object returns safe unknown before external fact.
+    sr = _make_sr()
+    sr.handle_turn("tôi là Nguyễn Văn Bắc")
+    sr.handle_turn("tôi thích Quý")
+    ans = (sr.handle_turn("Quý có thích Nguyễn Văn Bắc không?").final_answer or "").lower()
+    assert "rule-based mvp" not in ans
+    assert "tôi chưa xử lý" not in ans
+    assert "đã nhớ" not in ans
+    assert "đã lưu" not in ans
+    assert "chưa" in ans or "không" in ans or "biết" in ans
+
+
+def test_p0_7g_fix4b_3token_external_via_toi():
+    # C4: external affection saved via "Quý thích tôi" makes 3-token query return yes.
+    sr = _make_sr()
+    sr.handle_turn("tôi là Nguyễn Văn Bắc")
+    ack = (sr.handle_turn("Quý thích tôi").final_answer or "").lower()
+    assert "đã nhớ" in ack
+    ans = (sr.handle_turn("Quý có thích Nguyễn Văn Bắc không?").final_answer or "").lower()
+    assert "rule-based mvp" not in ans
+    assert "tôi chưa xử lý" not in ans
+    assert "quý" in ans
+    assert "có" in ans or "thích" in ans
+
+
+def test_p0_7g_fix4b_3token_external_via_saved_name():
+    # C5: external affection saved via exact 3-token name makes query return yes.
+    sr = _make_sr()
+    sr.handle_turn("tôi là Nguyễn Văn Bắc")
+    sr.handle_turn("Quý thích Nguyễn Văn Bắc")
+    ans = (sr.handle_turn("Quý có thích Nguyễn Văn Bắc không?").final_answer or "").lower()
+    assert "rule-based mvp" not in ans
+    assert "tôi chưa xử lý" not in ans
+    assert "quý" in ans
+    assert "có" in ans or "thích" in ans
+
+
+def test_p0_7g_fix4b_3token_external_save_no_generic():
+    # C6: "Quý thích Nguyễn Văn Bắc" produces an acknowledgement, not generic fallback.
+    sr = _make_sr()
+    sr.handle_turn("tôi là Nguyễn Văn Bắc")
+    ack = (sr.handle_turn("Quý thích Nguyễn Văn Bắc").final_answer or "").lower()
+    assert "rule-based mvp" not in ack
+    assert "tôi chưa xử lý" not in ack
+    assert "nhớ" in ack or "quý" in ack
+
+
+def test_p0_7g_fix4b_partial_name_no_save():
+    # C7: partial names (Bắc, Văn Bắc) do not map to 3-token saved user.
+    sr = _make_sr()
+    sr.handle_turn("tôi là Nguyễn Văn Bắc")
+    ack1 = (sr.handle_turn("Quý thích Bắc").final_answer or "").lower()
+    assert "đã nhớ" not in ack1 and "đã lưu" not in ack1
+    ans1 = (sr.handle_turn("Quý có thích Bắc không?").final_answer or "").lower()
+    assert "đã nhớ" not in ans1
+    assert "chưa" in ans1 or "không" in ans1 or "biết" in ans1
+
+    sr2 = _make_sr()
+    sr2.handle_turn("tôi là Nguyễn Văn Bắc")
+    ack2 = (sr2.handle_turn("Quý thích Văn Bắc").final_answer or "").lower()
+    assert "đã nhớ" not in ack2 and "đã lưu" not in ack2
+    ans2 = (sr2.handle_turn("Quý có thích Văn Bắc không?").final_answer or "").lower()
+    assert "đã nhớ" not in ans2
+    assert "chưa" in ans2 or "không" in ans2 or "biết" in ans2
+
+
+def test_p0_7g_fix4b_overmatch_guard():
+    # C8: explanation-style phrases are not saved as external affection.
+    for text in [
+        "giải thích cho tôi về machine learning",
+        "giải thích cho tôi",
+        "hãy giải thích cho tôi về AI",
+    ]:
+        sr = _make_sr()
+        ans = (sr.handle_turn(text).final_answer or "").lower()
+        assert "đã nhớ" not in ans, f"saved for: {text}"
+        assert "đã lưu" not in ans, f"saved for: {text}"
+        summary = (sr.handle_turn("bạn nhớ gì về tôi?").final_answer or "").lower()
+        assert "thích cho tôi" not in summary, f"polluted for: {text}"
+
+
+def test_p0_7g_fix4b_1token_2token_regression():
+    # C9: 1-token and 2-token external affection still works.
+    sr = _make_sr()
+    sr.handle_turn("tôi là Bắc")
+    sr.handle_turn("Quý thích Bắc")
+    ans = (sr.handle_turn("Quý có thích Bắc không?").final_answer or "").lower()
+    assert "rule-based mvp" not in ans
+    assert "quý" in ans
+    assert "có" in ans or "thích" in ans
+
+    sr2 = _make_sr()
+    sr2.handle_turn("tôi là Bắc Trần")
+    sr2.handle_turn("Quý thích Bắc Trần")
+    ans2 = (sr2.handle_turn("Quý có thích Bắc Trần không?").final_answer or "").lower()
+    assert "rule-based mvp" not in ans2
+    assert "quý" in ans2
+    assert "có" in ans2 or "thích" in ans2
