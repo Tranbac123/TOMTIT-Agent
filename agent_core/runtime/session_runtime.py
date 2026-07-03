@@ -18,6 +18,7 @@ from agent_core.conversation.profile_memory import (
     BlockedProfileAttempt,
     PendingProfileConfirmationState,
     ProfileFactCandidate,
+    ProfileQuery,
     answer_profile_query,
     answer_yes_no_memory_query,
     build_affection_explanation_response,
@@ -33,6 +34,7 @@ from agent_core.conversation.profile_memory import (
     build_negation_no_affection_response,
     build_negative_desire_response,
     build_negative_preference_ack,
+    build_occ_correction_ack,
     build_one_sided_affection_response,
     build_person_affinity_response,
     build_profile_conflict_message,
@@ -45,8 +47,10 @@ from agent_core.conversation.profile_memory import (
     delete_relation_fact,
     detect_auto_profile_candidate,
     detect_blocked_auto_profile_value,
+    detect_occupation_name_correction,
     detect_profile_fact_candidate,
     detect_profile_query,
+    detect_relation_alias_query,
     detect_relation_removal_cmd,
     detect_relation_update_cmd,
     detect_self_name_phrase_update,
@@ -294,6 +298,12 @@ class SessionRuntime:
         profile_answer = self._maybe_answer_profile_query(user_message, state)
         if profile_answer is not None:
             return profile_answer
+
+        # CONV-P0 P0-7H-FIX1 priority 4.2: occupation/name correction
+        # ("không tôi làm nông là nông dân chứ không phải tên tôi là nông dân").
+        occ_corr = self._maybe_handle_occupation_correction(user_message, state)
+        if occ_corr is not None:
+            return occ_corr
 
         # CONV-P0 P0-7H priority 4.3: explicit relation update/removal commands
         # ("sửa bạn gái của tôi thành May", "cập nhật Quý không phải là bạn gái của tôi").
@@ -554,6 +564,22 @@ class SessionRuntime:
         confirmed this session. This preserves the zero-side-effect contract for sessions
         with no profile data (the router's CLARIFICATION response handles those turns).
         """
+        # P0-7H-FIX1 Part B: alias relation query ("bạn gái của Bắc là ai?" where Bắc = saved name)
+        alias_q = detect_relation_alias_query(user_message.strip())
+        if alias_q is not None:
+            rel_label, name_in_query = alias_q
+            current_name = collect_profile_snapshot(self._store).name
+            if current_name and self._norm(name_in_query) == self._norm(current_name):
+                synthetic_query = ProfileQuery(kind="relation_name", relation_label=rel_label)
+                answer = answer_profile_query(synthetic_query, self._store)
+                if answer is not None:
+                    self._profile_query_context_turn = len(self._session.turns)
+                    state.history.append("conv:profile_query_answered")
+                    state.complete(answer)
+                    state.history.append("conv:state_finalized")
+                    self._record_terminal_state(state)
+                    return state
+
         query = detect_profile_query(user_message.strip())
         if query is None:
             return None
@@ -932,6 +958,29 @@ class SessionRuntime:
             return None
 
         return None
+
+    def _maybe_handle_occupation_correction(
+        self, user_message: str, state: AgentState
+    ) -> AgentState | None:
+        """P0-7H-FIX1 priority 4.2: occupation/name correction.
+
+        "không tôi làm nông là nông dân chứ không phải tên tôi là nông dân"
+        → save occupation, leave name unchanged, return specific ack.
+        """
+        value = detect_occupation_name_correction(user_message.strip())
+        if value is None:
+            return None
+        candidate = AutoProfileCandidate(
+            subject="self", relation="occupation", value=value,
+            original_text=user_message.strip(),
+        )
+        ok = save_auto_profile_fact(candidate, self._store, state.session_id)
+        if not ok:
+            return None
+        self._confirmed_profile_fact_count += 1
+        return self._complete_conv(
+            state, "conv:occ_correction_saved", build_occ_correction_ack(value)
+        )
 
     def _maybe_handle_semantic_profile(
         self, user_message: str, state: AgentState

@@ -3184,3 +3184,59 @@ def test_p0_7h_no_regression_occupation_existing():
     ans = (sr.handle_turn("tôi là AI engineer").final_answer or "").lower()
     assert "rule-based mvp" not in ans, f"generic fallback: {ans}"
     assert "ai engineer" in ans or "công việc" in ans or "đã" in ans or "lĩnh vực" in ans
+
+
+# ---------------------------------------------------------------------------
+# P0-7H-FIX1 tests
+# ---------------------------------------------------------------------------
+
+def test_p0_7h_fix1_correction_not_name_but_occupation():
+    # A6: "... nông dân chứ không phải tên ..." → occupation saved, name unchanged.
+    sr = _make_sr()
+    sr.handle_turn("tôi là bb")
+    ans_corr = (sr.handle_turn(
+        "không tôi làm nông là nông dân chứ không phải tên tôi là nông dân"
+    ).final_answer or "")
+    assert "nông dân" in ans_corr.lower(), f"occupation not acked: {ans_corr}"
+    assert "nghề" in ans_corr.lower() or "công việc" in ans_corr.lower(), f"wrong ack: {ans_corr}"
+    ans_name = (sr.handle_turn("tôi là ai?").final_answer or "").lower()
+    assert "bb" in ans_name, f"name was corrupted by correction: {ans_name}"
+    ans_occ = (sr.handle_turn("tôi làm gì?").final_answer or "").lower()
+    assert "nông dân" in ans_occ, f"occupation not recalled after correction: {ans_occ}"
+
+
+def test_p0_7h_fix1_relation_query_with_current_user_alias():
+    # B: "bạn gái của Bắc là ai?" where "Bắc" is the saved current-user name.
+    sr = _make_sr()
+    sr.handle_turn("tôi là Bắc")
+    sr.handle_turn("bạn gái của tôi là Quý")
+    ans = (sr.handle_turn("bạn gái của Bắc là ai?").final_answer or "").lower()
+    assert "quý" in ans, f"alias relation query did not return Quý: {ans}"
+
+
+def test_p0_7h_fix1_relation_query_with_third_party_name_unknown():
+    # B guard: "bạn gái của Nam là ai?" where "Nam" ≠ saved name → must NOT return user's bạn gái.
+    sr = _make_sr()
+    sr.handle_turn("tôi là Bắc")
+    sr.handle_turn("bạn gái của tôi là Quý")
+    ans = (sr.handle_turn("bạn gái của Nam là ai?").final_answer or "").lower()
+    # Third-party name "Nam" is not the saved name "Bắc" — must not return Quý
+    assert "quý" not in ans, f"third-party alias leaked bạn gái: {ans}"
+
+
+def test_p0_7h_fix1_manual_spec_contains_p0_7h_addendum():
+    # PART C: manual spec must contain P0-7H addendum with required tokens.
+    import pathlib
+    spec_path = pathlib.Path(__file__).parent / "manual" / "CONV_P0_MEMORY_CORE_MANUAL_REGRESSION_SPEC.md"
+    text = spec_path.read_text(encoding="utf-8")
+    required = [
+        "P0-7H",
+        "Memory Correction",
+        "Relation/Occupation",
+        "bạn gái của Bắc là ai",
+        "không tôi làm nông",
+        "tôi ghét hút thuốc",
+        "tôi là nông dân",
+    ]
+    missing = [tok for tok in required if tok not in text]
+    assert not missing, f"Manual spec missing tokens: {missing}"

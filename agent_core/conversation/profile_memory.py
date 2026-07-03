@@ -515,6 +515,24 @@ _RE_RELATION_REMOVAL_CMD = re.compile(
     re.IGNORECASE,
 )
 
+# P0-7H-FIX1 A6: correction of occupation/name confusion — "là X chứ không phải tên"
+_RE_OCC_CORRECTION_CHU = re.compile(
+    r'(?:là\s+)?(\S+(?:\s+\S+)?)\s+chứ\s+không\s+phải\s+(?:là\s+)?tên',
+    re.IGNORECASE,
+)
+
+# P0-7H-FIX1 A6: "X là nghề/công việc của tôi"
+_RE_OCC_CORRECTION_NGHE = re.compile(
+    r'^(\S+(?:\s+\S+)?)\s+là\s+(?:nghề|công\s+việc)\s+(?:của\s+)?(?:tôi|mình)\s*[.!]*\s*$',
+    re.IGNORECASE,
+)
+
+# P0-7H-FIX1 B: alias relation query — "bạn gái của Bắc là ai?" (Bắc = current user alias)
+_RE_RELATION_ALIAS_Q = re.compile(
+    r'^(bạn\s+gái|bạn\s+trai|người\s+yêu|vợ|chồng|partner)\s+(?:của\s+)?(\S+)\s+(?:là\s+)?ai\s*[?？]?\s*$',
+    re.IGNORECASE,
+)
+
 # P0-7C: profile summary queries. P0-7F broadens to "đã/đang" tenses,
 # "lưu thông tin gì", and "hồ sơ của tôi có gì".
 _RE_PROFILE_SUMMARY_Q = re.compile(
@@ -1788,6 +1806,50 @@ def build_relation_removal_ack(label: str) -> str:
 
 def build_relation_removal_not_found() -> str:
     return "Tôi chưa lưu thông tin về đối tượng này."
+
+
+# ---------------------------------------------------------------------------
+# P0-7H-FIX1: occupation/name correction + alias relation query
+# ---------------------------------------------------------------------------
+
+def detect_occupation_name_correction(text: str) -> str | None:
+    """Return the corrected occupation value if text corrects name/occupation confusion.
+
+    Handles "... là X chứ không phải tên ..." and "X là nghề/công việc của tôi".
+    """
+    stripped = text.strip()
+    if re.search(r'không\s+phải\s+(?:là\s+)?tên', stripped, re.IGNORECASE):
+        m = _RE_OCC_CORRECTION_CHU.search(stripped)
+        if m:
+            value = re.sub(r"\s+", " ", m.group(1).strip().rstrip(".!?,")).strip()
+            if value and _is_valid_auto_value(value):
+                return value
+    m2 = _RE_OCC_CORRECTION_NGHE.match(stripped)
+    if m2:
+        value = re.sub(r"\s+", " ", m2.group(1).strip().rstrip(".!?,")).strip()
+        if value and _is_valid_auto_value(value):
+            return value
+    return None
+
+
+def build_occ_correction_ack(value: str) -> str:
+    return f"Mình hiểu: '{value}' là nghề/công việc của bạn, không phải tên. Mình đã cập nhật lại."
+
+
+def detect_relation_alias_query(text: str) -> tuple[str, str] | None:
+    """Return (relation_label, name_in_query) for 'RELATION của NAME là ai?' queries.
+
+    The caller compares name_in_query against the saved self-name to decide
+    whether this is a current-user query or an unknown third-party query.
+    """
+    m = _RE_RELATION_ALIAS_Q.match(text.strip())
+    if not m:
+        return None
+    label = _normalize_relation_label(m.group(1))
+    name = re.sub(r"\s+", " ", m.group(2).strip()).strip()
+    if not name:
+        return None
+    return label, name
 
 
 # ---------------------------------------------------------------------------
