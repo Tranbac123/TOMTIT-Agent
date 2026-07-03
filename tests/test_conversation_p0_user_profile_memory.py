@@ -3348,3 +3348,153 @@ def test_p0_7h_fix3_manual_spec_contains_multi_job_addendum():
     ]
     missing = [tok for tok in required if tok not in text]
     assert not missing, f"Manual spec missing FIX3 tokens: {missing}"
+
+
+# ---------------------------------------------------------------------------
+# P0-7I tests — memory conflict resolution + correction semantics
+# ---------------------------------------------------------------------------
+
+def test_p0_7i_preference_negation_supersedes_positive():
+    sr = _make_sr()
+    sr.handle_turn("tôi thích ăn kem")
+    sr.handle_turn("tôi không thích ăn kem")
+    pos = (sr.handle_turn("tôi thích gì?").final_answer or "").lower()
+    assert "ăn kem" not in pos, f"positive still shows ăn kem after negation: {pos}"
+    neg = (sr.handle_turn("tôi không thích gì?").final_answer or "").lower()
+    assert "ăn kem" in neg, f"negative missing ăn kem: {neg}"
+
+
+def test_p0_7i_preference_positive_supersedes_negative():
+    sr = _make_sr()
+    sr.handle_turn("tôi không thích ăn kem")
+    sr.handle_turn("tôi thích ăn kem")
+    pos = (sr.handle_turn("tôi thích gì?").final_answer or "").lower()
+    assert "ăn kem" in pos, f"positive missing ăn kem after relike: {pos}"
+    neg = (sr.handle_turn("tôi không thích gì?").final_answer or "").lower()
+    assert "ăn kem" not in neg, f"negative still shows ăn kem after relike: {neg}"
+
+
+def test_p0_7i_preference_correction_negative_phrase():
+    sr = _make_sr()
+    sr.handle_turn("tôi thích ăn kem")
+    ack = (sr.handle_turn("tôi mới nói tôi không thích ăn kem mà").final_answer or "").lower()
+    assert "rule-based mvp" not in ack, f"correction fell to generic fallback: {ack}"
+    assert "chưa xử lý được yêu cầu này" not in ack, f"correction fell to generic fallback: {ack}"
+    pos = (sr.handle_turn("tôi thích gì?").final_answer or "").lower()
+    assert "ăn kem" not in pos, f"positive still shows ăn kem after correction: {pos}"
+    neg = (sr.handle_turn("tôi không thích gì?").final_answer or "").lower()
+    assert "ăn kem" in neg, f"negative missing ăn kem after correction: {neg}"
+
+
+def test_p0_7i_preference_correction_positive_phrase():
+    sr = _make_sr()
+    sr.handle_turn("tôi không thích ăn kem")
+    ack = (sr.handle_turn("tôi vừa nói tôi thích ăn kem mà").final_answer or "").lower()
+    assert "rule-based mvp" not in ack, f"correction fell to generic fallback: {ack}"
+    pos = (sr.handle_turn("tôi thích gì?").final_answer or "").lower()
+    assert "ăn kem" in pos, f"positive missing ăn kem after correction: {pos}"
+    neg = (sr.handle_turn("tôi không thích gì?").final_answer or "").lower()
+    assert "ăn kem" not in neg, f"negative still shows ăn kem after correction: {neg}"
+
+
+def test_p0_7i_negative_preference_khong_thich_lanh():
+    sr = _make_sr()
+    ack = (sr.handle_turn("tôi không thích lạnh").final_answer or "").lower()
+    assert "người bạn thích" not in ack, f"lạnh misrouted to person-affinity clarify: {ack}"
+    assert "rule-based mvp" not in ack, f"generic fallback: {ack}"
+    neg = (sr.handle_turn("tôi không thích gì?").final_answer or "").lower()
+    assert "lạnh" in neg, f"lạnh missing from dislikes: {neg}"
+
+
+def test_p0_7i_name_correction_khong_toi_ten_la_bac():
+    sr = _make_sr()
+    sr.handle_turn("tôi là ia")
+    ack = (sr.handle_turn("không tôi tên là Bắc").final_answer or "").lower()
+    assert "rule-based mvp" not in ack, f"correction fell to generic fallback: {ack}"
+    ans = (sr.handle_turn("tôi là ai?").final_answer or "").lower()
+    assert "bắc" in ans, f"name not corrected to Bắc: {ans}"
+    assert "ia" not in ans, f"old name ia still shown: {ans}"
+
+
+def test_p0_7i_name_correction_y_toi_la_toi_ten_la_bac():
+    sr = _make_sr()
+    sr.handle_turn("tôi là ia")
+    ack = (sr.handle_turn("ý tôi là tôi tên là Bắc").final_answer or "").lower()
+    assert "rule-based mvp" not in ack, f"correction fell to generic fallback: {ack}"
+    ans = (sr.handle_turn("tôi là ai?").final_answer or "").lower()
+    assert "bắc" in ans, f"name not corrected to Bắc: {ans}"
+    assert "ia" not in ans, f"old name ia still shown: {ans}"
+
+
+def test_p0_7i_name_correction_does_not_turn_blogger_into_name():
+    sr = _make_sr()
+    sr.handle_turn("tôi là ia")
+    sr.handle_turn("không tôi là blogger")
+    ans = (sr.handle_turn("tôi là ai?").final_answer or "").lower()
+    assert "blogger" not in ans, f"name corrupted by occupation-shaped correction: {ans}"
+    assert "ia" in ans, f"original name lost: {ans}"
+
+
+def test_p0_7i_occupation_removal_toi_khong_phai_nong_dan():
+    sr = _make_sr()
+    sr.handle_turn("tôi làm AI")
+    sr.handle_turn("tôi là nông dân")
+    sr.handle_turn("tôi không phải nông dân")
+    ans = (sr.handle_turn("tôi làm gì?").final_answer or "").lower()
+    assert "nông dân" not in ans, f"occupation removal did not retract nông dân: {ans}"
+    assert "ai" in ans, f"unrelated occupation AI was removed: {ans}"
+
+
+def test_p0_7i_occupation_yesno_positive():
+    sr = _make_sr()
+    sr.handle_turn("tôi làm AI")
+    ans = (sr.handle_turn("tôi có phải là AI không?").final_answer or "").lower()
+    assert "rule-based mvp" not in ans, f"occupation yesno fell to open-QA fallback: {ans}"
+    assert "kiến thức mở" not in ans, f"occupation yesno fell to open-QA fallback: {ans}"
+    assert "có" in ans or "đúng" in ans, f"expected affirmative answer: {ans}"
+
+
+def test_p0_7i_occupation_yesno_after_removal():
+    sr = _make_sr()
+    sr.handle_turn("tôi là nông dân")
+    sr.handle_turn("tôi không phải nông dân")
+    ans = (sr.handle_turn("tôi có phải là nông dân không?").final_answer or "").lower()
+    assert "nông dân" in ans, f"answer missing occupation name: {ans}"
+    assert "không" in ans or "chưa" in ans, f"expected negative answer after removal: {ans}"
+
+
+def test_p0_7i_affection_discourse_marker_not_saved_as_preference():
+    sr = _make_sr()
+    sr.handle_turn("tôi thích quý")
+    sr.handle_turn("tôi thích quý mà")
+    pref = (sr.handle_turn("tôi thích gì?").final_answer or "").lower()
+    assert "quý mà" not in pref, f"'quý mà' leaked into ordinary preference: {pref}"
+    aff = (sr.handle_turn("tôi thích ai?").final_answer or "").lower()
+    assert "quý" in aff, f"Quý missing from affection target: {aff}"
+
+
+def test_p0_7i_summary_has_no_preference_conflict():
+    sr = _make_sr()
+    sr.handle_turn("tôi thích ăn kem")
+    sr.handle_turn("tôi không thích ăn kem")
+    summary = (sr.handle_turn("bạn đã nhớ gì về tôi").final_answer or "").lower()
+    assert "- bạn thích ăn kem" not in summary, f"summary still shows superseded positive: {summary}"
+    assert "không thích ăn kem" in summary, f"summary missing active negative: {summary}"
+
+
+def test_p0_7i_manual_spec_contains_conflict_resolution_addendum():
+    import pathlib
+    spec_path = pathlib.Path(__file__).parent / "manual" / "CONV_P0_MEMORY_CORE_MANUAL_REGRESSION_SPEC.md"
+    text = spec_path.read_text(encoding="utf-8").lower()
+    required = [
+        "p0-7i",
+        "memory conflict resolution",
+        "tôi không thích ăn kem",
+        "tôi mới nói tôi không thích ăn kem mà",
+        "không tôi tên là bắc",
+        "tôi không phải nông dân",
+        "tôi không thích lạnh",
+        "needs_fix",
+    ]
+    missing = [tok for tok in required if tok not in text]
+    assert not missing, f"Manual spec missing P0-7I tokens: {missing}"

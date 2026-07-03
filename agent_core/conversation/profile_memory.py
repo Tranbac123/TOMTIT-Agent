@@ -113,6 +113,8 @@ class ProfileQuery:
         "self_dislike",
         # P0-7H
         "relation_yesno",
+        # P0-7I
+        "self_occupation_yesno",
     ]
     value: str | None = None          # for inverse_value: the name to look up
     relation_label: str | None = None  # for relation_name / relation_existence
@@ -538,6 +540,44 @@ _RE_OCC_CORRECTION_NGHE = re.compile(
 # P0-7H-FIX1 B: alias relation query — "bạn gái của Bắc là ai?" (Bắc = current user alias)
 _RE_RELATION_ALIAS_Q = re.compile(
     r'^(bạn\s+gái|bạn\s+trai|người\s+yêu|vợ|chồng|partner)\s+(?:của\s+)?(\S+)\s+(?:là\s+)?ai\s*[?？]?\s*$',
+    re.IGNORECASE,
+)
+
+# ---------------------------------------------------------------------------
+# P0-7I: correction lead-in stripping
+# ---------------------------------------------------------------------------
+
+# "không, tôi ..." / "không tôi ..." — a leading negation/correction marker followed by a
+# self-assertion clause. Requires "tôi/mình" directly after "không" so this never matches
+# an ordinary negative-preference sentence ("tôi không thích X"), which has "không" in the
+# MIDDLE, not as the first token.
+_RE_CORRECTION_KHONG = re.compile(
+    r'^không[,]?\s+((?:tôi|mình)\b.*)$',
+    re.IGNORECASE | re.DOTALL,
+)
+# "ý tôi là ..." / "ý mình là ..." — explicit correction lead-in.
+_RE_CORRECTION_Y_TOI_LA = re.compile(
+    r'^ý\s+(?:tôi|mình)\s+là\s+(.+)$',
+    re.IGNORECASE | re.DOTALL,
+)
+# "tôi mới/vừa nói ... mà" — the user restates what they just said as a correction.
+# Trailing "mà" is stripped from the captured clause.
+_RE_CORRECTION_MOI_NOI = re.compile(
+    r'^(?:tôi|mình)\s+(?:mới|vừa)\s+nói\s+(?:là\s+)?(.+?)\s*(?:mà)?\s*[.!?]*\s*$',
+    re.IGNORECASE | re.DOTALL,
+)
+
+# P0-7I: occupation removal — "tôi không phải (là) VALUE". Extraction only; the caller
+# checks the value against currently stored occupations before acting, so an unrelated
+# denial never fires.
+_RE_OCC_REMOVAL = re.compile(
+    r'^(?:tôi|mình)\s+không\s+phải\s+(?:là\s+)?(.+?)\s*[.!]*\s*$',
+    re.IGNORECASE | re.DOTALL,
+)
+
+# P0-7I: self occupation yes/no — "tôi có phải là AI không?", "tôi có phải là nông dân không?"
+_RE_SELF_OCC_YESNO_Q = re.compile(
+    r'^(?:tôi|mình)\s+có\s+phải\s+là\s+(.+?)\s+(?:không|ko|hông|hong)\s*[?？]?\s*$',
     re.IGNORECASE,
 )
 
@@ -1044,6 +1084,13 @@ def detect_profile_query(text: str) -> ProfileQuery | None:
     # 6. P0-7D: occupation query
     if _RE_OCCUPATION_Q.match(stripped):
         return ProfileQuery(kind="self_occupation")
+
+    # 6b. P0-7I: self occupation yes/no ("tôi có phải là AI không?")
+    m = _RE_SELF_OCC_YESNO_Q.match(stripped)
+    if m:
+        value = re.sub(r"\s+", " ", m.group(1).strip().rstrip("?？")).strip()
+        if value:
+            return ProfileQuery(kind="self_occupation_yesno", value=value)
 
     # 7. P0-7F-FIX2: affection query ("tôi thích ai?") — before general preference query.
     #    P0-7F-FIX5 Part D adds the "người tôi thích là ai?" alias to the same lane.
@@ -1873,6 +1920,127 @@ def detect_relation_alias_query(text: str) -> tuple[str, str] | None:
 
 
 # ---------------------------------------------------------------------------
+# P0-7I: correction lead-in stripping + occupation removal
+# ---------------------------------------------------------------------------
+
+def detect_correction_remainder(text: str) -> str | None:
+    """Return the corrected assertion clause for a leading correction phrase, else None.
+
+    Strips lead-ins like "không, ", "ý tôi là ", and "tôi mới/vừa nói ... mà" so the
+    remainder can be re-dispatched through the normal write detectors as if the user had
+    said it directly.
+    """
+    stripped = text.strip()
+    for pat in (_RE_CORRECTION_KHONG, _RE_CORRECTION_Y_TOI_LA, _RE_CORRECTION_MOI_NOI):
+        m = pat.match(stripped)
+        if m:
+            remainder = re.sub(r"\s+", " ", m.group(1).strip()).strip()
+            if remainder:
+                return remainder
+    return None
+
+
+def detect_occupation_removal(text: str) -> str | None:
+    """Return the occupation value to retract for "tôi không phải (là) X", else None.
+
+    Extraction only — the caller checks the value against currently stored occupations
+    before acting, so an unrelated denial ("tôi không phải là người xấu") never fires.
+    """
+    stripped = text.strip()
+    if '?' in stripped or '？' in stripped:
+        return None
+    m = _RE_OCC_REMOVAL.match(stripped)
+    if not m:
+        return None
+    value = re.sub(r"\s+", " ", m.group(1).strip().rstrip(".!?,")).strip()
+    return value or None
+
+
+def delete_occupation_fact(value: str, store: "MemoryStoreProtocol") -> str | None:
+    """Delete all stored occupation records matching value (case-insensitive).
+
+    Returns the matched stored display value, or None if no stored occupation matches.
+    Never removes an unrelated occupation.
+    """
+    target = _norm_cmp(value)
+    records = list(store.search(MemoryQuery(
+        text="", types=[MemoryType.FACT], tags=["user_profile"], limit=200,
+    )))
+    matched_value: str | None = None
+    for rec in records:
+        md = rec.metadata
+        if not (md.get("confirmed") and md.get("profile_schema") in (
+            "user_profile_fact_v1", "user_profile_fact_v2"
+        )):
+            continue
+        if md.get("subject") != "self" or md.get("relation") != "occupation":
+            continue
+        stored_value = md.get("value", "")
+        if _norm_cmp(stored_value) == target:
+            store.delete(rec.id, reason="user_removal")
+            matched_value = matched_value or stored_value
+    return matched_value
+
+
+def build_occupation_removal_ack(value: str) -> str:
+    return f"Đã xóa thông tin nghề nghiệp/công việc '{value}' khỏi hồ sơ của bạn."
+
+
+# ---------------------------------------------------------------------------
+# P0-7I: preference conflict resolution (positive vs negative)
+# ---------------------------------------------------------------------------
+
+def _preference_conflicts(a: str, b: str) -> bool:
+    """True if a and b denote the same preference OBJECT (bounded canonical match).
+
+    Exact normalized match, or a shared alias term via ``_positive_preference_terms``
+    (e.g. "ăn kem" and "kem"). Deliberately conservative: never fuzzy-matches typos.
+    """
+    if _norm_cmp(a) == _norm_cmp(b):
+        return True
+    return bool(_positive_preference_terms(a) & _positive_preference_terms(b))
+
+
+def _find_conflicting_preference_records(value: str, store: "MemoryStoreProtocol") -> list:
+    """Return confirmed self preference/negative_preference records matching value."""
+    fact_records = list(store.search(MemoryQuery(
+        text="", types=[MemoryType.FACT], tags=["user_profile"], limit=200,
+    )))
+    pref_records = list(store.search(MemoryQuery(
+        text="", types=[MemoryType.PREFERENCE], tags=["user_profile"], limit=200,
+    )))
+    matches = []
+    for rec in fact_records + pref_records:
+        md = rec.metadata
+        if not (md.get("confirmed") and md.get("profile_schema") in (
+            "user_profile_fact_v1", "user_profile_fact_v2"
+        )):
+            continue
+        if md.get("subject") != "self" or md.get("relation") not in (
+            "preference", "negative_preference"
+        ):
+            continue
+        stored_value = md.get("value", "")
+        if stored_value and _preference_conflicts(stored_value, value):
+            matches.append(rec)
+    return matches
+
+
+def resolve_preference_conflicts(
+    value: str, new_relation: str, store: "MemoryStoreProtocol"
+) -> None:
+    """Delete stored preference records of the OPPOSITE polarity that conflict with value.
+
+    Called before saving a new preference/negative_preference so the newer polarity
+    supersedes the older one for the same object (P0-7I memory conflict resolution).
+    """
+    opposite = "negative_preference" if new_relation == "preference" else "preference"
+    for rec in _find_conflicting_preference_records(value, store):
+        if rec.metadata.get("relation") == opposite:
+            store.delete(rec.id, reason="preference_conflict_resolved")
+
+
+# ---------------------------------------------------------------------------
 # Retrieval / answering
 # ---------------------------------------------------------------------------
 
@@ -2229,6 +2397,15 @@ def answer_profile_query(
         if not snap.occupation:
             return "Tôi chưa có thông tin về nghề nghiệp/vai trò của bạn."
         return "Mình đang nhớ công việc/lĩnh vực của bạn là " + ", ".join(snap.occupation) + "."
+
+    # --- P0-7I: self_occupation_yesno ("tôi có phải là AI không?") ---
+    elif query.kind == "self_occupation_yesno":
+        snap = collect_profile_snapshot(store)
+        target = _norm_cmp(query.value or "")
+        occ_norm = [_norm_cmp(o) for o in snap.occupation]
+        if target and target in occ_norm:
+            return f"Có, mình đang nhớ bạn là {query.value}."
+        return f"Không, hiện mình không có thông tin bạn là {query.value}."
 
     # --- P0-7D/7F: self_preference — aggregate ALL preferences (personal + professional) ---
     elif query.kind == "self_preference":

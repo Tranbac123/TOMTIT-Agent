@@ -97,7 +97,22 @@ _COMMON_OBJECT_TOKENS: frozenset[str] = frozenset({
     "kem", "trà", "tra", "cafe", "cà phê", "ca phe", "bánh", "banh",
     "phở", "pho", "bún", "bun", "cơm", "com", "game", "sách", "sach",
     "nhạc", "nhac", "phim", "bóng đá", "bong da",
+    # P0-7I: common weather/condition adjective — otherwise misread as a lowercase
+    # person name by the bounded person-affinity heuristic ("tôi không thích lạnh").
+    "lạnh", "lanh",
 })
+
+# P0-7I: trailing Vietnamese discourse particles that can follow an affection/person
+# target ("tôi thích quý mà"). Stripped only for the person-affinity check so the object
+# is recognized as "quý" (a person), not saved verbatim as an ordinary preference "quý mà".
+_DISCOURSE_MARKER_SUFFIXES: frozenset[str] = frozenset({"mà", "đó", "nhé"})
+
+
+def _strip_discourse_marker(value: str) -> str:
+    tokens = value.split()
+    if len(tokens) >= 2 and tokens[-1].lower() in _DISCOURSE_MARKER_SUFFIXES:
+        return " ".join(tokens[:-1]).strip()
+    return value
 
 _VAGUE_VALUE_TOKENS: frozenset[str] = frozenset({
     "cái này", "cái đó", "cái kia", "việc này", "việc đó", "nó", "đó", "này",
@@ -598,11 +613,19 @@ def classify_profile_semantic_intent(text: str) -> SemanticProfileIntent | None:
                 kind="profile_write", category="sensitive", value=value,
                 sensitivity="unsafe", write_policy="block",
             )
-        if _is_person_affinity_value(value):
+        # P0-7I: check the discourse-marker-stripped form too, so "quý mà" is recognized
+        # as the person "quý" (not saved verbatim as an ordinary preference "quý mà").
+        stripped_value = _strip_discourse_marker(value)
+        if _is_person_affinity_value(value) or (
+            stripped_value != value and _is_person_affinity_value(stripped_value)
+        ):
             # P0-7G: "tôi thích Quý" now SAVES affection/person memory (was clarify).
+            affection_value = (
+                stripped_value if _is_person_affinity_value(stripped_value) else value
+            )
             return SemanticProfileIntent(
                 kind="profile_write", category="relationship.affection_candidate",
-                value=value, sensitivity="person_affinity", write_policy="auto_safe",
+                value=affection_value, sensitivity="person_affinity", write_policy="auto_safe",
             )
         kind_pref = _classify_preference_kind(value)
         return SemanticProfileIntent(

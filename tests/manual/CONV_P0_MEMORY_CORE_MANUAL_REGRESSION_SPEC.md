@@ -1810,6 +1810,148 @@ If additive occupation input causes recall/summary to drop the prior occupation,
 
 ---
 
+## P0-7I — Memory Conflict Resolution + Correction Semantics
+
+When a newer fact contradicts an older one (positive vs negative preference, name
+correction, occupation removal), the newer fact must win and the query answers must
+reflect only the currently active state — never both sides at once.
+
+### Required behaviors
+
+#### Positive → negative preference conflict
+
+```
+tôi thích ăn kem
+tôi không thích ăn kem
+tôi thích gì?
+=> must NOT include ăn kem
+
+tôi không thích gì?
+=> must include ăn kem
+```
+
+#### Negative → positive preference conflict
+
+```
+tôi không thích ăn kem
+tôi thích ăn kem
+tôi thích gì?
+=> must include ăn kem
+
+tôi không thích gì?
+=> must NOT include ăn kem
+```
+
+#### Natural correction wording (preference)
+
+```
+tôi thích ăn kem
+tôi mới nói tôi không thích ăn kem mà
+=> must be understood as correction, not fallback
+
+tôi thích gì?
+=> must NOT include ăn kem
+
+tôi không thích gì?
+=> must include ăn kem
+```
+
+#### Negative preference parser misrouting guard
+
+```
+tôi không thích lạnh
+tôi không thích gì?
+=> must include lạnh
+=> must NOT respond "không muốn lưu thông tin về người bạn thích"
+```
+
+```
+tôi ghét hút thuốc
+tôi không thích gì?
+=> must include hút thuốc
+```
+
+#### Name correction and name update confidence
+
+```
+tôi là ia
+không tôi tên là Bắc
+tôi là ai?
+=> Bắc
+```
+
+```
+tôi là ia
+ý tôi là tôi tên là Bắc
+tôi là ai?
+=> Bắc
+```
+
+```
+tôi là ia
+không tôi là blogger
+tôi là ai?
+=> must NOT be "blogger" — name must stay ia (or be asked to clarify), never corrupted
+   by an occupation-shaped correction phrase
+```
+
+#### Occupation removal and occupation yes/no query
+
+```
+tôi là nông dân
+tôi không phải nông dân
+tôi làm gì?
+=> must NOT include nông dân
+```
+
+```
+tôi làm AI
+tôi là nông dân
+tôi không phải nông dân
+tôi làm gì?
+=> AI
+=> must NOT include nông dân
+```
+
+```
+tôi làm AI
+tôi có phải là AI không?
+=> Có / đúng
+
+tôi là nông dân
+tôi có phải là nông dân không?
+=> Có / đúng
+
+tôi không phải nông dân
+tôi có phải là nông dân không?
+=> Không / chưa có thông tin hiện hành
+```
+
+#### Affection vs normal preference category leak
+
+```
+tôi thích quý
+tôi thích quý mà
+tôi thích gì?
+=> must NOT include "quý mà"
+
+tôi thích ai?
+=> should include Quý
+```
+
+### Classification rules
+
+```text
+- If a positive and negative preference for the same canonical object are both active, classify as NEEDS_FIX.
+- If a negation/correction does not deactivate the conflicting active fact, classify as NEEDS_FIX.
+- If correction wording falls to generic fallback, classify as NEEDS_FIX.
+- If affection/person target is saved as ordinary hobby/preference because of discourse marker "mà", classify as NEEDS_FIX.
+- If occupation removal does not retract an active occupation, classify as NEEDS_FIX.
+- If occupation yes/no query is routed to open-QA while matching active memory exists, classify as NEEDS_FIX.
+```
+
+---
+
 ## 10. Merge Gate Policy
 
 Passing this file does not automatically merge.

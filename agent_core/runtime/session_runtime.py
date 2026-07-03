@@ -35,6 +35,7 @@ from agent_core.conversation.profile_memory import (
     build_negative_desire_response,
     build_negative_preference_ack,
     build_occ_correction_ack,
+    build_occupation_removal_ack,
     build_one_sided_affection_response,
     build_person_affinity_response,
     build_profile_conflict_message,
@@ -44,10 +45,13 @@ from agent_core.conversation.profile_memory import (
     build_relation_update_ack,
     build_unrelated_external_affection_response,
     collect_profile_snapshot,
+    delete_occupation_fact,
     delete_relation_fact,
     detect_auto_profile_candidate,
     detect_blocked_auto_profile_value,
+    detect_correction_remainder,
     detect_occupation_name_correction,
+    detect_occupation_removal,
     detect_profile_fact_candidate,
     detect_profile_query,
     detect_relation_alias_query,
@@ -57,6 +61,7 @@ from agent_core.conversation.profile_memory import (
     detect_self_name_update,
     find_existing_profile_value,
     looks_like_proper_full_name,
+    resolve_preference_conflicts,
     save_affection_fact,
     save_auto_profile_fact,
     save_confirmed_profile_fact,
@@ -298,6 +303,18 @@ class SessionRuntime:
         profile_answer = self._maybe_answer_profile_query(user_message, state)
         if profile_answer is not None:
             return profile_answer
+
+        # CONV-P0 P0-7I priority 4.1: correction lead-in stripping ("không, ", "ý tôi là ",
+        # "tôi mới/vừa nói ... mà") — re-dispatches the remainder through the normal write
+        # detectors so a correction is understood instead of falling to a generic fallback.
+        correction = self._maybe_handle_correction(user_message, state)
+        if correction is not None:
+            return correction
+
+        # CONV-P0 P0-7I priority 4.15: occupation removal ("tôi không phải nông dân").
+        occ_removed = self._maybe_handle_occupation_removal(user_message, state)
+        if occ_removed is not None:
+            return occ_removed
 
         # CONV-P0 P0-7H-FIX1 priority 4.2: occupation/name correction
         # ("không tôi làm nông là nông dân chứ không phải tên tôi là nông dân").
@@ -631,6 +648,10 @@ class SessionRuntime:
         candidate = detect_auto_profile_candidate(user_message.strip())
         if candidate is None:
             return None
+        # P0-7I: a new positive preference supersedes a conflicting active dislike for
+        # the same object (memory conflict resolution).
+        if candidate.relation == "preference":
+            resolve_preference_conflicts(candidate.value, "preference", self._store)
         ok = save_auto_profile_fact(candidate, self._store, state.session_id)
         if not ok:
             return None
@@ -959,6 +980,83 @@ class SessionRuntime:
 
         return None
 
+    def _maybe_handle_name_correction_text(
+        self, remainder: str, state: AgentState
+    ) -> AgentState | None:
+        """P0-7I: treat remainder as a name UPDATE, bypassing the conflict-safe guard.
+
+        Only used from ``_maybe_handle_correction`` (the caller already stripped a leading
+        correction marker). Role/occupation-like values ("blogger") are rejected via the
+        same name-shape checks used elsewhere, so a correction never corrupts the stored
+        name — the caller falls through to occupation handlers in that case.
+        """
+        candidate = detect_profile_fact_candidate(remainder)
+        if candidate is not None and candidate.subject == "self" and candidate.relation == "name":
+            value = candidate.value
+        else:
+            value = detect_self_name_phrase_update(remainder)
+        if value is None:
+            return None
+        from agent_core.conversation.profile_memory import _is_unsafe_or_sensitive_auto_value
+        if _is_unsafe_or_sensitive_auto_value(value):
+            return None
+        current = collect_profile_snapshot(self._store).name
+        if not save_self_name_update(value, self._store, state.session_id, original_text=remainder):
+            state.errors.append("profile_save_failed")
+            return self._complete_conv(
+                state, "conv:profile_autosave_failed",
+                "Không thể lưu thông tin. Vui lòng thử lại.",
+            )
+        self._confirmed_profile_fact_count += 1
+        if current is None:
+            return self._complete_conv(
+                state, "conv:profile_name_saved", f"Đã nhớ tên bạn là {value}."
+            )
+        return self._complete_conv(
+            state, "conv:profile_name_updated", build_name_update_ack(current, value)
+        )
+
+    def _maybe_handle_occupation_removal(
+        self, user_message: str, state: AgentState
+    ) -> AgentState | None:
+        """P0-7I: retract a stored occupation ("tôi không phải nông dân").
+
+        Only fires when the extracted value matches a CURRENTLY stored occupation
+        (case-insensitive); unrelated denials fall through untouched.
+        """
+        value = detect_occupation_removal(user_message.strip())
+        if value is None:
+            return None
+        removed = delete_occupation_fact(value, self._store)
+        if removed is None:
+            return None
+        return self._complete_conv(
+            state, "conv:occupation_removed", build_occupation_removal_ack(removed)
+        )
+
+    def _maybe_handle_correction(
+        self, user_message: str, state: AgentState
+    ) -> AgentState | None:
+        """P0-7I priority 4.1: strip a leading correction phrase ("không, ", "ý tôi là ",
+        "tôi mới/vừa nói ... mà") and re-dispatch the remainder through the normal write
+        detectors, so a correction is understood instead of falling to a generic fallback.
+        """
+        remainder = detect_correction_remainder(user_message.strip())
+        if remainder is None:
+            return None
+        for handler in (
+            self._maybe_handle_occupation_removal,
+            self._maybe_handle_name_correction_text,
+            self._maybe_handle_occupation_correction,
+            self._maybe_handle_semantic_profile,
+            self._maybe_auto_save_name_relation,
+            self._maybe_auto_save_profile_fact,
+        ):
+            result = handler(remainder, state)
+            if result is not None:
+                return result
+        return None
+
     def _maybe_handle_occupation_correction(
         self, user_message: str, state: AgentState
     ) -> AgentState | None:
@@ -1077,6 +1175,9 @@ class SessionRuntime:
         # P0-7G: durable negative preference ("tôi không thích ăn cá").
         if intent.category == "negative_preference":
             value = intent.value or ""
+            # P0-7I: a new negative preference supersedes a conflicting active positive
+            # preference for the same object (memory conflict resolution).
+            resolve_preference_conflicts(value, "negative_preference", self._store)
             candidate = AutoProfileCandidate(
                 relation="negative_preference", value=value,
                 original_text=user_message.strip(),
@@ -1092,6 +1193,10 @@ class SessionRuntime:
         candidate = self._semantic_to_auto_candidate(intent, user_message.strip())
         if candidate is None:
             return None
+        # P0-7I: a new positive preference supersedes a conflicting active dislike for
+        # the same object (memory conflict resolution).
+        if candidate.relation == "preference":
+            resolve_preference_conflicts(candidate.value, "preference", self._store)
         ok = save_auto_profile_fact(candidate, self._store, state.session_id)
         if not ok:
             return None
