@@ -219,11 +219,19 @@ _RE_RELATIONSHIP = re.compile(
     r'(?:của\s+)?(?:tôi|mình)\s+(?:tên\s+)?là\s+([^\s.!?,]+)\s*[.!?]*\s*$',
     re.IGNORECASE,
 )
+# P0-7G-FIX3 A4: reverse partner assertion — "Quý là người yêu của tôi". Subject (group 1)
+# is the partner's name; label (group 2) is the relationship. Equivalent to the forward
+# "người yêu của tôi là Quý". The runtime saves it under the same partner-name storage.
+_RE_REVERSE_PARTNER = re.compile(
+    r'^([^\s.!?,]+)\s+là\s+(bạn\s+gái|bạn\s+trai|người\s+yêu)\s+'
+    r'(?:của\s+)?(?:tôi|mình)\s*[.!?]*\s*$',
+    re.IGNORECASE,
+)
 # P0-7F-FIX4 Part C: friend relation write — "bạn (của) tôi tên là meo". The bare label
 # "bạn" (friend) is distinct from "bạn gái/trai" (partner) handled by _RE_RELATIONSHIP, and
 # from "bạn" meaning the assistant. Requires an explicit "tôi/mình" possessor + "tên là".
 _RE_FRIEND_NAME = re.compile(
-    r'^bạn\s+(?:của\s+)?(?:tôi|mình)\s+tên\s+là\s+([^\s.!?,]+)\s*[.!?]*\s*$',
+    r'^bạn(?:\s+thân)?\s+(?:của\s+)?(?:tôi|mình)\s+tên\s+là\s+([^\s.!?,]+)\s*[.!?]*\s*$',
     re.IGNORECASE,
 )
 # P0-7F-FIX4 Part A: affection relation phrase — "tôi có tình cảm/cảm tình với X",
@@ -489,6 +497,27 @@ def classify_profile_semantic_intent(text: str) -> SemanticProfileIntent | None:
                 value=value, sensitivity="person_affinity", write_policy="auto_safe",
             )
 
+    # P0-7G-FIX3 A4: reverse partner assertion ("Quý là người yêu của tôi") — mirror of the
+    # forward partner-name write. Subject must be a person-affinity name, not a self word.
+    m = _RE_REVERSE_PARTNER.match(stripped)
+    if m:
+        subj = _clean_value(m.group(1))
+        label = _RELATION_LABEL_NORM.get(
+            re.sub(r"\s+", " ", m.group(2).strip().lower()), m.group(2).strip().lower()
+        )
+        subj_low = subj.lower()
+        if (
+            subj
+            and subj_low not in _SELF_WORD_SET
+            and subj_low not in _RELATION_PREFIX_WORDS
+            and _is_person_affinity_value(subj)
+            and not _is_unsafe_or_sensitive_auto_value(subj)
+        ):
+            return SemanticProfileIntent(
+                kind="profile_write", category="relationship.partner_name",
+                value=subj, relation_label=label, write_policy="auto_safe",
+            )
+
     # Relationship partner-name ("bạn gái của tôi là Quý", "... tên là Quý").
     m = _RE_RELATIONSHIP.match(stripped)
     if m:
@@ -580,6 +609,15 @@ def classify_profile_semantic_intent(text: str) -> SemanticProfileIntent | None:
         rest = _clean_value(m.group(1))
         low = rest.lower()
         if not rest:
+            return None
+        # P0-7G-FIX3 A1: "tôi muốn đổi tên thành X" is a self-name update, not a desire —
+        # defer to the dedicated name-update path instead of a near-miss clarification.
+        if (
+            low.startswith("đổi tên")
+            or low.startswith("thay đổi tên")
+            or low.startswith("đổi lại tên")
+            or low.startswith("đặt lại tên")
+        ):
             return None
         if _is_unsafe_or_sensitive_auto_value(rest):
             return SemanticProfileIntent(

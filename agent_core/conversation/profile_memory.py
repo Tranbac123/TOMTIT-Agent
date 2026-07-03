@@ -109,6 +109,8 @@ class ProfileQuery:
         "self_pet_yesno",
         # P0-7G
         "reverse_entity", "named_affection_yesno",
+        # P0-7G-FIX3
+        "self_dislike",
     ]
     value: str | None = None          # for inverse_value: the name to look up
     relation_label: str | None = None  # for relation_name / relation_existence
@@ -336,6 +338,18 @@ _RE_NAME_UPDATE_CMD = re.compile(
     r'(?:của\s+)?(?:tôi|mình)\s+(?:thành|là|sang)\s+(.+)$',
     re.IGNORECASE | re.DOTALL,
 )
+# P0-7G-FIX3 A1: "tên mới của tôi là Bắc Trần" — explicit new-name declaration.
+_RE_NAME_NEW_IS = re.compile(
+    r'^tên\s+mới\s+(?:của\s+)?(?:tôi|mình)\s+(?:là|:)\s+(.+)$',
+    re.IGNORECASE | re.DOTALL,
+)
+# P0-7G-FIX3 A1: "tôi muốn đổi tên thành Bắc Trần" — bounded name-change desire treated as
+# an explicit update (only this "đổi/đặt lại tên" phrasing; general "muốn" stays a desire).
+_RE_NAME_WANT_CHANGE = re.compile(
+    r'^(?:tôi|mình)\s+muốn\s+(?:đổi|thay\s+đổi|đổi\s+lại|đặt\s+lại)\s+tên\s+'
+    r'(?:(?:của\s+)?(?:tôi|mình)\s+)?(?:thành|là|sang)\s+(.+)$',
+    re.IGNORECASE | re.DOTALL,
+)
 # P0-7G: full-name self assertion — "tôi là Bắc Trần" (multi-word). Used ONLY for name
 # UPDATE when a name already exists; a full-name phrase (all tokens name-like, no role
 # keyword) is treated as a name correction rather than an occupation.
@@ -515,6 +529,15 @@ _RE_PREFERENCE_Q = re.compile(
     r'(?:tôi|mình)\s+thích\s+gì'
     r'|sở\s+thích\s+(?:của\s+)?(?:tôi|mình)\s+là\s+gì'
     r'|(?:tôi|mình)\s+quan\s+tâm\s+đến\s+gì'
+    r')\s*[?？]?\s*$',
+    re.IGNORECASE,
+)
+# P0-7G-FIX3 A3: negative-preference query — "tôi không thích gì?", "tôi ghét gì?".
+# Distinct from the positive preference query (no "không"/"ghét" there); lists dislikes.
+_RE_NEGATIVE_PREF_Q = re.compile(
+    r'^(?:'
+    r'(?:tôi|mình)\s+không\s+thích\s+(?:cái\s+|thứ\s+|những\s+)?gì'
+    r'|(?:tôi|mình)\s+ghét\s+(?:cái\s+|thứ\s+|những\s+)?gì'
     r')\s*[?？]?\s*$',
     re.IGNORECASE,
 )
@@ -811,15 +834,18 @@ def detect_self_name_update(text: str) -> str | None:
     "tôi là X" full-name form — that is decided in the runtime, which knows whether a name
     already exists (a first-time "tôi là X" is a fresh save, not an update).
     """
-    m = _RE_NAME_UPDATE_CMD.match(text.strip())
-    if m is None:
-        return None
-    value = _clean_query_value(m.group(1))
-    if not value or not _is_self_name_phrase(value):
-        return None
-    if _is_unsafe_or_sensitive_auto_value(value):
-        return None
-    return value
+    stripped = text.strip()
+    for pat in (_RE_NAME_UPDATE_CMD, _RE_NAME_NEW_IS, _RE_NAME_WANT_CHANGE):
+        m = pat.match(stripped)
+        if m is None:
+            continue
+        value = _clean_query_value(m.group(1))
+        if not value or not _is_self_name_phrase(value):
+            return None
+        if _is_unsafe_or_sensitive_auto_value(value):
+            return None
+        return value
+    return None
 
 
 def detect_self_name_phrase_update(text: str) -> str | None:
@@ -841,6 +867,22 @@ def detect_self_name_phrase_update(text: str) -> str | None:
 
 def _clean_query_value(raw: str) -> str:
     return re.sub(r"\s+", " ", raw.strip().rstrip(".!?？ ")).strip()
+
+
+def looks_like_proper_full_name(phrase: str) -> bool:
+    """True if phrase is a multi-word Title-Case person name ("Bắc Trần").
+
+    P0-7G-FIX3 A2: used to accept a first-time multi-word "tôi là <full name>" as a name
+    save while rejecting lowercase common-word phrases ("trai làng", "con trai") that pass
+    the looser single-token name check. Proper Vietnamese names are conventionally
+    capitalized, so Title Case is a deterministic disambiguator for the first-time case.
+    """
+    tokens = phrase.split()
+    if len(tokens) < 2:
+        return False
+    if not _is_self_name_phrase(phrase):
+        return False
+    return all(tok[:1].isupper() for tok in tokens)
 
 
 # ---------------------------------------------------------------------------
@@ -936,6 +978,11 @@ def detect_profile_query(text: str) -> ProfileQuery | None:
     # 7b. P0-7F-FIX2: drink/food preference query ("tôi thích uống gì?")
     if _RE_DRINK_PREF_Q.match(stripped):
         return ProfileQuery(kind="self_drink_preference")
+
+    # 7b'. P0-7G-FIX3: negative-preference query ("tôi không thích gì?") — before the
+    #      positive preference query so "không thích gì" is never read as "thích gì".
+    if _RE_NEGATIVE_PREF_Q.match(stripped):
+        return ProfileQuery(kind="self_dislike")
 
     # 7c. P0-7D: preference query
     if _RE_PREFERENCE_Q.match(stripped):
@@ -1048,8 +1095,10 @@ def _match_auto_pattern(stripped: str) -> tuple[str, str] | None:
         tokens = value.split()
         if (
             _is_valid_auto_value_shape(value)
-            and len(tokens) >= 2              # multi-word: "AI engineer", not "Bắc"
             and _has_role_keyword(value)      # contains known role term
+            # Multi-word ("AI engineer") OR a single whole-word role term ("developer").
+            # A bare name ("Bắc") has no role keyword, so it never reaches here.
+            and (len(tokens) >= 2 or tokens[0].lower() in _ROLE_KEYWORD_TOKENS)
         ):
             return ("occupation", value)
 
@@ -2072,6 +2121,13 @@ def answer_profile_query(
                 name = rec.metadata.get("value", "")
                 return f"Bạn của bạn tên là {name}."
         return "Mình chưa có thông tin về tên bạn của bạn."
+
+    # --- P0-7G-FIX3 A3: self_dislike ("tôi không thích gì?") ---
+    elif query.kind == "self_dislike":
+        snap = collect_profile_snapshot(store)
+        if snap.dislikes:
+            return "Bạn không thích " + ", ".join(snap.dislikes) + "."
+        return "Mình chưa có thông tin về những thứ bạn không thích."
 
     # --- P0-7F-FIX4 Part D: self_pet ("nhà tôi nuôi con gì?") ---
     elif query.kind == "self_pet":

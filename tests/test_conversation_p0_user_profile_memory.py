@@ -2594,3 +2594,129 @@ def test_p0_7g_fix2_critical50_ai_query_unknown_no_write_wording():
     assert "đã lưu" not in ans
     assert "đã nhớ" not in ans
     assert "chưa" in ans or "không" in ans
+
+
+# ===========================================================================
+# CONV-P0 P0-7G-FIX3 — memory variant coverage (runtime)
+# ===========================================================================
+
+@pytest.mark.parametrize("update_phrase", [
+    "tên mới của tôi là Bắc Trần",
+    "tôi muốn đổi tên thành Bắc Trần",
+    "sửa tên tôi thành Bắc Trần",
+])
+def test_p0_7g_fix3_name_update_variants_supersede(update_phrase: str):
+    sr = _make_sr()
+    sr.handle_turn("tôi là Bắc")
+    ans = (sr.handle_turn(update_phrase).final_answer or "").lower()
+    assert "rule-based mvp" not in ans
+    assert "bắc trần" in ans
+    who = (sr.handle_turn("tôi là ai?").final_answer or "").lower()
+    assert "bắc trần" in who
+
+
+def test_p0_7g_fix3_developer_saves_as_occupation_not_name():
+    sr = _make_sr()
+    ans = (sr.handle_turn("tôi là developer").final_answer or "").lower()
+    assert "rule-based mvp" not in ans
+    assert "developer" in ans
+    work = (sr.handle_turn("tôi làm gì?").final_answer or "").lower()
+    assert "developer" in work
+    # Must not have been stored as the user's name.
+    who = (sr.handle_turn("tôi là ai?").final_answer or "").lower()
+    assert "developer" not in who
+
+
+def test_p0_7g_fix3_full_name_first_time_saves_as_name():
+    sr = _make_sr()
+    ans = (sr.handle_turn("tôi là Bắc Trần").final_answer or "").lower()
+    assert "rule-based mvp" not in ans
+    assert "đã nhớ" in ans and "bắc trần" in ans
+    who = (sr.handle_turn("tôi là ai?").final_answer or "").lower()
+    assert "bắc trần" in who
+
+
+@pytest.mark.parametrize("occupation", ["tôi là AI engineer", "tôi là kỹ sư phần mềm"])
+def test_p0_7g_fix3_multiword_occupation_preserved(occupation: str):
+    sr = _make_sr()
+    ans = (sr.handle_turn(occupation).final_answer or "").lower()
+    assert "công việc" in ans or "lĩnh vực" in ans
+    who = (sr.handle_turn("tôi là ai?").final_answer or "").lower()
+    # Occupation must not become the self-name.
+    assert "engineer" not in who and "kỹ sư" not in who
+
+
+def test_p0_7g_fix3_single_name_still_saves_as_name():
+    sr = _make_sr()
+    ans = (sr.handle_turn("tôi là Bắc").final_answer or "").lower()
+    assert "đã nhớ" in ans and "bắc" in ans
+    who = (sr.handle_turn("tôi là ai?").final_answer or "").lower()
+    assert "bắc" in who
+
+
+def test_p0_7g_fix3_lowercase_common_phrase_not_saved_as_name():
+    # "tôi là trai làng" is not a proper name — must not be saved as a name.
+    sr = _make_sr()
+    ans = (sr.handle_turn("tôi là trai làng").final_answer or "").lower()
+    assert "đã nhớ tên bạn là trai làng" not in ans
+
+
+def test_p0_7g_fix3_negative_preference_query_lists_dislikes():
+    sr = _make_sr()
+    sr.handle_turn("tôi không thích ăn cá")
+    sr.handle_turn("tôi không thích chơi game")
+    ans = (sr.handle_turn("tôi không thích gì?").final_answer or "").lower()
+    assert "rule-based mvp" not in ans
+    assert "không thích" in ans
+    assert "ăn cá" in ans or "chơi game" in ans
+
+
+def test_p0_7g_fix3_negative_preference_query_unknown_no_write_wording():
+    sr = _make_sr()
+    ans = (sr.handle_turn("tôi không thích gì?").final_answer or "").lower()
+    assert "rule-based mvp" not in ans
+    assert "đã lưu" not in ans and "đã nhớ" not in ans
+    assert "chưa" in ans or "không" in ans
+
+
+@pytest.mark.parametrize("assertion", [
+    "Quý là người yêu của tôi",
+    "Quý là bạn gái của tôi",
+    "Quý là bạn trai của tôi",
+])
+def test_p0_7g_fix3_reverse_partner_saves_and_recalls(assertion: str):
+    sr = _make_sr()
+    ans = (sr.handle_turn(assertion).final_answer or "").lower()
+    assert "rule-based mvp" not in ans
+    assert "quý" in ans
+    rel = (sr.handle_turn("người yêu của tôi là ai?").final_answer or "").lower()
+    assert "quý" in rel
+    ent = (sr.handle_turn("Quý là ai?").final_answer or "").lower()
+    assert "quý" in ent
+
+
+def test_p0_7g_fix3_friend_first_time_saves():
+    sr = _make_sr()
+    ans = (sr.handle_turn("bạn của tôi tên là Meo").final_answer or "").lower()
+    assert "đã nhớ" in ans and "meo" in ans
+    follow = (sr.handle_turn("bạn của tôi tên là gì?").final_answer or "").lower()
+    assert "meo" in follow
+
+
+def test_p0_7g_fix3_close_friend_variant_saves():
+    sr = _make_sr()
+    ans = (sr.handle_turn("bạn thân của tôi tên là Nam").final_answer or "").lower()
+    assert "rule-based mvp" not in ans
+    assert "đã nhớ" in ans and "nam" in ans
+    follow = (sr.handle_turn("bạn tôi tên gì?").final_answer or "").lower()
+    assert "nam" in follow
+
+
+def test_p0_7g_fix3_friend_duplicate_is_safe():
+    sr = _make_sr()
+    sr.handle_turn("bạn tôi tên là Meo")
+    ans = (sr.handle_turn("bạn của tôi tên là Meo").final_answer or "").lower()
+    assert "rule-based mvp" not in ans
+    assert "meo" in ans
+    follow = (sr.handle_turn("bạn của tôi tên là gì?").final_answer or "").lower()
+    assert "meo" in follow

@@ -46,6 +46,7 @@ from agent_core.conversation.profile_memory import (
     detect_self_name_phrase_update,
     detect_self_name_update,
     find_existing_profile_value,
+    looks_like_proper_full_name,
     save_affection_fact,
     save_auto_profile_fact,
     save_confirmed_profile_fact,
@@ -668,6 +669,15 @@ class SessionRuntime:
                 phrase is not None
                 and current is not None
                 and self._norm(current) != self._norm(phrase)
+            ):
+                new_name = phrase
+            # P0-7G-FIX3 A2: first-time MULTI-WORD Title-Case full name ("tôi là Bắc Trần")
+            # — a fresh save. Single-word "tôi là Bắc" stays with the priority-5 name path;
+            # lowercase common-word phrases ("trai làng") are excluded by the Title-Case check.
+            elif (
+                phrase is not None
+                and current is None
+                and looks_like_proper_full_name(phrase)
             ):
                 new_name = phrase
             else:

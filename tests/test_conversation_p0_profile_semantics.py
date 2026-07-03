@@ -590,3 +590,45 @@ def test_p0_7g_self_affection_not_external():
     c = _c("tôi thích Quý")
     assert c is not None
     assert c.category == "relationship.affection_candidate"
+
+
+# ---------------------------------------------------------------------------
+# P0-7G-FIX3 — memory variant coverage (classification)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("text, subj, label", [
+    ("Quý là người yêu của tôi", "Quý", "người yêu"),
+    ("Quý là bạn gái của tôi", "Quý", "bạn gái"),
+    ("Quý là bạn trai của tôi", "Quý", "bạn trai"),
+])
+def test_p0_7g_fix3_reverse_partner_classified(text: str, subj: str, label: str):
+    c = _c(text)
+    assert c is not None
+    assert c.category == "relationship.partner_name"
+    assert c.value == subj
+    assert c.relation_label == label
+    assert c.write_policy == "auto_safe"
+
+
+@pytest.mark.parametrize("text, value", [
+    ("bạn của tôi tên là Meo", "Meo"),
+    ("bạn thân của tôi tên là Nam", "Nam"),
+])
+def test_p0_7g_fix3_friend_variants_classified(text: str, value: str):
+    c = _c(text)
+    assert c is not None
+    assert c.category == "relationship.partner_name"
+    assert c.relation_label == "bạn"
+    assert c.value == value
+    assert c.write_policy == "auto_safe"
+
+
+def test_p0_7g_fix3_name_change_want_defers_to_name_update():
+    # "tôi muốn đổi tên thành X" must NOT be a near-miss desire — the semantic layer
+    # defers (returns None) so the dedicated self-name update path owns it.
+    assert _c("tôi muốn đổi tên thành Bắc Trần") is None
+
+
+def test_p0_7g_fix3_reverse_partner_self_word_rejected():
+    # A self word as the subject must not be saved as a partner.
+    assert _c("tôi là người yêu của tôi") is None
