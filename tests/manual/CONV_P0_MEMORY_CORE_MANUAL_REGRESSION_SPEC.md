@@ -1,9 +1,9 @@
 # CONV-P0 Memory-Core Manual + Runtime Regression Spec
 
-**Status:** Living regression spec  
-**Owner:** TOMTIT-Agent  
-**Primary use:** Reusable manual + runtime regression file for CONV-P0 memory-core phases  
-**Recommended repo path:** `tests/manual/CONV_P0_MEMORY_CORE_MANUAL_REGRESSION_SPEC.md`  
+**Status:** Living regression spec
+**Owner:** TOMTIT-Agent
+**Primary use:** Reusable manual + runtime regression file for CONV-P0 memory-core phases
+**Recommended repo path:** `tests/manual/CONV_P0_MEMORY_CORE_MANUAL_REGRESSION_SPEC.md`
 **Version:** v1.1 — baseline-ready after minor review edits
 
 ---
@@ -1478,8 +1478,8 @@ If Web not run:
 WEB_NOT_RUN
 ```
 
-Backend merge readiness can still PASS with WEB_NOT_RUN.  
-If Gate target == user-facing demo readiness, WEB_NOT_RUN blocks READY_FOR_USER_DEMO.  
+Backend merge readiness can still PASS with WEB_NOT_RUN.
+If Gate target == user-facing demo readiness, WEB_NOT_RUN blocks READY_FOR_USER_DEMO.
 User-facing demo readiness should be `WEB_NOT_RUN` or `NOT_READY_FOR_USER_DEMO` unless Web UI manual regression passed.
 
 ---
@@ -1688,7 +1688,10 @@ tôi làm gì? => nông dân
 
 #### A6 — Correction after wrong interpretation
 
-Sentence: `không tôi làm nông là nông dân chứ không phải tên tôi là nông dân`
+The correction phrases accept any role/occupation phrase (not just known keywords) as long
+as the `không phải tên` guard is present in the sentence.
+
+Sentence (exact form): `không tôi làm nông là nông dân chứ không phải tên tôi là nông dân`
 
 ```
 tôi là bb
@@ -1698,8 +1701,18 @@ tôi là ai?    => bb
 tôi làm gì?   => nông dân
 ```
 
-Pattern: `chứ không phải tên` signals a name/occupation correction.
-Occupation is saved; name is **not** changed.
+Alternative correction form (left-side, must extract VALUE not `của tôi`):
+
+```
+tôi là bb
+nông dân là nghề của tôi chứ không phải tên
+=> Mình hiểu: 'nông dân' là nghề/công việc của bạn, không phải tên. Mình đã cập nhật lại.
+tôi là ai?    => bb
+tôi làm gì?   => nông dân    ← occupation must be nông dân, not của tôi
+```
+
+Pattern: `chứ không phải tên` or `không phải tên` signals a name/occupation correction.
+Occupation is the left-side VALUE; name is **not** changed.
 
 #### A7 — "tôi ghét X" as negative preference
 
@@ -1732,6 +1745,7 @@ bạn gái của Nam là ai?
 ```text
 - FAIL if "tôi là nông dân" saves as name (A5 regression)
 - FAIL if "chứ không phải tên" correction not saved as occupation (A6 blocked)
+- FAIL if "nông dân là nghề của tôi chứ không phải tên" saves occupation as "của tôi" (A6 alt extraction bug)
 - FAIL if "bạn gái của Bắc là ai?" where Bắc = saved name does not return saved bạn gái (B blocked)
 - FAIL if "bạn gái của Nam là ai?" where Nam ≠ saved name returns the user's bạn gái (B guard broken)
 - FAIL if "tôi ghét hút thuốc" falls to generic fallback (A7 regression)

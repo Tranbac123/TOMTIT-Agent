@@ -515,13 +515,21 @@ _RE_RELATION_REMOVAL_CMD = re.compile(
     re.IGNORECASE,
 )
 
+# P0-7H-FIX1 A6: left-side form — "VALUE là nghề/công việc/nghề nghiệp của tôi [chứ/không phải tên]"
+# Must run before the generic CHU pattern to avoid capturing "của tôi" as the occupation.
+_RE_OCC_CORRECTION_LEFT = re.compile(
+    r'^(\S+(?:\s+\S+)?)\s+là\s+(?:nghề|công\s+việc|nghề\s+nghiệp)\s+(?:của\s+)?(?:tôi|mình)',
+    re.IGNORECASE,
+)
+
 # P0-7H-FIX1 A6: correction of occupation/name confusion — "là X chứ không phải tên"
+# Used as generic fallback when the left-side form does not match.
 _RE_OCC_CORRECTION_CHU = re.compile(
     r'(?:là\s+)?(\S+(?:\s+\S+)?)\s+chứ\s+không\s+phải\s+(?:là\s+)?tên',
     re.IGNORECASE,
 )
 
-# P0-7H-FIX1 A6: "X là nghề/công việc của tôi"
+# P0-7H-FIX1 A6: standalone form — "X là nghề/công việc của tôi" (no trailing correction guard)
 _RE_OCC_CORRECTION_NGHE = re.compile(
     r'^(\S+(?:\s+\S+)?)\s+là\s+(?:nghề|công\s+việc)\s+(?:của\s+)?(?:tôi|mình)\s*[.!]*\s*$',
     re.IGNORECASE,
@@ -1815,15 +1823,27 @@ def build_relation_removal_not_found() -> str:
 def detect_occupation_name_correction(text: str) -> str | None:
     """Return the corrected occupation value if text corrects name/occupation confusion.
 
-    Handles "... là X chứ không phải tên ..." and "X là nghề/công việc của tôi".
+    Handles:
+    - "VALUE là nghề/công việc của tôi chứ không phải tên" (left-side form, checked first)
+    - "... là X chứ không phải tên ..." (generic CHU form, fallback)
+    - "VALUE là nghề/công việc của tôi" (standalone form)
     """
     stripped = text.strip()
     if re.search(r'không\s+phải\s+(?:là\s+)?tên', stripped, re.IGNORECASE):
+        # Left-side form captures VALUE before "là nghề/công việc của tôi".
+        # Must run before CHU to avoid capturing "của tôi" as the occupation.
+        m0 = _RE_OCC_CORRECTION_LEFT.match(stripped)
+        if m0:
+            value = re.sub(r"\s+", " ", m0.group(1).strip().rstrip(".!?,")).strip()
+            if value and _is_valid_auto_value(value):
+                return value
+        # Generic CHU fallback: "là X chứ không phải tên"
         m = _RE_OCC_CORRECTION_CHU.search(stripped)
         if m:
             value = re.sub(r"\s+", " ", m.group(1).strip().rstrip(".!?,")).strip()
             if value and _is_valid_auto_value(value):
                 return value
+    # Standalone form: "VALUE là nghề/công việc của tôi" (no correction guard)
     m2 = _RE_OCC_CORRECTION_NGHE.match(stripped)
     if m2:
         value = re.sub(r"\s+", " ", m2.group(1).strip().rstrip(".!?,")).strip()

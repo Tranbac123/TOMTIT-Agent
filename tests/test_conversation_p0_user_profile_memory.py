@@ -3240,3 +3240,52 @@ def test_p0_7h_fix1_manual_spec_contains_p0_7h_addendum():
     ]
     missing = [tok for tok in required if tok not in text]
     assert not missing, f"Manual spec missing tokens: {missing}"
+
+
+# ---------------------------------------------------------------------------
+# P0-7H-FIX2 tests
+# ---------------------------------------------------------------------------
+
+def test_p0_7h_fix2_alternative_correction_extracts_left_side_occupation():
+    # A6 alt: "nông dân là nghề/công việc của tôi chứ không phải tên"
+    # must extract "nông dân", not "của tôi".
+    sr = _make_sr()
+    sr.handle_turn("tôi là bb")
+    for phrase in [
+        "nông dân là nghề của tôi chứ không phải tên",
+        "nông dân là công việc của tôi chứ không phải tên",
+        "nông dân là nghề nghiệp của tôi, không phải tên tôi",
+    ]:
+        sr2 = _make_sr()
+        sr2.handle_turn("tôi là bb")
+        ans = (sr2.handle_turn(phrase).final_answer or "").lower()
+        assert "nông dân" in ans, f"alt correction ack missing nông dân ({phrase}): {ans}"
+        assert "của tôi" not in ans or "không phải" in ans, f"alt correction acked 'của tôi' ({phrase}): {ans}"
+        occ = (sr2.handle_turn("tôi làm gì?").final_answer or "").lower()
+        assert "nông dân" in occ, f"alt correction occupation wrong ({phrase}): {occ}"
+        assert "của tôi" not in occ, f"alt correction saved 'của tôi' as occupation ({phrase}): {occ}"
+
+
+def test_p0_7h_fix2_alternative_correction_does_not_save_cua_toi():
+    # Guard: extracted occupation must never be "của tôi".
+    from agent_core.conversation.profile_memory import detect_occupation_name_correction
+    bad_values = ["của tôi", "của mình", "tên"]
+    for phrase in [
+        "nông dân là nghề của tôi chứ không phải tên",
+        "nông dân là công việc của tôi chứ không phải tên",
+        "nông dân là nghề nghiệp của tôi, không phải tên tôi",
+    ]:
+        value = detect_occupation_name_correction(phrase)
+        assert value not in bad_values, f"bad occupation value {repr(value)} from {repr(phrase)}"
+        assert value == "nông dân", f"expected 'nông dân', got {repr(value)} from {repr(phrase)}"
+
+
+def test_p0_7h_fix2_manual_spec_has_role_occupation_phrase_and_no_trailing_whitespace():
+    import pathlib
+    spec_path = pathlib.Path(__file__).parent / "manual" / "CONV_P0_MEMORY_CORE_MANUAL_REGRESSION_SPEC.md"
+    text = spec_path.read_text(encoding="utf-8")
+    assert "role/occupation phrase" in text.lower(), "manual spec missing 'role/occupation phrase' token"
+    assert "nông dân là nghề của tôi chứ không phải tên" in text.lower(), \
+        "manual spec missing alternative correction case"
+    trailing = [i + 1 for i, line in enumerate(text.splitlines()) if line.rstrip() != line]
+    assert not trailing, f"manual spec has trailing whitespace at lines: {trailing[:20]}"
