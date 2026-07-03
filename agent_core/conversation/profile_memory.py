@@ -606,8 +606,10 @@ _RE_AFFECTION_ALIAS_Q = re.compile(
 # "... có thích tôi/mình không?" form), so the object here is never a bare self-word.
 # P0-7G-FIX4: subject uses .+? (non-greedy) to capture multi-word names ("Bắc Trần");
 # single-word names still captured correctly because .+? stops at the first " có ".
+# P0-7G-FIX4A: object also uses .+? so "Quý có thích Bắc Trần không?" is captured;
+# non-greedy stops at the first " không/ko/..." terminal.
 _RE_NAMED_AFFECTION_YESNO_Q = re.compile(
-    r'^(.+?)\s+có\s+(?:thích|yêu|thương|quý)\s+(\S+)\s+'
+    r'^(.+?)\s+có\s+(?:thích|yêu|thương|quý)\s+(.+?)\s+'
     r'(?:không|ko|hông|hong|chưa)\s*[?？]?\s*$',
     re.IGNORECASE,
 )

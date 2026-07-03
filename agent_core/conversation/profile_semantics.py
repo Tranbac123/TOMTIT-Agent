@@ -309,8 +309,10 @@ _RE_NEGATIVE_DESIRE = re.compile(
 # P0-7G: user-reported external affection — "Quý thích tôi", "Quý thích Bắc". Subject
 # (group 1) is a non-self name; object (group 2) is decided against the saved self-name in
 # the runtime (only saved when the object is the current user).
+# P0-7G-FIX4A: object uses \S+(?:\s+\S+)? (1–2 tokens) so "Bắc Trần" is captured;
+# the 1-token cap prevents over-matching long non-name phrases like "cho tôi về AI".
 _RE_EXTERNAL_AFFECTION = re.compile(
-    r'^(\S+)\s+(?:thích|yêu|thương|crush|quý\s+mến)\s+(\S+)\s*[.!]*\s*$',
+    r'^(\S+)\s+(?:thích|yêu|thương|crush|quý\s+mến)\s+(\S+(?:\s+\S+)?)\s*[.!]*\s*$',
     re.IGNORECASE,
 )
 _SELF_WORD_SET: frozenset[str] = frozenset({"tôi", "mình", "tao", "ta"})

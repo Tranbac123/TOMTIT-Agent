@@ -2850,3 +2850,86 @@ def test_p0_7g_fix4_no_memory_pollution():
     assert "đã nhớ" not in summary
     assert "bắc có thích quý không" not in summary
     assert "thích quý" not in summary
+
+
+# ===========================================================================
+# CONV-P0 P0-7G-FIX4A — full-name object alias in affection queries
+# ===========================================================================
+
+def test_p0_7g_fix4a_full_name_object_reverse_unknown():
+    # C1: reverse query with full-name as object — safe unknown when no external fact saved.
+    sr = _make_sr()
+    sr.handle_turn("tôi là Bắc Trần")
+    sr.handle_turn("tôi thích Quý")
+    ans = (sr.handle_turn("Quý có thích Bắc Trần không?").final_answer or "").lower()
+    assert "rule-based mvp" not in ans
+    assert "tôi chưa xử lý" not in ans
+    assert "chưa" in ans or "không" in ans or "biết" in ans
+
+
+def test_p0_7g_fix4a_full_name_object_external_via_toi():
+    # C2: external affection saved via "Quý thích tôi"; full-name reverse query returns yes.
+    sr = _make_sr()
+    sr.handle_turn("tôi là Bắc Trần")
+    ack = (sr.handle_turn("Quý thích tôi").final_answer or "").lower()
+    assert "đã nhớ" in ack
+    ans = (sr.handle_turn("Quý có thích Bắc Trần không?").final_answer or "").lower()
+    assert "rule-based mvp" not in ans
+    assert "tôi chưa xử lý" not in ans
+    assert "quý" in ans
+    assert "có" in ans or "thích" in ans
+
+
+def test_p0_7g_fix4a_full_name_object_external_via_name():
+    # C3: external affection saved via "Quý thích Bắc Trần"; full-name query returns yes.
+    sr = _make_sr()
+    sr.handle_turn("tôi là Bắc Trần")
+    ack = (sr.handle_turn("Quý thích Bắc Trần").final_answer or "").lower()
+    assert "rule-based mvp" not in ack
+    assert "đã nhớ" in ack
+    ans = (sr.handle_turn("Quý có thích Bắc Trần không?").final_answer or "").lower()
+    assert "rule-based mvp" not in ans
+    assert "quý" in ans
+    assert "có" in ans or "thích" in ans
+
+
+def test_p0_7g_fix4a_full_name_object_save_ack():
+    # C4: "Quý thích Bắc Trần" produces an acknowledgement, not generic fallback.
+    sr = _make_sr()
+    sr.handle_turn("tôi là Bắc Trần")
+    ack = (sr.handle_turn("Quý thích Bắc Trần").final_answer or "").lower()
+    assert "rule-based mvp" not in ack
+    assert "tôi chưa xử lý" not in ack
+    assert "nhớ" in ack or "quý" in ack
+
+
+def test_p0_7g_fix4a_full_name_object_reverse_not_inferred():
+    # C5: user liking Quý does not imply Quý likes "Bắc Trần" (reverse not inferred).
+    sr = _make_sr()
+    sr.handle_turn("tôi là Bắc Trần")
+    sr.handle_turn("tôi thích Quý")
+    ans = (sr.handle_turn("Quý có thích Bắc Trần không?").final_answer or "").lower()
+    assert "đã nhớ" not in ans
+    assert "đã lưu" not in ans
+    assert "chưa" in ans or "không" in ans or "biết" in ans
+
+
+def test_p0_7g_fix4a_single_name_regression():
+    # C6: single-name external affection still works after FIX4A changes.
+    sr = _make_sr()
+    sr.handle_turn("tôi là Bắc")
+    sr.handle_turn("Quý thích Bắc")
+    ans = (sr.handle_turn("Quý có thích Bắc không?").final_answer or "").lower()
+    assert "rule-based mvp" not in ans
+    assert "quý" in ans
+    assert "có" in ans or "thích" in ans
+
+
+def test_p0_7g_fix4a_no_pollution_full_name_query():
+    # C7: querying full-name reverse without prior save does not write to profile.
+    sr = _make_sr()
+    sr.handle_turn("tôi là Bắc Trần")
+    sr.handle_turn("Quý có thích Bắc Trần không?")
+    summary = (sr.handle_turn("bạn nhớ gì về tôi?").final_answer or "").lower()
+    assert "quý có thích" not in summary
+    assert "bắc trần" not in summary or "tên" in summary
