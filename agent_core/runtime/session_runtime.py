@@ -37,6 +37,7 @@ from agent_core.conversation.profile_memory import (
     build_person_affinity_response,
     build_profile_conflict_message,
     build_profile_fact_ack,
+    build_unrelated_external_affection_response,
     collect_profile_snapshot,
     detect_auto_profile_candidate,
     detect_blocked_auto_profile_value,
@@ -964,7 +965,12 @@ class SessionRuntime:
             or (current is not None and self._norm(obj) == self._norm(current))
         )
         if not obj_is_user:
-            return None
+            # P0-7G-FIX1: unrelated third-party affection ("Quý thích Nam") — narrow
+            # safe/no-save reply instead of the generic rule-based fallback.
+            return self._complete_conv(
+                state, "conv:unrelated_external_affection",
+                build_unrelated_external_affection_response(admirer, obj),
+            )
         if not save_external_affection_fact(
             admirer, self._store, state.session_id, original_text=user_message.strip()
         ):

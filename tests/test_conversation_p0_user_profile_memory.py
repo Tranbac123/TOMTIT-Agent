@@ -2464,3 +2464,60 @@ def test_p0_7g_preserves_p0_7f_behavior():
 
     sr.handle_turn("người yêu tôi là Quý")
     assert "quý" in (sr.handle_turn("bạn có nhớ người yêu của tôi là ai không?").final_answer or "").lower()
+
+
+# ===========================================================================
+# CONV-P0 P0-7G-FIX1 — unrelated third-party external affection (no-save, no fallback)
+# ===========================================================================
+
+def test_p0_7g_fix1_unrelated_external_affection_no_save_no_fallback():
+    sr = _make_sr()
+    sr.handle_turn("tôi là bắc")
+    ans = sr.handle_turn("Quý thích Nam").final_answer or ""
+    low = ans.lower()
+    assert "rule-based MVP" not in ans
+    assert "tôi chưa xử lý được yêu cầu này" not in low
+    assert "đã nhớ" not in low and "đã lưu" not in low
+    assert "quý" in low and "nam" in low
+    assert (
+        "không lưu" in low
+        or "không phải thông tin trực tiếp về bạn" in low
+        or "người khác" in low
+    )
+
+
+def test_p0_7g_fix1_unrelated_external_affection_not_in_summary():
+    sr = _make_sr()
+    sr.handle_turn("tôi là bắc")
+    sr.handle_turn("Quý thích Nam")
+    summary = (sr.handle_turn("bạn nhớ gì về tôi").final_answer or "").lower()
+    assert "quý thích nam" not in summary
+    # The unrelated third party must not have been stored as an external fact.
+    yn = (sr.handle_turn("Quý có thích Nam không?").final_answer or "").lower()
+    assert not ("có" in yn and "quý" in yn and "nam" in yn and "chưa" not in yn)
+
+
+@pytest.mark.parametrize("stmt", ["Nam thích Quý", "An thích Bình"])
+def test_p0_7g_fix1_unrelated_variants_no_save(stmt: str):
+    sr = _make_sr()
+    ans = sr.handle_turn(stmt).final_answer or ""
+    low = ans.lower()
+    assert "rule-based MVP" not in ans
+    assert "đã nhớ" not in low and "đã lưu" not in low
+
+
+def test_p0_7g_fix1_object_user_external_affection_still_saved():
+    # Regression guard: object == user still saves the reported external fact.
+    sr = _make_sr()
+    sr.handle_turn("tôi là bắc")
+    ack = (sr.handle_turn("Quý thích tôi").final_answer or "").lower()
+    assert "đã nhớ" in ack and "quý" in ack
+    yn = (sr.handle_turn("Quý có thích tôi không?").final_answer or "").lower()
+    assert "có" in yn and "quý" in yn
+
+    sr2 = _make_sr()
+    sr2.handle_turn("tôi là bắc")
+    ack2 = (sr2.handle_turn("Quý thích Bắc").final_answer or "").lower()
+    assert "đã nhớ" in ack2 and "quý" in ack2
+    yn2 = (sr2.handle_turn("Quý có thích tôi không?").final_answer or "").lower()
+    assert "có" in yn2 and "quý" in yn2

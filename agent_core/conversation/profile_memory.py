@@ -1330,6 +1330,16 @@ def build_external_affection_ack(admirer: str) -> str:
     )
 
 
+def build_unrelated_external_affection_response(subject: str, obj: str) -> str:
+    """Narrow safe/no-save reply for third-party affection between two other people
+    ("Quý thích Nam") — P0-7G-FIX1. Not saved, nothing inferred about the user; never a
+    generic fallback."""
+    return (
+        f"Mình hiểu bạn đang nói về việc {subject} thích {obj}, nhưng đây không phải thông "
+        "tin trực tiếp về bạn nên mình sẽ không lưu vào hồ sơ của bạn."
+    )
+
+
 def build_name_update_ack(old_name: str, new_name: str) -> str:
     """Ack after an explicit/implicit self-name update ("sửa tên tôi thành ...")."""
     if _norm_cmp(old_name) == _norm_cmp(new_name):
