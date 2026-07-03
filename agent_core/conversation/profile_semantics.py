@@ -286,6 +286,29 @@ _RE_NEGATION_NO_AFFECTION = re.compile(
     r'^(?:tôi|mình)\s+không\s+thích\s+ai(?:\s+cả)?\s*[.!?]*\s*$',
     re.IGNORECASE,
 )
+# P0-7G: durable negative preference — "tôi không thích ăn cá", "mình không thích chơi game".
+# Person target ("tôi không thích Quý") is excluded (handled as clarify), and the bare
+# "tôi không thích ai" is owned by _RE_NEGATION_NO_AFFECTION above.
+_RE_NEGATIVE_PREFERENCE = re.compile(
+    r'^(?:tôi|mình)\s+không\s+thích\s+(.+)$',
+    re.IGNORECASE | re.DOTALL,
+)
+# P0-7G: short-term negative desire — "tôi không muốn đi học". Clarify, never saved.
+_RE_NEGATIVE_DESIRE = re.compile(
+    r'^(?:tôi|mình)\s+không\s+muốn\s+(.+)$',
+    re.IGNORECASE | re.DOTALL,
+)
+# P0-7G: user-reported external affection — "Quý thích tôi", "Quý thích Bắc". Subject
+# (group 1) is a non-self name; object (group 2) is decided against the saved self-name in
+# the runtime (only saved when the object is the current user).
+_RE_EXTERNAL_AFFECTION = re.compile(
+    r'^(\S+)\s+(?:thích|yêu|thương|crush|quý\s+mến)\s+(\S+)\s*[.!]*\s*$',
+    re.IGNORECASE,
+)
+_SELF_WORD_SET: frozenset[str] = frozenset({"tôi", "mình", "tao", "ta"})
+_RELATION_PREFIX_WORDS: frozenset[str] = frozenset({
+    "bạn", "người", "vợ", "chồng", "anh", "chị", "em", "bố", "mẹ", "ba", "má",
+})
 
 _RELATION_LABEL_NORM = {
     "bạn gái": "bạn gái",
@@ -363,6 +386,53 @@ def classify_profile_semantic_intent(text: str) -> SemanticProfileIntent | None:
             sensitivity="safe", write_policy="clarify",
         )
 
+    # P0-7G: short-term negative desire ("tôi không muốn đi học") — clarify, never saved.
+    m = _RE_NEGATIVE_DESIRE.match(stripped)
+    if m:
+        value = _clean_value(m.group(1))
+        if value:
+            return SemanticProfileIntent(
+                kind="profile_write", category="negative_desire",
+                value=value, write_policy="clarify",
+            )
+
+    # P0-7G: durable negative preference ("tôi không thích ăn cá"). A person target
+    # ("tôi không thích Quý") is routed to clarify instead of a dislike write.
+    m = _RE_NEGATIVE_PREFERENCE.match(stripped)
+    if m:
+        value = _clean_value(m.group(1))
+        if value and not _is_interrogative_value(value):
+            if _is_person_affinity_value(value):
+                return SemanticProfileIntent(
+                    kind="profile_write", category="negation_no_affection", value=None,
+                    sensitivity="safe", write_policy="clarify",
+                )
+            if not _is_unsafe_or_sensitive_auto_value(value):
+                return SemanticProfileIntent(
+                    kind="profile_write", category="negative_preference",
+                    value=value, write_policy="auto_safe",
+                )
+
+    # P0-7G: user-reported external affection ("Quý thích tôi"). Subject must not be a
+    # self word or a relation prefix; the runtime decides (against the saved self-name)
+    # whether the object is the current user before saving.
+    m = _RE_EXTERNAL_AFFECTION.match(stripped)
+    if m:
+        subj = _clean_value(m.group(1))
+        obj = _clean_value(m.group(2))
+        subj_low = subj.lower()
+        if (
+            subj
+            and obj
+            and subj_low not in _SELF_WORD_SET
+            and subj_low not in _RELATION_PREFIX_WORDS
+            and _is_person_affinity_value(subj)
+        ):
+            return SemanticProfileIntent(
+                kind="profile_write", category="external_affection",
+                value=subj, relation_label=obj, write_policy="auto_safe",
+            )
+
     # Affection explanation ("tôi thích quý có nghĩa là ...") — clarify, never save as
     # a hobby/preference (P0-7F-FIX3 Part C). Person target captured for the response.
     m = _RE_AFFECTION_EXPLANATION.match(stripped)
@@ -374,15 +444,16 @@ def classify_profile_semantic_intent(text: str) -> SemanticProfileIntent | None:
                 value=value, sensitivity="person_affinity", write_policy="clarify",
             )
 
-    # Affection relation phrase ("tôi có tình cảm với quý", "tôi crush quý") — clarify,
-    # never save as a hobby (P0-7F-FIX4 Part A). Person target captured for the response.
+    # Affection relation phrase ("tôi có tình cảm với quý", "tôi crush quý"). P0-7G now
+    # SAVES this as affection/person memory (was clarify in P0-7F-FIX4). Person target
+    # captured; sensitivity stays person_affinity so it is never an ordinary hobby.
     m = _RE_AFFECTION_RELATION.match(stripped)
     if m:
         value = _clean_value(m.group(1))
         if value:
             return SemanticProfileIntent(
                 kind="profile_write", category="affection_relation",
-                value=value, sensitivity="person_affinity", write_policy="clarify",
+                value=value, sensitivity="person_affinity", write_policy="auto_safe",
             )
 
     # One-sided affection phrase ("tôi thích đơn phương Quý", "tôi đơn phương Quý") —
@@ -408,14 +479,14 @@ def classify_profile_semantic_intent(text: str) -> SemanticProfileIntent | None:
                 value=value, relation_label="bạn", write_policy="auto_safe",
             )
 
-    # Person-affection phrase: "người tôi thích tên là Quý".
+    # Person-affection phrase: "người tôi thích tên là Quý". P0-7G saves it as affection.
     m = _RE_PERSON_AFFECTION_PHRASE.match(stripped)
     if m:
         value = _clean_value(m.group(1))
         if value:
             return SemanticProfileIntent(
                 kind="profile_write", category="relationship.affection_candidate",
-                value=value, sensitivity="person_affinity", write_policy="clarify",
+                value=value, sensitivity="person_affinity", write_policy="auto_safe",
             )
 
     # Relationship partner-name ("bạn gái của tôi là Quý", "... tên là Quý").
@@ -456,9 +527,10 @@ def classify_profile_semantic_intent(text: str) -> SemanticProfileIntent | None:
                 sensitivity="unsafe", write_policy="block",
             )
         if _is_person_affinity_value(value):
+            # P0-7G: "tôi thích Quý" now SAVES affection/person memory (was clarify).
             return SemanticProfileIntent(
                 kind="profile_write", category="relationship.affection_candidate",
-                value=value, sensitivity="person_affinity", write_policy="clarify",
+                value=value, sensitivity="person_affinity", write_policy="auto_safe",
             )
         kind_pref = _classify_preference_kind(value)
         return SemanticProfileIntent(
@@ -467,13 +539,14 @@ def classify_profile_semantic_intent(text: str) -> SemanticProfileIntent | None:
         )
 
     # Bare affection verbs ("tôi yêu Quý", "tôi nhớ Quý", "tôi crush X") — person only.
+    # P0-7G saves this as affection/person memory (was clarify).
     m = _RE_AFFECTION.match(stripped)
     if m:
         value = _clean_value(m.group(1))
         if value and _is_person_affinity_value(value):
             return SemanticProfileIntent(
                 kind="profile_write", category="relationship.affection_candidate",
-                value=value, sensitivity="person_affinity", write_policy="clarify",
+                value=value, sensitivity="person_affinity", write_policy="auto_safe",
             )
 
     # Skill / ability.

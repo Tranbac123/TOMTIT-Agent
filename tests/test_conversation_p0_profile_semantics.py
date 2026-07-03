@@ -56,18 +56,21 @@ def test_preference_professional():
 
 
 def test_person_affinity_not_saved_as_preference():
+    # P0-7G: person affection is now SAVED as affection/person memory (was clarify),
+    # but still carries person_affinity sensitivity so it is never an ordinary preference.
     c = _c("tôi thích Quý")
     assert c is not None
     assert c.category == "relationship.affection_candidate"
     assert c.sensitivity == "person_affinity"
-    assert c.write_policy == "clarify"
+    assert c.write_policy == "auto_safe"
 
 
 def test_bare_affection_verb_is_person_affinity():
+    # P0-7G: "tôi yêu Quý" now saves affection/person memory.
     c = _c("tôi yêu Quý")
     assert c is not None
     assert c.sensitivity == "person_affinity"
-    assert c.write_policy == "clarify"
+    assert c.write_policy == "auto_safe"
 
 
 def test_preference_unsafe_is_blocked():
@@ -264,12 +267,12 @@ def test_toi_thich_build_ai_still_saves():
 # ---------------------------------------------------------------------------
 
 def test_lowercase_viet_name_is_person_affinity():
-    """'quý' (lowercase, 3-char Vietnamese word) → person_affinity, not saved."""
+    """'quý' (lowercase, 3-char Vietnamese word) → person_affinity affection memory (P0-7G)."""
     c = _c("tôi thích quý")
     assert c is not None
     assert c.category == "relationship.affection_candidate"
     assert c.sensitivity == "person_affinity"
-    assert c.write_policy == "clarify"
+    assert c.write_policy == "auto_safe"
 
 
 def test_person_affinity_two_char_lowercase_excluded():
@@ -305,11 +308,12 @@ def test_toi_khong_thich_ai_ca_is_negation():
 # ---------------------------------------------------------------------------
 
 def test_nguoi_toi_thich_ten_la_quy():
+    # P0-7G: "người tôi thích tên là Quý" now saves affection/person memory.
     c = _c("người tôi thích tên là Quý")
     assert c is not None
     assert c.category == "relationship.affection_candidate"
     assert c.sensitivity == "person_affinity"
-    assert c.write_policy == "clarify"
+    assert c.write_policy == "auto_safe"
     assert c.value == "Quý"
 
 
@@ -411,13 +415,14 @@ def test_affection_explanation_is_clarify_not_write(text: str, value: str):
     ("tôi crush quý", "quý"),
     ("mình crush quý", "quý"),
 ])
-def test_affection_relation_is_clarify_not_write(text: str, value: str):
+def test_affection_relation_is_saved_as_affection(text: str, value: str):
+    # P0-7G: "có tình cảm với X" / "crush X" now saves affection/person memory (was clarify).
     c = _c(text)
     assert c is not None
     assert c.category == "affection_relation"
     assert c.value == value
     assert c.sensitivity == "person_affinity"
-    assert c.write_policy == "clarify"
+    assert c.write_policy == "auto_safe"
 
 
 # ---------------------------------------------------------------------------
@@ -448,10 +453,11 @@ def test_toi_thich_an_kem_is_preference():
 
 @pytest.mark.parametrize("text", ["tôi thích quý", "tôi yêu quý"])
 def test_person_name_still_person_affinity(text: str):
+    # P0-7G: still person_affinity, now saved as affection (was clarify).
     c = _c(text)
     assert c is not None
     assert c.sensitivity == "person_affinity"
-    assert c.write_policy == "clarify"
+    assert c.write_policy == "auto_safe"
 
 
 # ---------------------------------------------------------------------------
@@ -522,3 +528,65 @@ def test_affection_explanation_target_before_don_phuong_unchanged():
     c = _c("tôi thích quý đơn phương")
     assert c is not None
     assert c.category == "affection_explanation"
+
+
+# ---------------------------------------------------------------------------
+# P0-7G: negation / affection classification
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("text, value", [
+    ("tôi không thích ăn cá", "ăn cá"),
+    ("mình không thích chơi game", "chơi game"),
+])
+def test_p0_7g_negative_preference_write(text: str, value: str):
+    c = _c(text)
+    assert c is not None
+    assert c.category == "negative_preference"
+    assert c.value == value
+    assert c.write_policy == "auto_safe"
+
+
+def test_p0_7g_negative_preference_person_stays_clarify():
+    # "tôi không thích Quý" is a person, not a durable dislike → clarify, never a write.
+    c = _c("tôi không thích Quý")
+    assert c is not None
+    assert c.write_policy == "clarify"
+    assert c.category != "negative_preference"
+
+
+def test_p0_7g_khong_thich_ai_still_negation():
+    c = _c("tôi không thích ai")
+    assert c is not None
+    assert c.category == "negation_no_affection"
+
+
+@pytest.mark.parametrize("text, value", [
+    ("tôi không muốn đi học", "đi học"),
+    ("mình không muốn đi chơi", "đi chơi"),
+])
+def test_p0_7g_negative_desire_clarify(text: str, value: str):
+    c = _c(text)
+    assert c is not None
+    assert c.category == "negative_desire"
+    assert c.value == value
+    assert c.write_policy == "clarify"
+
+
+@pytest.mark.parametrize("text, subj, obj", [
+    ("Quý thích tôi", "Quý", "tôi"),
+    ("Quý thích Bắc", "Quý", "Bắc"),
+])
+def test_p0_7g_external_affection_classified(text: str, subj: str, obj: str):
+    c = _c(text)
+    assert c is not None
+    assert c.category == "external_affection"
+    assert c.value == subj
+    assert c.relation_label == obj
+    assert c.write_policy == "auto_safe"
+
+
+def test_p0_7g_self_affection_not_external():
+    # "tôi thích Quý" is self affection, never external.
+    c = _c("tôi thích Quý")
+    assert c is not None
+    assert c.category == "relationship.affection_candidate"

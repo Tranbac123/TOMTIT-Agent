@@ -21,24 +21,35 @@ from agent_core.conversation.profile_memory import (
     answer_profile_query,
     answer_yes_no_memory_query,
     build_affection_explanation_response,
+    build_affection_memory_ack,
     build_affection_relation_response,
     build_auto_ack_message,
     build_blocked_value_response,
     build_confirmation_prompt,
+    build_external_affection_ack,
     build_followup_response,
+    build_name_update_ack,
     build_near_miss_response,
     build_negation_no_affection_response,
+    build_negative_desire_response,
+    build_negative_preference_ack,
     build_one_sided_affection_response,
     build_person_affinity_response,
     build_profile_conflict_message,
     build_profile_fact_ack,
+    collect_profile_snapshot,
     detect_auto_profile_candidate,
     detect_blocked_auto_profile_value,
     detect_profile_fact_candidate,
     detect_profile_query,
+    detect_self_name_phrase_update,
+    detect_self_name_update,
     find_existing_profile_value,
+    save_affection_fact,
     save_auto_profile_fact,
     save_confirmed_profile_fact,
+    save_external_affection_fact,
+    save_self_name_update,
 )
 from agent_core.conversation.profile_semantics import (
     SemanticProfileIntent,
@@ -61,6 +72,9 @@ from agent_core.state.session_state import SessionState, SessionStatusView, Turn
 # clarification turns (prefix keeps them distinct from runtime plan/step history lines).
 _CONV_TRACE_PREFIX = "conv:"
 _CONV_DIRECT_ROUTES = (ConversationRoute.DIRECT_RESPONSE, ConversationRoute.CLARIFICATION)
+
+# P0-7G: object words that mean "the user" in an external affection statement ("Quý thích tôi").
+_EXTERNAL_AFFECTION_SELF_WORDS = frozenset({"tôi", "mình", "tao", "ta"})
 
 if TYPE_CHECKING:
     from agent_core.confirmation.models import ConfirmedSaveOperation
@@ -269,6 +283,12 @@ class SessionRuntime:
         semantic = self._maybe_handle_semantic_profile(user_message, state)
         if semantic is not None:
             return semantic
+
+        # CONV-P0 P0-7G priority 4.8: explicit/implicit self-name update — supersede the
+        # stored name ("sửa tên tôi thành ...", "tôi là <full name>" when a name exists).
+        name_updated = self._maybe_update_name(user_message, state)
+        if name_updated is not None:
+            return name_updated
 
         # CONV-P0 P0-7E priority 5: direct self.name / relation.name — AUTO_SAFE save
         # (conflict-safe: never silently overwrites an existing value).
@@ -627,6 +647,50 @@ class SessionRuntime:
         self._record_terminal_state(state)
         return state
 
+    def _maybe_update_name(
+        self, user_message: str, state: AgentState
+    ) -> AgentState | None:
+        """P0-7G: update the stored self-name (explicit command or full-name assertion).
+
+        Explicit "sửa/đổi tên tôi thành X" always updates (saving first if none exists).
+        Implicit "tôi là <full name>" updates ONLY when a name already exists and the new
+        value differs — a first-time "tôi là X" is a fresh save handled downstream.
+        """
+        text = user_message.strip()
+        current = collect_profile_snapshot(self._store).name
+
+        new_name = detect_self_name_update(text)
+        if new_name is None:
+            phrase = detect_self_name_phrase_update(text)
+            # Implicit update requires an existing name that differs from the new phrase.
+            if (
+                phrase is not None
+                and current is not None
+                and self._norm(current) != self._norm(phrase)
+            ):
+                new_name = phrase
+            else:
+                return None
+
+        if not save_self_name_update(new_name, self._store, state.session_id, original_text=text):
+            state.errors.append("profile_save_failed")
+            return self._complete_conv(
+                state, "conv:profile_autosave_failed",
+                "Không thể lưu thông tin. Vui lòng thử lại.",
+            )
+        self._confirmed_profile_fact_count += 1
+        if current is None:
+            return self._complete_conv(
+                state, "conv:profile_name_saved", f"Đã nhớ tên bạn là {new_name}."
+            )
+        return self._complete_conv(
+            state, "conv:profile_name_updated", build_name_update_ack(current, new_name)
+        )
+
+    @staticmethod
+    def _norm(value: str) -> str:
+        return re.sub(r"\s+", " ", value.strip().lower())
+
     def _maybe_blocked_value_response(
         self, user_message: str, state: AgentState
     ) -> AgentState | None:
@@ -811,6 +875,11 @@ class SessionRuntime:
                     state, "conv:negation_no_affection",
                     build_negation_no_affection_response(),
                 )
+            if intent.category == "negative_desire":
+                return self._complete_conv(
+                    state, "conv:negative_desire",
+                    build_negative_desire_response(intent.value or ""),
+                )
             if intent.category == "affection_explanation":
                 return self._complete_conv(
                     state, "conv:affection_explanation",
@@ -840,6 +909,37 @@ class SessionRuntime:
         if intent.category == "relationship.partner_name":
             return self._handle_semantic_relationship(intent, user_message, state)
 
+        # P0-7G: affection/person memory ("tôi thích/yêu/crush Quý") — saved distinctly.
+        if intent.category in ("relationship.affection_candidate", "affection_relation"):
+            value = intent.value or ""
+            if not save_affection_fact(
+                value, self._store, state.session_id, original_text=user_message.strip()
+            ):
+                return None
+            self._confirmed_profile_fact_count += 1
+            return self._complete_conv(
+                state, "conv:affection_saved", build_affection_memory_ack(value)
+            )
+
+        # P0-7G: user-reported external affection ("Quý thích tôi"/"Quý thích Bắc").
+        if intent.category == "external_affection":
+            return self._handle_external_affection(intent, user_message, state)
+
+        # P0-7G: durable negative preference ("tôi không thích ăn cá").
+        if intent.category == "negative_preference":
+            value = intent.value or ""
+            candidate = AutoProfileCandidate(
+                relation="negative_preference", value=value,
+                original_text=user_message.strip(),
+            )
+            if not save_auto_profile_fact(candidate, self._store, state.session_id):
+                return None
+            self._confirmed_profile_fact_count += 1
+            return self._complete_conv(
+                state, "conv:negative_preference_saved",
+                build_negative_preference_ack(value),
+            )
+
         candidate = self._semantic_to_auto_candidate(intent, user_message.strip())
         if candidate is None:
             return None
@@ -849,6 +949,29 @@ class SessionRuntime:
         self._confirmed_profile_fact_count += 1
         return self._complete_conv(
             state, "conv:semantic_profile_saved", build_auto_ack_message(candidate)
+        )
+
+    def _handle_external_affection(
+        self, intent: SemanticProfileIntent, user_message: str, state: AgentState
+    ) -> AgentState | None:
+        """P0-7G: save a user-reported external affection fact only when its object is the
+        current user (a self word or the saved self-name). Otherwise fall through."""
+        admirer = intent.value or ""
+        obj = (intent.relation_label or "").strip()
+        current = collect_profile_snapshot(self._store).name
+        obj_is_user = (
+            obj.lower() in _EXTERNAL_AFFECTION_SELF_WORDS
+            or (current is not None and self._norm(obj) == self._norm(current))
+        )
+        if not obj_is_user:
+            return None
+        if not save_external_affection_fact(
+            admirer, self._store, state.session_id, original_text=user_message.strip()
+        ):
+            return None
+        self._confirmed_profile_fact_count += 1
+        return self._complete_conv(
+            state, "conv:external_affection_saved", build_external_affection_ack(admirer)
         )
 
     # CONV-P0 P0-6B — pending note slot continuation

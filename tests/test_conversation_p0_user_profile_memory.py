@@ -1259,14 +1259,20 @@ def test_relationship_cua_toi_conflict_safe():
 
 # --- Person-affinity guard ---
 
-def test_toi_thich_quy_is_not_saved_as_preference():
+def test_toi_thich_quy_is_saved_as_affection_not_preference():
+    # P0-7G: "tôi thích Quý" now saves affection/person memory (was clarify), but it must
+    # never be listed as an ordinary preference ("tôi thích gì?").
     sr = _make_sr()
     s = sr.handle_turn("tôi thích Quý")
     answer = s.final_answer or ""
-    assert "không lưu" in answer.lower()
-    assert not _auto_saved(answer), answer
+    assert "tình cảm" in answer.lower() or "không xếp" in answer.lower()
+    # Not an ordinary preference write ("Đã nhớ là bạn thích Quý.").
+    assert "đã nhớ là bạn thích quý" not in answer.lower()
     q = sr.handle_turn("tôi thích gì?")
     assert "Quý" not in (q.final_answer or "")
+    # But it IS retrievable via the affection lane.
+    a = sr.handle_turn("tôi thích ai?")
+    assert "quý" in (a.final_answer or "").lower()
 
 
 # --- Preference aggregation (personal + professional) ---
@@ -1510,12 +1516,13 @@ def test_bug4_preference_query_no_polluted_values():
 
 
 def test_bug5_lowercase_name_is_person_affinity():
-    """Bug 5: 'tôi thích quý' (lowercase) must trigger person-affinity clarification."""
+    """Bug 5 / P0-7G: 'tôi thích quý' (lowercase) is affection memory, saved distinctly
+    from an ordinary preference (was clarify-only in P0-7F)."""
     sr = _make_sr()
     s = sr.handle_turn("tôi thích quý")
     answer = s.final_answer or ""
-    assert "không lưu" in answer.lower()
-    assert "đã nhớ" not in answer.lower()
+    assert "tình cảm" in answer.lower() or "không xếp" in answer.lower()
+    assert "đã nhớ là bạn thích quý" not in answer.lower()
 
 
 def test_bug6_nguoi_toi_thich_ten_la_quy():
@@ -1635,10 +1642,11 @@ def test_fix3_self_yesno_is_not_third_party():
 
 
 def test_fix3_third_party_mind_state_response():
+    # P0-7G reworded the unknown state to "không biết" (no external affection fact saved).
     sr = _make_sr()
     s = sr.handle_turn("quý có thích tôi không?")
     answer = s.final_answer or ""
-    assert "không thể biết" in answer.lower()
+    assert "không biết" in answer.lower()
     assert "quý" in answer.lower()
     assert "rule-based MVP" not in answer
 
@@ -1826,10 +1834,11 @@ def test_fix4_an_kem_preference_saved():
 
 @pytest.mark.parametrize("text", ["tôi thích quý", "tôi yêu quý"])
 def test_fix4_person_name_not_saved_as_hobby(text: str):
+    # P0-7G: person name now saves affection memory, but never as an ordinary hobby.
     sr = _make_sr()
     low = (sr.handle_turn(text).final_answer or "").lower()
-    assert "đã nhớ" not in low
-    assert "không lưu" in low
+    assert "tình cảm" in low or "không xếp" in low
+    assert "đã nhớ là bạn thích quý" not in low
 
 
 # --- Part C: friend relation write + query (never self-name) ---
@@ -2078,7 +2087,10 @@ def test_fix5_regression_guards():
     sr = _make_sr()
 
     assert "đã nhớ" in (sr.handle_turn("tôi thích kem").final_answer or "").lower()
-    assert "đã nhớ" not in (sr.handle_turn("tôi thích Quý").final_answer or "").lower()
+    # P0-7G: "tôi thích Quý" saves affection memory, never as an ordinary preference.
+    quy = (sr.handle_turn("tôi thích Quý").final_answer or "").lower()
+    assert "tình cảm" in quy or "không xếp" in quy
+    assert "đã nhớ là bạn thích quý" not in quy
 
     ai = sr.handle_turn("tôi thích AI").final_answer or ""
     assert "đã nhớ" in ai.lower() and "AI" in ai
@@ -2249,3 +2261,206 @@ def test_fix6_query_variants_do_not_create_profile_facts():
 
     snap = collect_profile_snapshot(store)
     assert snap == type(snap)()
+
+
+# ===========================================================================
+# CONV-P0 P0-7G — memory update / negation / affection
+# ===========================================================================
+
+# --- C1. Negative preference ---
+
+def test_p0_7g_negative_preference_saved_and_recalled():
+    sr = _make_sr()
+    ack = sr.handle_turn("tôi không thích ăn cá").final_answer or ""
+    assert "không thích" in ack.lower() and "ăn cá" in ack.lower()
+    yn = sr.handle_turn("tôi có thích ăn cá không?").final_answer or ""
+    assert "không" in yn.lower()
+    # Never listed as a positive preference.
+    prefs = sr.handle_turn("tôi thích gì?").final_answer or ""
+    assert "ăn cá" not in prefs.lower() or "không thích" in prefs.lower()
+
+
+def test_p0_7g_negative_preference_in_summary_as_dislike():
+    sr = _make_sr()
+    sr.handle_turn("tôi không thích chơi game")
+    summary = sr.handle_turn("bạn nhớ gì về tôi?").final_answer or ""
+    assert "không thích" in summary.lower() and "chơi game" in summary.lower()
+
+
+# --- C2. Negative short-term desire ---
+
+def test_p0_7g_negative_desire_clarify_no_save():
+    sr = _make_sr()
+    ans = sr.handle_turn("tôi không muốn đi học").final_answer or ""
+    assert "đã nhớ" not in ans.lower()
+    assert "ngắn hạn" in ans.lower() or "không muốn" in ans.lower()
+    assert "rule-based MVP" not in ans
+    summary = sr.handle_turn("bạn nhớ gì về tôi?").final_answer or ""
+    assert "đi học" not in summary.lower()
+
+
+# --- C3. Name update ---
+
+def test_p0_7g_name_update_chain():
+    sr = _make_sr()
+    assert "bắc" in (sr.handle_turn("tôi là bắc").final_answer or "").lower()
+
+    up1 = sr.handle_turn("tôi là Bắc Trần").final_answer or ""
+    assert "cập nhật" in up1.lower() and "bắc trần" in up1.lower()
+    assert "bắc trần" in (sr.handle_turn("tôi là ai?").final_answer or "").lower()
+
+    up2 = sr.handle_turn("sửa tên tôi thành bb").final_answer or ""
+    assert "bb" in up2.lower()
+    assert "bb" in (sr.handle_turn("tôi là ai?").final_answer or "").lower()
+
+    up3 = sr.handle_turn("đổi tên tôi thành Nam").final_answer or ""
+    assert "nam" in up3.lower()
+    assert "nam" in (sr.handle_turn("tôi là ai?").final_answer or "").lower()
+
+    summary = (sr.handle_turn("bạn nhớ gì về tôi?").final_answer or "").lower()
+    assert "nam" in summary
+    for stale in ("bắc trần", "bb"):
+        assert stale not in summary
+
+
+def test_p0_7g_name_update_does_not_break_occupation():
+    sr = _make_sr()
+    sr.handle_turn("tôi là bắc")
+    occ = sr.handle_turn("tôi là AI engineer").final_answer or ""
+    assert "công việc" in occ.lower() or "engineer" in occ.lower()
+    # Name is still Bắc, not the occupation.
+    assert "bắc" in (sr.handle_turn("tôi là ai?").final_answer or "").lower()
+
+
+# --- C4. Affection / person memory ---
+
+@pytest.mark.parametrize("phrase", [
+    "tôi thích Quý", "tôi yêu Quý", "tôi có tình cảm với Quý", "tôi crush Quý",
+])
+def test_p0_7g_affection_saved_and_recalled(phrase: str):
+    sr = _make_sr()
+    ack = sr.handle_turn(phrase).final_answer or ""
+    assert "quý" in ack.lower()
+    assert "đã nhớ là bạn thích quý" not in ack.lower()  # not an ordinary preference
+    assert "quý" in (sr.handle_turn("tôi thích ai?").final_answer or "").lower()
+    assert "có" in (sr.handle_turn("tôi có thích Quý không?").final_answer or "").lower()
+    prefs = sr.handle_turn("tôi thích gì?").final_answer or ""
+    assert "quý" not in prefs.lower()
+
+
+def test_p0_7g_affection_in_summary():
+    sr = _make_sr()
+    sr.handle_turn("tôi thích Quý")
+    summary = sr.handle_turn("bạn nhớ gì về tôi?").final_answer or ""
+    assert "quý" in summary.lower()
+
+
+# --- C5. Self-name alias affection query ---
+
+@pytest.mark.parametrize("q", ["Bắc có thích Quý không?", "bắc có thích quý không?"])
+def test_p0_7g_self_name_alias_affection_yes(q: str):
+    sr = _make_sr()
+    sr.handle_turn("tôi là bắc")
+    sr.handle_turn("tôi thích Quý")
+    ans = sr.handle_turn(q).final_answer or ""
+    assert "có" in ans.lower() and "quý" in ans.lower()
+
+
+def test_p0_7g_named_affection_yesno_detected():
+    q = detect_profile_query("Bắc có thích Quý không?")
+    assert q is not None
+    assert q.kind == "named_affection_yesno"
+    assert q.value == "Bắc"
+    assert q.object_value == "Quý"
+
+
+# --- C6. Reverse affection unknown ---
+
+def test_p0_7g_reverse_affection_unknown_not_inferred():
+    sr = _make_sr()
+    sr.handle_turn("tôi là bắc")
+    sr.handle_turn("tôi thích Quý")
+    a1 = sr.handle_turn("Quý có thích tôi không?").final_answer or ""
+    assert "không biết" in a1.lower() or "chưa" in a1.lower()
+    a2 = sr.handle_turn("Quý có thích bắc không?").final_answer or ""
+    assert "không biết" in a2.lower() or "chưa" in a2.lower()
+
+
+# --- C7. External affection fact ---
+
+@pytest.mark.parametrize("stmt", ["Quý thích tôi", "Quý thích Bắc"])
+def test_p0_7g_external_affection_fact(stmt: str):
+    sr = _make_sr()
+    sr.handle_turn("tôi là bắc")
+    ack = sr.handle_turn(stmt).final_answer or ""
+    assert "quý" in ack.lower()
+    assert "đã nhớ" in ack.lower()
+    a1 = sr.handle_turn("Quý có thích tôi không?").final_answer or ""
+    assert "có" in a1.lower() and "quý" in a1.lower()
+    a2 = sr.handle_turn("Quý có thích bắc không?").final_answer or ""
+    assert "có" in a2.lower() and "quý" in a2.lower()
+
+
+def test_p0_7g_external_affection_not_inferred_without_statement():
+    # Without an explicit external fact, "Quý có thích tôi?" stays unknown.
+    sr = _make_sr()
+    sr.handle_turn("tôi là bắc")
+    ans = sr.handle_turn("Quý có thích tôi không?").final_answer or ""
+    assert "không biết" in ans.lower() or "chưa" in ans.lower()
+
+
+# --- C8. Reverse entity query ---
+
+def test_p0_7g_reverse_entity_relationship():
+    sr = _make_sr()
+    sr.handle_turn("bạn gái tôi là Quý")
+    for q in ("Quý là ai?", "ai là Quý?"):
+        ans = sr.handle_turn(q).final_answer or ""
+        assert "quý" in ans.lower() and "bạn gái" in ans.lower()
+
+
+def test_p0_7g_reverse_entity_affection():
+    sr = _make_sr()
+    sr.handle_turn("tôi thích Quý")
+    for q in ("Quý là ai?", "ai là Quý?"):
+        ans = sr.handle_turn(q).final_answer or ""
+        assert "quý" in ans.lower()
+        assert "rule-based MVP" not in ans
+
+
+def test_p0_7g_reverse_entity_prefers_relationship_over_affection():
+    sr = _make_sr()
+    sr.handle_turn("tôi thích Quý")
+    sr.handle_turn("bạn gái tôi là Quý")
+    ans = sr.handle_turn("Quý là ai?").final_answer or ""
+    assert "bạn gái" in ans.lower()
+
+
+# --- C9. P0-7F regression guards ---
+
+def test_p0_7g_preserves_p0_7f_behavior():
+    sr = _make_sr()
+    sr.handle_turn("tôi là Bắc")
+    assert "bắc" in (sr.handle_turn("bạn biết tên tôi không?").final_answer or "").lower()
+
+    sr.handle_turn("tôi thích cafe")
+    assert "có" in (sr.handle_turn("tôi có thích uống cafe không?").final_answer or "").lower()
+
+    cmp_sr = _make_sr()
+    cmp_sr.handle_turn("tôi thích cafe hơn trà")
+    tea = (cmp_sr.handle_turn("tôi có thích trà không?").final_answer or "").lower()
+    assert not ("có" in tea and "chưa" not in tea)
+
+    ai_sr = _make_sr()
+    ai_sr.handle_turn("tôi thích AI")
+    ai_lower = (ai_sr.handle_turn("tôi có thích ai không?").final_answer or "").lower()
+    assert not ("có" in ai_lower and "chưa" not in ai_lower and "ai" in ai_lower)
+
+    sr.handle_turn("bạn tôi tên là Meo")
+    assert "meo" in (sr.handle_turn("bạn biết bạn tôi tên gì không?").final_answer or "").lower()
+
+    sr.handle_turn("nhà tôi nuôi mèo")
+    assert "mèo" in (sr.handle_turn("bạn biết nhà tôi nuôi con gì không?").final_answer or "").lower()
+
+    sr.handle_turn("người yêu tôi là Quý")
+    assert "quý" in (sr.handle_turn("bạn có nhớ người yêu của tôi là ai không?").final_answer or "").lower()
