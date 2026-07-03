@@ -2720,3 +2720,43 @@ def test_p0_7g_fix3_friend_duplicate_is_safe():
     assert "meo" in ans
     follow = (sr.handle_turn("bạn của tôi tên là gì?").final_answer or "").lower()
     assert "meo" in follow
+
+
+# ===========================================================================
+# CONV-P0 P0-7G-FIX3A — sequential close-friend variant (last-write-wins)
+# ===========================================================================
+
+def test_p0_7g_fix3a_fresh_close_friend_recall():
+    sr = _make_sr()
+    ans = (sr.handle_turn("bạn thân của tôi tên là Nam").final_answer or "").lower()
+    assert "rule-based mvp" not in ans
+    assert "nam" in ans
+    assert "đã nhớ" in ans or "vẫn đang nhớ" in ans
+    follow = (sr.handle_turn("bạn tôi tên gì?").final_answer or "").lower()
+    assert "nam" in follow
+
+
+def test_p0_7g_fix3a_sequential_new_friend_saves_not_conflict():
+    # A different friend name after an existing friend must save/confirm, not prompt for
+    # an explicit correction, and the recall must not return only the stale friend.
+    sr = _make_sr()
+    sr.handle_turn("bạn tôi tên là Meo")
+    dup = (sr.handle_turn("bạn của tôi tên là Meo").final_answer or "").lower()
+    assert "rule-based mvp" not in dup
+    assert "meo" in dup
+    ans = (sr.handle_turn("bạn thân của tôi tên là Nam").final_answer or "").lower()
+    assert "rule-based mvp" not in ans
+    assert "nam" in ans
+    assert "đã nhớ" in ans or "vẫn đang nhớ" in ans
+    follow = (sr.handle_turn("bạn của tôi tên là gì?").final_answer or "").lower()
+    assert "nam" in follow or ("meo" in follow and "nam" in follow)
+    assert not ("meo" in follow and "nam" not in follow)
+
+
+def test_p0_7g_fix3a_friend_write_does_not_overwrite_user_name():
+    sr = _make_sr()
+    sr.handle_turn("tôi là Bắc")
+    sr.handle_turn("bạn thân của tôi tên là Nam")
+    name = (sr.handle_turn("tôi là ai?").final_answer or "").lower()
+    assert "bắc" in name
+    assert "nam" not in name

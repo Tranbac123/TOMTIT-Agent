@@ -2112,14 +2112,17 @@ def answer_profile_query(
 
     # --- P0-7F-FIX4 Part C: friend_name ("bạn của tôi tên là gì?") ---
     elif query.kind == "friend_name":
-        for rec in confirmed:
-            if (
-                rec.metadata.get("subject") == "relation"
-                and rec.metadata.get("relation") == "name"
-                and rec.metadata.get("relation_label") == "bạn"
-            ):
-                name = rec.metadata.get("value", "")
-                return f"Bạn của bạn tên là {name}."
+        # P0-7G-FIX3A: return the LATEST friend name (by created_at) so a newer friend
+        # assertion supersedes an older one, mirroring self-name last-write-wins.
+        friends = [
+            rec for rec in confirmed
+            if rec.metadata.get("subject") == "relation"
+            and rec.metadata.get("relation") == "name"
+            and rec.metadata.get("relation_label") == "bạn"
+        ]
+        if friends:
+            latest = sorted(friends, key=lambda r: r.created_at)[-1]
+            return f"Bạn của bạn tên là {latest.metadata.get('value', '')}."
         return "Mình chưa có thông tin về tên bạn của bạn."
 
     # --- P0-7G-FIX3 A3: self_dislike ("tôi không thích gì?") ---

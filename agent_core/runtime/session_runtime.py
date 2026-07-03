@@ -825,7 +825,12 @@ class SessionRuntime:
             original_text=user_message.strip(),
         )
         existing = find_existing_profile_value(candidate, self._store)
-        if existing is not None:
+        # P0-7G-FIX3A: the "bạn" (friend) label allows a different friend name as a fresh
+        # last-write-wins save instead of a conflict prompt (the friend_name query returns
+        # the latest). A same-value repeat still falls through to the "vẫn đang nhớ" path.
+        # Partner labels keep the P0-7E conflict-safe contract (no silent overwrite).
+        friend_relabel = candidate.relation_label == "bạn"
+        if existing is not None and not (friend_relabel and existing != candidate.value):
             return self._complete_conv(
                 state, "conv:profile_name_conflict",
                 build_profile_conflict_message(candidate, existing),
