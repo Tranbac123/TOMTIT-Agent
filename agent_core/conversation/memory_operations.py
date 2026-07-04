@@ -247,12 +247,39 @@ _RE_OP_GOAL_NEGATE_WANT = re.compile(
 
 _INTERROGATIVE_TAILS: tuple[str, ...] = (" gì", " gi", " ai", " đâu", " nào")
 
+# P0-7K-FIX1 B: current-state preference — the temporal-marker + "tôi thích X (rồi)"
+# form asserts a NEW positive preference and supersedes an active negative one.
+_RE_OP_PREF_POSITIVE = re.compile(
+    r'^(?:tôi|mình)\s+(?:lại\s+)?thích\s+(.+?)(?:\s+rồi)?\s*[.!]*\s*$',
+    re.IGNORECASE | re.DOTALL,
+)
+# P0-7K-FIX1 D: goal focus — "mục tiêu chính của tôi là X" (keeps other active goals).
+_RE_OP_GOAL_FOCUS = re.compile(
+    r'^mục\s+tiêu\s+chính\s+(?:build\s+)?(?:của\s+)?(?:tôi|mình)\s+(?:là|:)\s+(.+?)\s*[.!]*\s*$',
+    re.IGNORECASE | re.DOTALL,
+)
+# P0-7K-FIX1 D: replace-all goal — "tôi chỉ làm/build X thôi".
+_RE_OP_GOAL_ONLY = re.compile(
+    r'^(?:tôi|mình)\s+chỉ\s+(?:làm|build)\s+(.+?)\s+thôi\s*[.!]*\s*$',
+    re.IGNORECASE | re.DOTALL,
+)
+
 
 def _looks_interrogative(value: str) -> bool:
     v = canonicalize_memory_value(value)
-    return v in {"gì", "gi", "ai", "đâu", "nào"} or any(
-        v.endswith(t) for t in _INTERROGATIVE_TAILS
-    )
+    orig_tokens = re.sub(r"\s+", " ", value.strip()).split()
+    # P0-7K-FIX1 F: lowercase "ai" is the question word; uppercase "AI" is the tech token,
+    # so "tôi sẽ làm AI" is a valid goal, not a query.
+    if v == "ai":
+        return not (orig_tokens and orig_tokens[-1].isupper())
+    if v in {"gì", "gi", "đâu", "nào"}:
+        return True
+    for tail in (" gì", " gi", " đâu", " nào"):
+        if v.endswith(tail):
+            return True
+    if v.endswith(" ai"):
+        return not (orig_tokens and orig_tokens[-1].isupper())
+    return False
 
 
 def _clean_op_value(raw: str) -> str:
@@ -268,6 +295,30 @@ def parse_memory_operation(text: str) -> MemoryOperation | None:
     stripped = text.strip()
     if not stripped or '?' in stripped or '？' in stripped:
         return None
+
+    # 0a. P0-7K-FIX1 D: goal focus ("mục tiêu chính của tôi là X") — set current focus,
+    #     keep other active goals. Strip any leading temporal marker first.
+    focus_text, _ = strip_temporal_update_marker(stripped)
+    m = _RE_OP_GOAL_FOCUS.match(focus_text)
+    if m:
+        value = _clean_op_value(m.group(1))
+        if value and not _looks_interrogative(value):
+            return MemoryOperation(
+                op="UPDATE_CURRENT", domain="goal", subject="self", value=value,
+                canonical_key=_goal_conflict_key(value), polarity="positive",
+                raw_text=stripped,
+            )
+
+    # 0b. P0-7K-FIX1 D: replace-all goal ("tôi chỉ làm X thôi").
+    m = _RE_OP_GOAL_ONLY.match(stripped)
+    if m:
+        value = _clean_op_value(m.group(1))
+        if value and not _looks_interrogative(value):
+            return MemoryOperation(
+                op="SWITCH", domain="goal", subject="self", value=value,
+                canonical_key="*", polarity="positive", source="goal_replace_all",
+                raw_text=stripped,
+            )
 
     # 1. Goal switch — most specific ("không muốn X nữa ... muốn Y").
     m = _RE_OP_GOAL_SWITCH.match(stripped)
@@ -340,6 +391,32 @@ def parse_memory_operation(text: str) -> MemoryOperation | None:
                     op="UPDATE_CURRENT", domain="relationship", subject="relation",
                     value=name, canonical_key=canonicalize_memory_value(name),
                     relation=label, raw_text=stripped,
+                )
+        # P0-7K-FIX1 B: current-state preference ("bây giờ tôi thích bơi rồi") — assert a
+        # positive preference and supersede an active negative one. Person targets fall
+        # through (handled by affection/relationship elsewhere).
+        m = _RE_OP_PREF_POSITIVE.match(remainder)
+        if m:
+            value = _clean_op_value(m.group(1))
+            if value and not _looks_interrogative(value):
+                return MemoryOperation(
+                    op="UPDATE_CURRENT", domain="preference", subject="self", value=value,
+                    canonical_key=canonicalize_memory_value(value), polarity="positive",
+                    raw_text=stripped,
+                )
+
+    # 5b. P0-7K-FIX1 B: "tôi thích X rồi" without a leading marker (the "rồi" alone marks
+    #     a state change). Only when an active negative preference for X exists — otherwise
+    #     it falls through to the ordinary preference write path unchanged.
+    if re.search(r'\brồi\s*[.!]*$', stripped, re.IGNORECASE):
+        m = _RE_OP_PREF_POSITIVE.match(stripped)
+        if m:
+            value = _clean_op_value(m.group(1))
+            if value and not _looks_interrogative(value):
+                return MemoryOperation(
+                    op="UPDATE_CURRENT", domain="preference", subject="self", value=value,
+                    canonical_key=canonicalize_memory_value(value), polarity="positive",
+                    source="pref_state_change_conditional", raw_text=stripped,
                 )
 
     # 6. Future intent ("tôi sẽ build X") — goal ADD, professional-token gated so
@@ -433,16 +510,49 @@ def delete_goal_facts(conflict_key: str, store: "MemoryStoreProtocol") -> str | 
 
 
 def resolve_goal_current_state(raw_text: str, store: "MemoryStoreProtocol") -> None:
-    """P0-7J-FIX1: goal memory is current-state by default — a new explicit goal
-    supersedes ALL previous goals unless the utterance carries an additive marker
-    (ngoài ra / còn / cũng / thêm), which keeps existing goals alongside the new one.
+    """P0-7K-FIX1: goal memory is an active MULTI-goal set — a plain new goal is ADDED,
+    never superseding earlier goals. Kept as a no-op seam for existing call sites;
+    replacement is now explicit ("tôi chỉ làm X thôi") or via negation/SWITCH.
     """
-    if _has_additive_goal_marker(raw_text):
-        return
+    return None
+
+
+def delete_all_goal_facts(store: "MemoryStoreProtocol") -> int:
+    """P0-7K-FIX1: delete ALL active goal records (replace-all "tôi chỉ làm X thôi")."""
+    removed = 0
     for rec in _confirmed_profile_facts(store):
         md = rec.metadata
-        if md.get("subject") == "self" and md.get("relation") == "goal":
-            store.delete(rec.id, reason="goal_superseded")
+        if md.get("subject") == "self" and md.get("relation") in ("goal", "goal_focus"):
+            store.delete(rec.id, reason="goal_replaced")
+            removed += 1
+    return removed
+
+
+def goal_already_active(value: str, store: "MemoryStoreProtocol") -> bool:
+    """True if an exact-normalized goal value is already stored (dedup guard)."""
+    target = _goal_conflict_key(value)
+    for rec in _confirmed_profile_facts(store):
+        md = rec.metadata
+        if md.get("subject") == "self" and md.get("relation") in ("goal", "goal_focus"):
+            if _goal_conflict_key(md.get("value", "")) == target:
+                return True
+    return False
+
+
+def save_goal_focus(value: str, store: "MemoryStoreProtocol", session_id: str, *, raw_text: str = "") -> bool:
+    """P0-7K-FIX1 D: set the current goal focus without removing other active goals.
+
+    Removes any prior focus marker (latest focus wins) then saves the new focus, which
+    is also counted as an active goal by the snapshot.
+    """
+    for rec in _confirmed_profile_facts(store):
+        md = rec.metadata
+        if md.get("subject") == "self" and md.get("relation") == "goal_focus":
+            store.delete(rec.id, reason="focus_superseded")
+    candidate = AutoProfileCandidate(
+        subject="self", relation="goal_focus", value=value, original_text=raw_text,
+    )
+    return save_auto_profile_fact(candidate, store, session_id)
 
 
 # ---------------------------------------------------------------------------
@@ -567,22 +677,63 @@ def apply_memory_operation(
             "conv:memop_relation_updated", saved=True,
         )
 
-    if op.op == "SWITCH" and op.domain == "goal":
-        delete_goal_facts(op.canonical_key, store)  # absent old goal is not an error
-        # P0-7J-FIX1: a switch names the new CURRENT goal — supersede remaining goals.
-        resolve_goal_current_state(op.raw_text, store)
+    # P0-7K-FIX1 B: current-state preference ("bây giờ tôi thích bơi rồi").
+    if op.op == "UPDATE_CURRENT" and op.domain == "preference":
+        # The bare "tôi thích X rồi" form (no leading marker) only counts as a state
+        # change when an active negative preference for X exists; otherwise fall through.
+        snap = collect_profile_snapshot(store)
+        has_active_negative = any(
+            _norm_cmp(d) == op.canonical_key for d in snap.dislikes
+        )
+        if op.source == "pref_state_change_conditional" and not has_active_negative:
+            return None
+        resolve_preference_conflicts(op.value, "preference", store)
         candidate = AutoProfileCandidate(
-            subject="self", relation="goal", value=op.value, original_text=op.raw_text,
+            relation="preference", value=op.value,
+            preference_kind=_classify_preference_kind(op.value),
+            original_text=op.raw_text,
         )
         if not save_auto_profile_fact(candidate, store, session_id):
             return None
+        return MemoryOperationOutcome(
+            f"Đã ghi nhận: hiện tại bạn thích {op.value}. "
+            "Mình đã cập nhật lại sở thích của bạn.",
+            "conv:memop_preference_updated", saved=True,
+        )
+
+    # P0-7K-FIX1 D: goal focus ("mục tiêu chính của tôi là X") — keep other goals.
+    if op.op == "UPDATE_CURRENT" and op.domain == "goal":
+        if not save_goal_focus(op.value, store, session_id, raw_text=op.raw_text):
+            return None
+        return MemoryOperationOutcome(
+            f"Đã ghi nhận mục tiêu chính hiện tại của bạn là {op.value}. "
+            "Mình vẫn giữ các mục tiêu khác của bạn.",
+            "conv:memop_goal_focus_set", saved=True,
+        )
+
+    if op.op == "SWITCH" and op.domain == "goal":
+        # P0-7K-FIX1 D: replace-all ("tôi chỉ làm X thôi") wipes every goal; a plain
+        # negation-switch only removes the named old goal (token-containment).
+        if op.source == "goal_replace_all":
+            delete_all_goal_facts(store)
+        else:
+            delete_goal_facts(op.canonical_key, store)
+        if not goal_already_active(op.value, store):
+            candidate = AutoProfileCandidate(
+                subject="self", relation="goal", value=op.value, original_text=op.raw_text,
+            )
+            if not save_auto_profile_fact(candidate, store, session_id):
+                return None
         return MemoryOperationOutcome(
             build_goal_switched_ack(op.value), "conv:memop_goal_switched", saved=True,
         )
 
     if op.op == "ADD" and op.domain == "goal":
-        # P0-7J-FIX1: goal memory is current-state — non-additive writes supersede.
-        resolve_goal_current_state(op.raw_text, store)
+        # P0-7K-FIX1: multi-goal set — ADD without superseding; dedup exact repeats.
+        if goal_already_active(op.value, store):
+            return MemoryOperationOutcome(
+                build_goal_saved_ack(op.value), "conv:memop_goal_saved", saved=False,
+            )
         candidate = AutoProfileCandidate(
             subject="self", relation="goal", value=op.value, original_text=op.raw_text,
         )
@@ -631,7 +782,6 @@ def apply_memory_operations(
     goals_added: list[str] = []
     affections_added: list[str] = []
     ack_parts: list[str] = []
-    goal_supersede_done = False
 
     snap = collect_profile_snapshot(store)
     current_name = snap.name
@@ -739,9 +889,11 @@ def apply_memory_operations(
             continue
 
         if op.domain == "goal" and op.op == "ADD":
-            if not goal_supersede_done:
-                resolve_goal_current_state(raw_text or op.raw_text, store)
-                goal_supersede_done = True
+            # P0-7K-FIX1: multi-goal set — ADD without superseding, dedup exact repeats.
+            if goal_already_active(op.value, store):
+                applied += 1
+                goals_added.append(op.value)
+                continue
             candidate = AutoProfileCandidate(
                 subject="self", relation="goal", value=op.value,
                 original_text=raw_text or op.raw_text,

@@ -34,6 +34,7 @@ from agent_core.conversation.profile_memory import (
     build_negation_no_affection_response,
     build_negative_desire_response,
     build_negative_preference_ack,
+    build_negative_skill_ack,
     build_occ_correction_ack,
     build_occupation_removal_ack,
     build_one_sided_affection_response,
@@ -41,6 +42,7 @@ from agent_core.conversation.profile_memory import (
     build_profile_conflict_message,
     build_profile_fact_ack,
     build_relation_removal_ack,
+    build_relationship_typo_clarification,
     build_relation_removal_not_found,
     build_relation_update_ack,
     build_unrelated_external_affection_response,
@@ -57,11 +59,13 @@ from agent_core.conversation.profile_memory import (
     detect_relation_alias_query,
     detect_relation_removal_cmd,
     detect_relation_update_cmd,
+    detect_relationship_typo,
     detect_self_name_phrase_update,
     detect_self_name_update,
     find_existing_profile_value,
     looks_like_proper_full_name,
     resolve_preference_conflicts,
+    resolve_skill_conflicts,
     save_affection_fact,
     save_auto_profile_fact,
     save_confirmed_profile_fact,
@@ -72,8 +76,8 @@ from agent_core.conversation.profile_memory import (
 from agent_core.conversation.memory_operations import (
     apply_memory_operation,
     apply_memory_operations,
+    goal_already_active,
     parse_memory_operation,
-    resolve_goal_current_state,
 )
 from agent_core.conversation.semantic_extractor import (
     MIN_EXTRACTION_CONFIDENCE,
@@ -262,6 +266,9 @@ class SessionRuntime:
         # CONV-P0 P0-7F: session-local turn index of the last answered profile query,
         # used only for the "gì nữa?" follow-up. Never persisted to memory.
         self._profile_query_context_turn: int | None = None
+        # CONV-P0 P0-7K-FIX1: kind of the last answered profile query, for the bounded
+        # goal follow-up ("và gì nữa?"). Session-local only, never persisted.
+        self._last_profile_query_kind: str | None = None
         if session is not None:
             self._session = session
         else:
@@ -337,6 +344,12 @@ class SessionRuntime:
         correction = self._maybe_handle_correction(user_message, state)
         if correction is not None:
             return correction
+
+        # CONV-P0 P0-7K-FIX1 priority 4.05: low-confidence relationship typo
+        # ("bạn ái của tôi là quý") — ask for confirmation, never write (fail-safe).
+        typo = self._maybe_clarify_relationship_typo(user_message, state)
+        if typo is not None:
+            return typo
 
         # CONV-P0 P0-7K priority 4.11: hybrid semantic extraction — complex/multi-fact/
         # correction utterances route through the semantic extractor, which PROPOSES
@@ -647,11 +660,17 @@ class SessionRuntime:
         # store reads when no facts were ever saved in this session.
         if query.kind == "profile_summary" and self._confirmed_profile_fact_count == 0:
             return None
+        # P0-7K-FIX1 H: the goal follow-up ("và gì nữa?") only fires immediately after a
+        # goal query — otherwise the bare "và gì nữa?" is ambiguous and falls through.
+        if query.kind == "goal_followup":
+            if self._last_profile_query_kind not in ("self_current_goal", "self_goal", "goal_followup"):
+                return None
         answer = answer_profile_query(query, self._store)
         if answer is None:
             return None
         # P0-7F: remember that a profile query was just answered, for a "gì nữa?" follow-up.
         self._profile_query_context_turn = len(self._session.turns)
+        self._last_profile_query_kind = query.kind
         state.history.append("conv:profile_query_answered")
         state.complete(answer)
         state.history.append("conv:state_finalized")
@@ -924,6 +943,10 @@ class SessionRuntime:
             )
         if cat == "skill":
             return AutoProfileCandidate(relation="skill", value=value, original_text=original_text)
+        if cat == "negative_skill":
+            return AutoProfileCandidate(
+                relation="negative_skill", value=value, original_text=original_text
+            )
         if cat == "occupation":
             return AutoProfileCandidate(relation="occupation", value=value, original_text=original_text)
         if cat == "learning_topic":
@@ -1093,6 +1116,20 @@ class SessionRuntime:
             return None
         domain, response = detected
         return self._complete_conv(state, f"conv:unsupported_{domain}", response)
+
+    def _maybe_clarify_relationship_typo(
+        self, user_message: str, state: AgentState
+    ) -> AgentState | None:
+        """P0-7K-FIX1 I: a low-confidence relationship typo ("bạn ái của tôi là quý")
+        asks for confirmation instead of writing memory (fail-safe)."""
+        detected = detect_relationship_typo(user_message.strip())
+        if detected is None:
+            return None
+        _raw, corrected, name = detected
+        return self._complete_conv(
+            state, "conv:relationship_typo_clarify",
+            build_relationship_typo_clarification(corrected, name),
+        )
 
     def _maybe_handle_semantic_extraction(
         self, user_message: str, state: AgentState
@@ -1322,14 +1359,24 @@ class SessionRuntime:
         # the same object (memory conflict resolution).
         if candidate.relation == "preference":
             resolve_preference_conflicts(candidate.value, "preference", self._store)
-        # P0-7J-FIX1: goal memory is current-state — a new explicit goal supersedes
-        # previous goals unless the utterance carries an additive marker ("còn muốn ...").
-        if candidate.relation == "goal":
-            resolve_goal_current_state(user_message, self._store)
+        # P0-7K-FIX1: skill positive/negative conflict resolution (latest polarity wins).
+        if candidate.relation in ("skill", "negative_skill"):
+            resolve_skill_conflicts(candidate.value, candidate.relation, self._store)
+        # P0-7K-FIX1: goal memory is an active MULTI-goal set — a plain new goal is ADDED
+        # (no supersede); dedup an exact repeat so it is not stored twice.
+        if candidate.relation == "goal" and goal_already_active(candidate.value, self._store):
+            return self._complete_conv(
+                state, "conv:semantic_profile_saved", build_auto_ack_message(candidate)
+            )
         ok = save_auto_profile_fact(candidate, self._store, state.session_id)
         if not ok:
             return None
         self._confirmed_profile_fact_count += 1
+        if candidate.relation == "negative_skill":
+            return self._complete_conv(
+                state, "conv:negative_skill_saved",
+                build_negative_skill_ack(candidate.value),
+            )
         return self._complete_conv(
             state, "conv:semantic_profile_saved", build_auto_ack_message(candidate)
         )

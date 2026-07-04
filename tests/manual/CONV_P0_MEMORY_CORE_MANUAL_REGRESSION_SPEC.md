@@ -2324,6 +2324,141 @@ Future phase mapping:
 
 ---
 
+### P0-7K-FIX1 — Query/Write Guardrails + Goal Semantics
+
+Memory-core hardening after manual Web rerun. Critical rule: **if the agent is not
+sure, it must not write memory — fail safe beats writing wrong memory.**
+
+#### A. Query/write guard
+
+```
+tôi thích gì nhata
+=> must NOT save "gì nhata" as preference; safe answer, no "đã nhớ"
+
+tôi thích gì nhất
+=> must NOT save "gì nhất" as preference; safe answer (chưa đủ thông tin / list known)
+
+bạn nhớ gì về tôi
+=> summary must NOT contain "gì nhata" or "gì nhất"
+```
+
+If a question/query is saved as a memory fact → CRITICAL_BLOCKER / NEEDS_FIX.
+
+#### B. Current-state preference update
+
+```
+tôi không thích bơi
+bây giờ tôi thích bơi rồi
+tôi có thích bơi không?
+=> Có, hiện tại bạn thích bơi. Previous negative "bơi" superseded/removed.
+```
+
+Markers: bây giờ / hiện tại / giờ thì / từ nay / rồi.
+
+#### C. Skill negative memory
+
+```
+tôi biết nấu ăn
+tôi không biết bơi
+tôi biết làm gì?
+=> known skills include nấu ăn; must NOT include bơi
+
+tôi có biết bơi không?
+=> Không, bạn từng nói là không biết bơi.
+
+tôi có biết nấu ăn không?
+=> Có
+```
+
+#### D. Goal multi-set policy
+
+```
+"tôi sẽ làm X"                        => add active goal X
+"tôi muốn làm/build X"                => add active goal X
+"tôi không làm/build X nữa"           => remove active goal X
+"mục tiêu chính của tôi là X"         => set current_focus = X, keep other active goals
+"bây giờ mục tiêu chính của tôi là X" => set current_focus = X, keep other active goals
+"tôi chỉ làm X thôi"                  => replace all active goals with X
+```
+
+```
+tôi sẽ làm LLM
+tôi sẽ làm LLM và Agent AI
+tôi sẽ làm blogger
+tôi sẽ làm gì?
+=> active goals include LLM, Agent AI, blogger (do not lose earlier goals)
+```
+
+Dedup: adding "LLM" twice must not duplicate it.
+
+#### E. AI taxonomy
+
+```
+tôi sẽ làm LLM và Agent AI
+tôi có làm AI không?
+=> Có (LLM / Agent AI are AI-related)
+```
+
+Taxonomy: LLM, SLM, Agent AI, AI Agent, AI Agent coder, machine learning, ML,
+deep learning → AI.
+
+#### F. Basic goal parse
+
+```
+tôi sẽ làm AI
+=> add active goal làm AI; no fallback
+```
+
+#### G. Memory challenge / reminder query
+
+```
+tôi sẽ làm LLM và Agent AI
+tôi sẽ làm blogger
+bạn không nhớ tôi sẽ làm LLM và Agent AI à?
+=> no fallback; confirms remembering LLM and Agent AI (plus current goals if relevant)
+```
+
+#### H. Limited follow-up context
+
+```
+tôi sẽ làm LLM và Agent AI
+tôi sẽ làm blogger
+tôi sẽ làm dự án AI Agent coder
+tôi sẽ làm gì?
+và gì nữa?
+=> follow-up must not fallback; lists remaining active goals or says no more
+```
+
+#### I. Low-confidence typo handling
+
+```
+bạn ái của tôi là quý
+=> do not save memory; ask clarification:
+   "Bạn muốn nói 'bạn gái của tôi là quý' phải không?"
+```
+
+#### J. Ranking query is safe (not a full ranking engine)
+
+```
+tôi thích gì nhất?
+=> do not implement ranking engine; do not save "gì nhất";
+   answer safely (chưa đủ thông tin / list known preferences)
+```
+
+#### Classification rules
+
+```text
+- If a question/query is saved as a memory fact, classify CRITICAL_BLOCKER / NEEDS_FIX.
+- If current-state preference update marker does not supersede the old negative, classify NEEDS_FIX.
+- If negative skill "không biết X" falls back or is listed as a known skill, classify NEEDS_FIX.
+- If goal multi-set loses earlier goals on a plain new goal, classify NEEDS_FIX.
+- If AI taxonomy does not recognize LLM/Agent AI as AI, classify NEEDS_FIX.
+- If memory-challenge query falls back, classify NEEDS_FIX.
+- If a low-confidence typo writes memory instead of asking clarification, classify NEEDS_FIX.
+```
+
+---
+
 ## 10. Merge Gate Policy
 
 Passing this file does not automatically merge.

@@ -3767,12 +3767,16 @@ def test_p0_7j_fix1_goal_negation_not_saved_as_positive_goal():
 
 
 def test_p0_7j_fix1_goal_latest_current_goal_wins():
+    # P0-7K-FIX1 policy change (Section 7.4): goal memory is an active MULTI-goal set —
+    # a plain new goal is ADDED, not superseding earlier goals. Latest is still listed;
+    # earlier goals are no longer dropped. Replacement now requires "tôi chỉ làm X thôi"
+    # or explicit negation.
     sr = _make_sr()
     sr.handle_turn("tôi sẽ làm AI LLM")
     sr.handle_turn("tôi sẽ làm AI Agent")
     ans = (sr.handle_turn("tôi đang muốn làm gì?").final_answer or "").lower()
     assert "agent" in ans, f"latest goal missing: {ans}"
-    assert "llm" not in ans, f"superseded goal still current: {ans}"
+    assert "llm" in ans, f"earlier goal was wrongly dropped under multi-set policy: {ans}"
 
 
 def test_p0_7j_fix1_goal_additive_marker_preserves_multiple_goals():
@@ -3968,3 +3972,157 @@ def test_p0_7k_manual_spec_contains_hybrid_semantic_cases():
     ]
     missing = [tok for tok in required if tok not in text]
     assert not missing, f"Manual spec missing P0-7K tokens: {missing}"
+
+
+# ---------------------------------------------------------------------------
+# P0-7K-FIX1 tests — query/write guardrails + goal semantics
+# ---------------------------------------------------------------------------
+
+def test_p0_7k_fix1_query_write_guard_blocks_thich_gi_nhata():
+    sr = _make_sr()
+    sr.handle_turn("tôi thích ăn cay")
+    ack = (sr.handle_turn("tôi thích gì nhata").final_answer or "").lower()
+    assert "đã nhớ" not in ack, f"query typo acked as saved: {ack}"
+    summary = (sr.handle_turn("bạn nhớ gì về tôi").final_answer or "").lower()
+    assert "gì nhata" not in summary, f"query typo saved as preference: {summary}"
+
+
+def test_p0_7k_fix1_query_write_guard_blocks_thich_gi_nhat():
+    sr = _make_sr()
+    sr.handle_turn("tôi thích code hơn là vẽ")
+    ack = (sr.handle_turn("tôi thích gì nhất").final_answer or "").lower()
+    assert "đã nhớ" not in ack, f"ranking query acked as saved: {ack}"
+    summary = (sr.handle_turn("bạn nhớ gì về tôi").final_answer or "").lower()
+    assert "gì nhất" not in summary, f"ranking query saved as preference: {summary}"
+
+
+def test_p0_7k_fix1_summary_has_no_query_pollution():
+    sr = _make_sr()
+    sr.handle_turn("tôi thích ăn cay")
+    sr.handle_turn("tôi thích gì nhata")
+    sr.handle_turn("tôi thích gì nhất")
+    summary = (sr.handle_turn("bạn nhớ gì về tôi").final_answer or "").lower()
+    assert "gì nhata" not in summary and "gì nhất" not in summary, f"query pollution: {summary}"
+    assert "ăn cay" in summary, f"valid preference lost: {summary}"
+
+
+def test_p0_7k_fix1_current_state_preference_update_bay_gio_thich_boi():
+    sr = _make_sr()
+    sr.handle_turn("tôi không thích bơi")
+    ack = (sr.handle_turn("bây giờ tôi thích bơi rồi").final_answer or "").lower()
+    assert "rule-based mvp" not in ack, f"current-state update fell to fallback: {ack}"
+    yn = (sr.handle_turn("tôi có thích bơi không?").final_answer or "").lower()
+    assert "có" in yn or "đúng" in yn, f"bơi not positive after update: {yn}"
+    neg = (sr.handle_turn("tôi không thích gì?").final_answer or "").lower()
+    assert "bơi" not in neg, f"old negative bơi not superseded: {neg}"
+
+
+def test_p0_7k_fix1_negative_skill_memory_khong_biet_boi():
+    sr = _make_sr()
+    sr.handle_turn("tôi biết nấu ăn")
+    ack = (sr.handle_turn("tôi không biết bơi").final_answer or "").lower()
+    assert "rule-based mvp" not in ack, f"negative skill fell to fallback: {ack}"
+    skills = (sr.handle_turn("tôi biết làm gì?").final_answer or "").lower()
+    assert "nấu ăn" in skills, f"positive skill missing: {skills}"
+    assert "bơi" not in skills, f"negative skill listed as known: {skills}"
+    yn = (sr.handle_turn("tôi có biết bơi không?").final_answer or "").lower()
+    assert "không" in yn or "chưa" in yn, f"negative skill yes/no wrong: {yn}"
+
+
+def test_p0_7k_fix1_positive_skill_query_still_works():
+    sr = _make_sr()
+    sr.handle_turn("tôi biết nấu ăn")
+    yn = (sr.handle_turn("tôi có biết nấu ăn không?").final_answer or "").lower()
+    assert "có" in yn or "đúng" in yn, f"positive skill yes/no wrong: {yn}"
+
+
+def test_p0_7k_fix1_goal_multiset_adds_llm_agent_ai_blogger():
+    sr = _make_sr()
+    sr.handle_turn("tôi sẽ làm LLM")
+    sr.handle_turn("tôi sẽ làm LLM và Agent AI")
+    sr.handle_turn("tôi sẽ làm blogger")
+    ans = (sr.handle_turn("tôi sẽ làm gì?").final_answer or "").lower()
+    assert "llm" in ans, f"LLM lost: {ans}"
+    assert "agent ai" in ans or "ai agent" in ans, f"Agent AI lost: {ans}"
+    assert "blogger" in ans, f"blogger lost: {ans}"
+
+
+def test_p0_7k_fix1_goal_dedupes_llm_when_repeated():
+    sr = _make_sr()
+    sr.handle_turn("tôi sẽ làm LLM")
+    sr.handle_turn("tôi sẽ làm LLM và Agent AI")
+    ans = (sr.handle_turn("tôi sẽ làm gì?").final_answer or "").lower()
+    assert ans.count("llm") <= 1, f"LLM duplicated: {ans}"
+
+
+def test_p0_7k_fix1_goal_ai_taxonomy_llm_agent_ai_implies_ai():
+    sr = _make_sr()
+    sr.handle_turn("tôi sẽ làm LLM và Agent AI")
+    ans = (sr.handle_turn("tôi có làm AI không?").final_answer or "").lower()
+    assert "rule-based mvp" not in ans, f"AI taxonomy query fell to fallback: {ans}"
+    assert "có" in ans or "đúng" in ans, f"AI taxonomy did not recognize LLM/Agent AI: {ans}"
+
+
+def test_p0_7k_fix1_goal_toi_se_lam_ai_parses():
+    sr = _make_sr()
+    ack = (sr.handle_turn("tôi sẽ làm AI").final_answer or "").lower()
+    assert "rule-based mvp" not in ack, f"'tôi sẽ làm AI' fell to fallback: {ack}"
+    ans = (sr.handle_turn("tôi sẽ làm gì?").final_answer or "").lower()
+    assert "ai" in ans, f"goal AI not recalled: {ans}"
+
+
+def test_p0_7k_fix1_memory_challenge_ban_khong_nho_goal():
+    sr = _make_sr()
+    sr.handle_turn("tôi sẽ làm LLM và Agent AI")
+    sr.handle_turn("tôi sẽ làm blogger")
+    ans = (sr.handle_turn("bạn không nhớ tôi sẽ làm LLM và Agent AI à?").final_answer or "").lower()
+    assert "rule-based mvp" not in ans, f"memory challenge fell to fallback: {ans}"
+    assert "llm" in ans and ("agent ai" in ans or "ai agent" in ans), f"challenge did not confirm: {ans}"
+
+
+def test_p0_7k_fix1_goal_followup_va_gi_nua():
+    sr = _make_sr()
+    sr.handle_turn("tôi sẽ làm LLM và Agent AI")
+    sr.handle_turn("tôi sẽ làm blogger")
+    sr.handle_turn("tôi sẽ làm dự án AI Agent coder")
+    sr.handle_turn("tôi sẽ làm gì?")
+    ans = (sr.handle_turn("và gì nữa?").final_answer or "").lower()
+    assert "rule-based mvp" not in ans, f"follow-up fell to fallback: {ans}"
+    # Bare follow-up without a prior goal query must NOT fire.
+    sr2 = _make_sr()
+    fallback = (sr2.handle_turn("và gì nữa?").final_answer or "").lower()
+    assert "mình đang nhớ bạn muốn" not in fallback, f"follow-up fired without context: {fallback}"
+
+
+def test_p0_7k_fix1_low_confidence_ban_ai_asks_clarification_no_write():
+    sr = _make_sr()
+    ans = (sr.handle_turn("bạn ái của tôi là quý").final_answer or "").lower()
+    assert "bạn gái" in ans and ("phải không" in ans or "muốn nói" in ans), f"no clarification: {ans}"
+    summary = (sr.handle_turn("bạn biết gì về tôi?").final_answer or "").lower()
+    assert "quý" not in summary, f"typo wrote relationship memory: {summary}"
+
+
+def test_p0_7k_fix1_ranking_query_safe_no_memory_write():
+    sr = _make_sr()
+    ans = (sr.handle_turn("tôi thích gì nhất?").final_answer or "").lower()
+    assert "đã nhớ" not in ans, f"ranking query wrote memory: {ans}"
+    assert "nhất" in ans or "chưa đủ" in ans, f"ranking query not answered safely: {ans}"
+
+
+def test_p0_7k_fix1_manual_spec_contains_guardrails_goal_semantics():
+    import pathlib
+    spec_path = pathlib.Path(__file__).parent / "manual" / "CONV_P0_MEMORY_CORE_MANUAL_REGRESSION_SPEC.md"
+    text = spec_path.read_text(encoding="utf-8").lower()
+    required = [
+        "p0-7k-fix1",
+        "tôi thích gì nhata",
+        "bây giờ tôi thích bơi rồi",
+        "tôi không biết bơi",
+        "mục tiêu chính của tôi là x",
+        "tôi có làm ai không",
+        "bạn không nhớ tôi sẽ làm llm và agent ai à",
+        "bạn ái của tôi là quý",
+        "needs_fix",
+    ]
+    missing = [tok for tok in required if tok not in text]
+    assert not missing, f"Manual spec missing FIX1 tokens: {missing}"

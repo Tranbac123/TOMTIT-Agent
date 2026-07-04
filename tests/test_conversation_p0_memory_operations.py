@@ -200,3 +200,85 @@ def test_p0_7j_fix1_parse_goal_no_accent_query():
         query = detect_profile_query(text)
         assert query is not None, f"no query detected from {text!r}"
         assert query.kind == "self_current_goal", f"wrong kind for {text!r}: {query.kind}"
+
+
+# ---------------------------------------------------------------------------
+# P0-7K-FIX1 unit tests
+# ---------------------------------------------------------------------------
+
+def test_p0_7k_fix1_detects_query_write_guard_markers():
+    from agent_core.conversation.profile_semantics import _value_is_query_polluted
+    assert _value_is_query_polluted("gì nhata")
+    assert _value_is_query_polluted("gì nhất")
+    assert _value_is_query_polluted("code hơn vẽ nhất")
+    # Valid preference values are not blocked.
+    assert not _value_is_query_polluted("ăn cay")
+    assert not _value_is_query_polluted("cafe không đường")
+    assert not _value_is_query_polluted("AI")
+
+
+def test_p0_7k_fix1_semantic_extractor_does_not_emit_add_for_question():
+    from agent_core.conversation.profile_semantics import classify_profile_semantic_intent
+    # A query phrase must never classify as a preference write.
+    intent = classify_profile_semantic_intent("tôi thích gì nhất")
+    if intent is not None:
+        assert not (intent.kind == "profile_write" and intent.category
+                    and intent.category.startswith("preference")), intent
+
+
+def test_p0_7k_fix1_parse_current_state_preference_update():
+    op = parse_memory_operation("bây giờ tôi thích bơi rồi")
+    assert op is not None
+    assert (op.op, op.domain, op.polarity) == ("UPDATE_CURRENT", "preference", "positive")
+    assert op.value == "bơi"
+
+
+def test_p0_7k_fix1_parse_negative_skill():
+    from agent_core.conversation.profile_semantics import classify_profile_semantic_intent
+    intent = classify_profile_semantic_intent("tôi không biết bơi")
+    assert intent is not None
+    assert intent.category == "negative_skill"
+    assert intent.value == "bơi"
+
+
+def test_p0_7k_fix1_parse_goal_multiset():
+    # "tôi sẽ làm AI" parses as a goal ADD (uppercase AI is not a question word).
+    op = parse_memory_operation("tôi sẽ làm AI")
+    assert op is not None
+    assert (op.op, op.domain) == ("ADD", "goal")
+    assert op.value == "làm AI"
+    assert op.canonical_key == "ai"
+    # Goal focus keeps other goals (UPDATE_CURRENT).
+    focus = parse_memory_operation("mục tiêu chính của tôi là AI Agent")
+    assert focus is not None
+    assert (focus.op, focus.domain) == ("UPDATE_CURRENT", "goal")
+    # Replace-all is a SWITCH with the wildcard key.
+    only = parse_memory_operation("tôi chỉ làm blogger thôi")
+    assert only is not None
+    assert (only.op, only.domain, only.canonical_key) == ("SWITCH", "goal", "*")
+
+
+def test_p0_7k_fix1_goal_taxonomy_ai_matcher():
+    from agent_core.conversation.profile_memory import _value_relates_to_ai
+    assert _value_relates_to_ai("làm LLM")
+    assert _value_relates_to_ai("Agent AI")
+    assert _value_relates_to_ai("AI Agent coder")
+    assert _value_relates_to_ai("machine learning")
+    assert not _value_relates_to_ai("blogger")
+    assert not _value_relates_to_ai("nấu ăn")
+
+
+def test_p0_7k_fix1_memory_challenge_detector():
+    from agent_core.conversation.profile_memory import detect_profile_query
+    query = detect_profile_query("bạn không nhớ tôi sẽ làm LLM và Agent AI à?")
+    assert query is not None
+    assert query.kind == "goal_challenge"
+    assert "llm" in (query.value or "").lower()
+
+
+def test_p0_7k_fix1_followup_goal_context_detector():
+    from agent_core.conversation.profile_memory import detect_profile_query
+    for text in ["và gì nữa?", "còn gì nữa?", "ngoài ra còn gì?"]:
+        query = detect_profile_query(text)
+        assert query is not None, f"no query for {text!r}"
+        assert query.kind == "goal_followup", f"wrong kind for {text!r}: {query.kind}"

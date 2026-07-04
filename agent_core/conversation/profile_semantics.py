@@ -122,6 +122,36 @@ def _strip_discourse_marker(value: str) -> str:
     return " ".join(tokens).strip()
 
 
+# P0-7K-FIX1 A/J: query/ranking markers that must never be written as a memory value.
+# A value that STARTS with a bare question word or CONTAINS a ranking marker is a
+# malformed query ("tôi thích gì nhata" → "gì nhata"), not a fact — block the write.
+_QUERY_LEADING_WORDS: frozenset[str] = frozenset({
+    "gì", "gi", "ai", "nào", "sao", "đâu",
+})
+_RANKING_MARKERS: frozenset[str] = frozenset({
+    "nhất", "nhat", "nhata", "nhứt",
+})
+
+
+def _value_is_query_polluted(value: str) -> bool:
+    """True if value looks like a query/ranking phrase, not a storable fact.
+
+    Guards every write path: a value whose FIRST token is a bare question word, or that
+    contains a ranking marker token, is a misclassified query and must not be saved.
+    """
+    tokens = re.sub(r"\s+", " ", value.strip()).lower().split()
+    if not tokens:
+        return True
+    # Case-sensitive-ish: bare lowercase "ai" is the question word, but "AI" (tech token)
+    # is caught separately by callers; here we operate on the lowered copy, so only block
+    # a leading question word when the ORIGINAL first token is not an uppercase tech token.
+    first = tokens[0]
+    orig_first = re.sub(r"\s+", " ", value.strip()).split()[0]
+    if first in _QUERY_LEADING_WORDS and not (first == "ai" and orig_first.isupper()):
+        return True
+    return any(t in _RANKING_MARKERS for t in tokens)
+
+
 def strip_additive_target_marker(value: str) -> str:
     """Strip leading additive markers + trailing discourse markers from a target.
 
@@ -348,6 +378,11 @@ _RE_YESNO_PREF_BARE = re.compile(
     r'^(?:tôi|mình)\s+có\s+thích\s+(.+?)\s*[.!]*\s*$',
     re.IGNORECASE | re.DOTALL,
 )
+# P0-7K-FIX1 C: negative skill — "tôi không biết bơi", "mình không biết nấu ăn".
+_RE_NEGATIVE_SKILL = re.compile(
+    r'^(?:tôi|mình)\s+không\s+biết\s+(?:làm\s+)?(.+)$',
+    re.IGNORECASE | re.DOTALL,
+)
 # P0-7F-FIX3 Part C: affection explanation ("tôi thích quý có nghĩa là ...",
 # "tôi thích quý đơn phương", "tôi thích quý nhưng chúng tôi chưa là người yêu").
 # The person target is group(1); everything after is an explanation, never a hobby value.
@@ -482,6 +517,22 @@ def classify_profile_semantic_intent(text: str) -> SemanticProfileIntent | None:
             sensitivity="safe", write_policy="clarify",
         )
 
+    # P0-7K-FIX1 C: negative skill ("tôi không biết bơi") — durable negative ability.
+    # Checked before negative-desire so "không biết X" is not mistaken for a desire.
+    m = _RE_NEGATIVE_SKILL.match(stripped)
+    if m:
+        value = _clean_value(m.group(1))
+        if (
+            value
+            and not _is_interrogative_value(value)
+            and not _value_is_query_polluted(value)
+            and not _is_unsafe_or_sensitive_auto_value(value)
+        ):
+            return SemanticProfileIntent(
+                kind="profile_write", category="negative_skill",
+                value=value, write_policy="auto_safe",
+            )
+
     # P0-7G: short-term negative desire ("tôi không muốn đi học") — clarify, never saved.
     m = _RE_NEGATIVE_DESIRE.match(stripped)
     if m:
@@ -500,7 +551,7 @@ def classify_profile_semantic_intent(text: str) -> SemanticProfileIntent | None:
         # P0-7J: "tôi không thích X nữa" means "no longer" — "nữa" is never part of the
         # value, so "quý nữa" cannot leak into memory as a stored object.
         value = re.sub(r'\s+nữa$', '', value, flags=re.IGNORECASE)
-        if value and not _is_interrogative_value(value):
+        if value and not _is_interrogative_value(value) and not _value_is_query_polluted(value):
             if _is_person_affinity_value(value):
                 return SemanticProfileIntent(
                     kind="profile_write", category="negation_no_affection", value=None,
@@ -656,6 +707,9 @@ def classify_profile_semantic_intent(text: str) -> SemanticProfileIntent | None:
         if not _valid_value(value):
             return None
         if _is_interrogative_value(value):
+            return None
+        # P0-7K-FIX1 A/J: never save a query/ranking phrase ("gì nhata", "gì nhất").
+        if _value_is_query_polluted(value):
             return None
         if _is_unsafe_or_sensitive_auto_value(value):
             return SemanticProfileIntent(

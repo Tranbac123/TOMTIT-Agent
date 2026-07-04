@@ -57,6 +57,8 @@ class AutoProfileCandidate:
         "household_pet",
         # P0-7G: durable negative preference ("tôi không thích ăn cá")
         "negative_preference",
+        # P0-7K-FIX1: negative skill ("tôi không biết bơi"), goal focus ("mục tiêu chính")
+        "negative_skill", "goal_focus",
     ] = "occupation"
     value: str = ""
     original_text: str = ""
@@ -119,6 +121,8 @@ class ProfileQuery:
         "self_current_goal", "old_name_confirm",
         # P0-7J-FIX1
         "self_do_yesno",
+        # P0-7K-FIX1
+        "self_preference_ranking", "self_ai_yesno", "goal_challenge", "goal_followup",
     ]
     value: str | None = None          # for inverse_value: the name to look up
     relation_label: str | None = None  # for relation_name / relation_existence
@@ -607,6 +611,34 @@ _RE_SELF_DO_YESNO_Q = re.compile(
 # P0-7J: old-name confirmation — "Bắc là tên cũ của tôi, bạn còn nhớ không?"
 _RE_OLD_NAME_CONFIRM_Q = re.compile(
     r'^(.+?)\s+là\s+tên\s+(?:cũ|trước\s+đây)\s+của\s+(?:tôi|mình)\b',
+    re.IGNORECASE,
+)
+
+# P0-7K-FIX1 J: preference ranking query — "tôi thích gì nhất", "tôi thích gì nhata"
+# (with or without "?"). Answered safely (no ranking engine), never written as a fact.
+_RE_PREF_RANKING_Q = re.compile(
+    r'^(?:tôi|mình)\s+thích\s+(?:cái\s+)?g[ìi]\s+(?:\S.*)$',
+    re.IGNORECASE,
+)
+
+# P0-7K-FIX1 E: self AI-domain yes/no — "tôi có làm AI không?". Answered via the
+# lightweight AI taxonomy against active goals/occupations.
+_RE_SELF_AI_YESNO_Q = re.compile(
+    r'^(?:tôi|mình)\s+có\s+(?:còn\s+)?(?:muốn\s+)?(?:làm|build)\s+'
+    r'ai\s+(?:không|ko|hông|hong)\s*[?？]?\s*$',
+    re.IGNORECASE,
+)
+
+# P0-7K-FIX1 G: memory-challenge / reminder — "bạn không nhớ tôi sẽ làm X à?".
+_RE_GOAL_CHALLENGE_Q = re.compile(
+    r'^bạn\s+không\s+nhớ\s+(?:là\s+)?(?:tôi|mình)\s+(?:sẽ|se|muốn|định)\s+'
+    r'(?:làm|build)\s+(.+?)\s*(?:à|ư|hả|sao)?\s*[?？]*\s*$',
+    re.IGNORECASE,
+)
+
+# P0-7K-FIX1 H: goal follow-up — "và gì nữa?", "còn gì nữa?", "ngoài ra còn gì?".
+_RE_GOAL_FOLLOWUP_Q = re.compile(
+    r'^(?:và|còn|ngoài\s+ra\s+còn|thế\s+còn)\s+(?:gì|cái\s+gì)(?:\s+(?:nữa|khác))?\s*[?？]*\s*$',
     re.IGNORECASE,
 )
 
@@ -1131,12 +1163,29 @@ def detect_profile_query(text: str) -> ProfileQuery | None:
         if value:
             return ProfileQuery(kind="self_occupation_yesno", value=value)
 
+    # 6c'. P0-7K-FIX1 E: self AI-domain yes/no ("tôi có làm AI không?") — before the
+    #      generic do/yes-no so "AI" is answered via the taxonomy, not literal token match.
+    if _RE_SELF_AI_YESNO_Q.match(stripped):
+        return ProfileQuery(kind="self_ai_yesno", value="AI")
+
     # 6c. P0-7J-FIX1: self do/goal yes-no ("tôi có làm LLM nữa không?").
     m = _RE_SELF_DO_YESNO_Q.match(stripped)
     if m:
         value = re.sub(r"\s+", " ", m.group(1).strip().rstrip("?？")).strip()
         if value:
             return ProfileQuery(kind="self_do_yesno", value=value)
+
+    # 6d. P0-7K-FIX1 G: memory-challenge / reminder ("bạn không nhớ tôi sẽ làm X à?").
+    m = _RE_GOAL_CHALLENGE_Q.match(stripped)
+    if m:
+        value = re.sub(r"\s+", " ", m.group(1).strip().rstrip("?？àưhả ")).strip()
+        if value:
+            return ProfileQuery(kind="goal_challenge", value=value)
+
+    # 6e. P0-7K-FIX1 H: goal follow-up ("và gì nữa?"). Runtime gates this on a recent
+    #     goal query so it only fires as an immediate follow-up.
+    if _RE_GOAL_FOLLOWUP_Q.match(stripped):
+        return ProfileQuery(kind="goal_followup")
 
     # 7. P0-7F-FIX2: affection query ("tôi thích ai?") — before general preference query.
     #    P0-7F-FIX5 Part D adds the "người tôi thích là ai?" alias to the same lane.
@@ -1146,6 +1195,12 @@ def detect_profile_query(text: str) -> ProfileQuery | None:
     # 7b. P0-7F-FIX2: drink/food preference query ("tôi thích uống gì?")
     if _RE_DRINK_PREF_Q.match(stripped):
         return ProfileQuery(kind="self_drink_preference")
+
+    # 7b0. P0-7K-FIX1 J: preference ranking query ("tôi thích gì nhất", "tôi thích gì nhata")
+    #      — checked before the plain "tôi thích gì" preference query; answered safely, and
+    #      critically prevents "gì nhất"/"gì nhata" from being written as a preference.
+    if _RE_PREF_RANKING_Q.match(stripped):
+        return ProfileQuery(kind="self_preference_ranking")
 
     # 7b'. P0-7G-FIX3: negative-preference query ("tôi không thích gì?") — before the
     #      positive preference query so "không thích gì" is never read as "thích gì".
@@ -1522,6 +1577,13 @@ def build_negative_preference_ack(value: str) -> str:
     )
 
 
+def build_negative_skill_ack(value: str) -> str:
+    """P0-7K-FIX1: ack after saving a negative skill ("tôi không biết bơi")."""
+    return (
+        f"Đã nhớ là bạn không biết {value}. Mình sẽ không xếp đây là kỹ năng bạn có."
+    )
+
+
 def build_negative_desire_response(value: str) -> str:
     """Clarify (no-save) for a short-term negative desire ("tôi không muốn đi học")."""
     return (
@@ -1607,8 +1669,12 @@ def answer_yes_no_memory_query(
         return f"Mình chưa thấy thông tin rằng bạn thích {value}."
 
     if category == "skill":
+        negative_skills = [_norm_cmp(v) for v in snap.negative_skills]
         if target in skills:
             return f"Đúng, mình đang nhớ bạn biết {value}."
+        # P0-7K-FIX1: known negative skill ("tôi không biết bơi").
+        if target in negative_skills:
+            return f"Không, bạn từng nói là không biết {value}."
         if target in prefs:
             return (
                 f'Mình đang nhớ bạn thích {value}, nhưng chưa lưu là bạn biết "{value}".'
@@ -1712,6 +1778,8 @@ def save_auto_profile_fact(
         "skill": f"bạn biết {candidate.value}",
         "household_pet": f"nhà bạn có nuôi {candidate.value}",
         "negative_preference": f"bạn không thích {candidate.value}",
+        "negative_skill": f"bạn không biết {candidate.value}",
+        "goal_focus": f"mục tiêu chính của bạn là {candidate.value}",
     }
     content = _content_map.get(candidate.relation, f"{candidate.relation}: {candidate.value}")
 
@@ -2038,6 +2106,51 @@ def build_occupation_removal_ack(value: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# P0-7K-FIX1 I: low-confidence relationship typo — clarify, never write
+# ---------------------------------------------------------------------------
+
+# Bounded near-miss map for relationship labels (NOT a full typo engine). Each maps a
+# common mistype to its intended label; only these exact near-misses trigger a
+# clarification instead of a memory write.
+_RELATION_TYPO_MAP: dict[str, str] = {
+    "bạn ái": "bạn gái",
+    "bặn gái": "bạn gái",
+    "bạn gaí": "bạn gái",
+    "bạn traí": "bạn trai",
+    "ngừoi yêu": "người yêu",
+    "ngươi yêu": "người yêu",
+}
+_RE_RELATION_TYPO = re.compile(
+    r'^(\S+\s+\S+|\S+)\s+(?:của\s+)?(?:tôi|mình)\s+(?:tên\s+)?là\s+([^\s.!?,]+)\s*[.!?]*\s*$',
+    re.IGNORECASE,
+)
+
+
+def detect_relationship_typo(text: str) -> tuple[str, str, str] | None:
+    """Return (raw_label, corrected_label, name) for a near-miss relationship typo, else None.
+
+    Only fires for a bounded set of common mistypes ("bạn ái" → "bạn gái"), so a genuine
+    unknown phrase still falls through to the normal router. The caller asks for
+    confirmation and does NOT write memory (fail-safe).
+    """
+    m = _RE_RELATION_TYPO.match(text.strip())
+    if not m:
+        return None
+    raw_label = re.sub(r"\s+", " ", m.group(1).strip().lower())
+    corrected = _RELATION_TYPO_MAP.get(raw_label)
+    if not corrected:
+        return None
+    name = re.sub(r"\s+", " ", m.group(2).strip()).strip()
+    if not name:
+        return None
+    return raw_label, corrected, name
+
+
+def build_relationship_typo_clarification(corrected_label: str, name: str) -> str:
+    return f"Bạn muốn nói \"{corrected_label} của tôi là {name}\" phải không?"
+
+
+# ---------------------------------------------------------------------------
 # P0-7I: preference conflict resolution (positive vs negative)
 # ---------------------------------------------------------------------------
 
@@ -2089,6 +2202,30 @@ def resolve_preference_conflicts(
     for rec in _find_conflicting_preference_records(value, store):
         if rec.metadata.get("relation") == opposite:
             store.delete(rec.id, reason="preference_conflict_resolved")
+
+
+def resolve_skill_conflicts(
+    value: str, new_relation: str, store: "MemoryStoreProtocol"
+) -> None:
+    """P0-7K-FIX1: delete stored skill records of the OPPOSITE polarity for value.
+
+    "biết X" then "không biết X" → the negative wins (positive removed), and vice
+    versa. Matching is exact-normalized (conservative, no fuzzy typo matching).
+    """
+    opposite = "negative_skill" if new_relation == "skill" else "skill"
+    target = _norm_cmp(value)
+    records = list(store.search(MemoryQuery(
+        text="", types=[MemoryType.FACT], tags=["user_profile"], limit=200,
+    )))
+    for rec in records:
+        md = rec.metadata
+        if not (md.get("confirmed") and md.get("profile_schema") in (
+            "user_profile_fact_v1", "user_profile_fact_v2"
+        )):
+            continue
+        if md.get("subject") == "self" and md.get("relation") == opposite:
+            if _norm_cmp(md.get("value", "")) == target:
+                store.delete(rec.id, reason="skill_conflict_resolved")
 
 
 # ---------------------------------------------------------------------------
@@ -2149,10 +2286,45 @@ class ProfileSnapshot:
     external_affections: list[str] = field(default_factory=list)  # people who like the user
     # P0-7J: names the user held before the current one (oldest-first, current excluded)
     previous_names: list[str] = field(default_factory=list)
+    # P0-7K-FIX1: abilities the user has said they do NOT have ("tôi không biết bơi")
+    negative_skills: list[str] = field(default_factory=list)
+    # P0-7K-FIX1: the user's stated main goal focus ("mục tiêu chính của tôi là X")
+    current_focus: str | None = None
 
 
 def _norm_cmp(value: str) -> str:
     return re.sub(r"\s+", " ", value.strip().lower())
+
+
+# P0-7K-FIX1 E: lightweight AI taxonomy — terms that count as "AI" for goal yes/no.
+# Bounded allowlist, NOT a full ontology. Matched as substrings on the normalized value.
+_AI_TAXONOMY_TERMS: tuple[str, ...] = (
+    "ai", "llm", "slm", "agent ai", "ai agent", "ai agent coder",
+    "machine learning", "ml", "deep learning", "học máy", "học sâu",
+)
+
+
+def _value_relates_to_ai(value: str) -> bool:
+    """True if value names an AI-related goal/skill (lightweight taxonomy match)."""
+    v = _norm_cmp(value)
+    if not v:
+        return False
+    tokens = set(v.split())
+    if "ai" in tokens or "ml" in tokens or "llm" in tokens or "slm" in tokens:
+        return True
+    return any(term in v for term in _AI_TAXONOMY_TERMS if " " in term)
+
+
+_GOAL_STOPWORDS: frozenset[str] = frozenset({
+    "làm", "build", "dự", "án", "và", "cả", "xây", "dựng", "muốn", "sẽ", "định",
+})
+
+
+def _goal_challenge_terms(value: str) -> frozenset[str]:
+    """Content tokens of a goal value, for challenge-query matching (verbs dropped)."""
+    return frozenset(
+        t for t in _norm_cmp(value).split() if t not in _GOAL_STOPWORDS
+    )
 
 
 def _positive_preference_terms(value: str) -> frozenset[str]:
@@ -2256,9 +2428,15 @@ def collect_profile_snapshot(store: "MemoryStoreProtocol") -> ProfileSnapshot:
             _add(snap.occupation, val)
         elif subject == "self" and rel == "skill":
             _add(snap.skills, val)
+        elif subject == "self" and rel == "negative_skill":
+            _add(snap.negative_skills, val)
         elif subject == "self" and rel == "learning_focus":
             _add(snap.learning, val)
         elif subject == "self" and rel == "goal":
+            _add(snap.goals, val)
+        elif subject == "self" and rel == "goal_focus":
+            # P0-7K-FIX1: latest focus wins; also recorded as an active goal.
+            snap.current_focus = val
             _add(snap.goals, val)
         elif subject == "self" and rel == "preference":
             if _is_polluted_preference(val):
@@ -2279,6 +2457,16 @@ def collect_profile_snapshot(store: "MemoryStoreProtocol") -> ProfileSnapshot:
     if snap.name:
         current = _norm_cmp(snap.name)
         snap.previous_names = [n for n in snap.previous_names if _norm_cmp(n) != current]
+    # P0-7K-FIX1: a negated skill is never a known skill (read-time safety in addition to
+    # write-time supersede).
+    if snap.negative_skills:
+        neg = {_norm_cmp(s) for s in snap.negative_skills}
+        snap.skills = [s for s in snap.skills if _norm_cmp(s) not in neg]
+    # P0-7K-FIX1: if the current focus was later removed as a goal, drop the stale focus.
+    if snap.current_focus and _norm_cmp(snap.current_focus) not in {
+        _norm_cmp(g) for g in snap.goals
+    }:
+        snap.current_focus = None
     return snap
 
 
@@ -2474,6 +2662,58 @@ def answer_profile_query(
             return f"Có, mình đang nhớ bạn là {query.value}."
         return f"Không, hiện mình không có thông tin bạn là {query.value}."
 
+    # --- P0-7K-FIX1 J: self_preference_ranking ("tôi thích gì nhất") — safe, no ranking ---
+    elif query.kind == "self_preference_ranking":
+        snap = collect_profile_snapshot(store)
+        likes = snap.preferences_personal + snap.preferences_professional
+        if likes:
+            return (
+                "Mình chưa đủ thông tin để biết bạn thích gì NHẤT, nhưng mình đang nhớ "
+                "bạn thích: " + ", ".join(likes) + "."
+            )
+        return "Mình chưa đủ thông tin để biết bạn thích gì nhất."
+
+    # --- P0-7K-FIX1 E: self_ai_yesno ("tôi có làm AI không?") — via AI taxonomy ---
+    elif query.kind == "self_ai_yesno":
+        snap = collect_profile_snapshot(store)
+        ai_goals = [g for g in snap.goals if _value_relates_to_ai(g)]
+        ai_occ = [o for o in snap.occupation if _value_relates_to_ai(o)]
+        related = ai_goals + ai_occ
+        if related:
+            return (
+                "Có, vì bạn có mục tiêu/công việc liên quan đến AI: "
+                + ", ".join(related) + "."
+            )
+        return "Không, hiện mình chưa thấy bạn có mục tiêu hay công việc liên quan đến AI."
+
+    # --- P0-7K-FIX1 G: goal_challenge ("bạn không nhớ tôi sẽ làm X à?") ---
+    elif query.kind == "goal_challenge":
+        snap = collect_profile_snapshot(store)
+        target_terms = _goal_challenge_terms(query.value or "")
+        matched = [
+            g for g in snap.goals
+            if target_terms & _goal_challenge_terms(g)
+        ]
+        if matched:
+            others = [g for g in snap.goals if g not in matched]
+            reply = "Có, mình đang nhớ bạn muốn " + ", ".join(matched) + "."
+            if others:
+                reply += " Mình cũng đang nhớ bạn muốn " + ", ".join(others) + "."
+            return reply
+        if snap.goals:
+            return (
+                f"Mình chưa thấy mục tiêu {query.value} trong hồ sơ, nhưng mình đang nhớ "
+                "bạn muốn " + ", ".join(snap.goals) + "."
+            )
+        return f"Mình chưa lưu mục tiêu nào về {query.value}."
+
+    # --- P0-7K-FIX1 H: goal_followup ("và gì nữa?") — runtime supplies remaining goals ---
+    elif query.kind == "goal_followup":
+        snap = collect_profile_snapshot(store)
+        if snap.goals:
+            return "Mình đang nhớ bạn muốn " + ", ".join(snap.goals) + "."
+        return "Hiện mình không nhớ thêm mục tiêu nào khác của bạn."
+
     # --- P0-7D/7F: self_preference — aggregate ALL preferences (personal + professional) ---
     elif query.kind == "self_preference":
         snap = collect_profile_snapshot(store)
@@ -2515,14 +2755,20 @@ def answer_profile_query(
                 return f"Mục tiêu của bạn là {val}."
         return "Tôi chưa có thông tin về mục tiêu của bạn."
 
-    # --- P0-7J: self_current_goal ("tôi đang muốn làm gì?") ---
-    # P0-7J-FIX1: goal memory is current-state at WRITE time (supersede-on-write), so
-    # every stored goal here is active — list all of them (covers additive goals).
+    # --- P0-7J / P0-7K-FIX1: self_current_goal ("tôi đang muốn làm gì?") ---
+    # P0-7K-FIX1: goal memory is an active MULTI-goal set — list all active goals.
+    # If a current focus is set, mention it first while still listing the rest.
     elif query.kind == "self_current_goal":
         snap = collect_profile_snapshot(store)
-        if snap.goals:
-            return "Mình đang nhớ bạn đang muốn " + ", ".join(snap.goals) + "."
-        return "Mình chưa có thông tin về dự định hiện tại của bạn."
+        if not snap.goals:
+            return "Mình chưa có thông tin về dự định hiện tại của bạn."
+        if snap.current_focus:
+            others = [g for g in snap.goals if _norm_cmp(g) != _norm_cmp(snap.current_focus)]
+            reply = f"Mục tiêu chính hiện tại của bạn là {snap.current_focus}."
+            if others:
+                reply += " Bạn cũng đang muốn làm " + ", ".join(others) + "."
+            return reply
+        return "Mình đang nhớ bạn đang muốn " + ", ".join(snap.goals) + "."
 
     # --- P0-7J-FIX1: self_do_yesno ("tôi có làm LLM nữa không?") ---
     elif query.kind == "self_do_yesno":
