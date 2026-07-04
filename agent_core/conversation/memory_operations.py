@@ -36,7 +36,10 @@ from agent_core.conversation.profile_memory import (
     save_auto_profile_fact,
     save_relation_update,
 )
-from agent_core.conversation.profile_semantics import _has_professional_token
+from agent_core.conversation.profile_semantics import (
+    _has_professional_token,
+    strip_additive_target_marker,
+)
 from agent_core.memory.memory_records import MemoryQuery
 from agent_core.state.enums import MemoryType
 
@@ -100,9 +103,21 @@ class MemoryOperationOutcome:
 # Trailing Vietnamese discourse particles that never belong in a stored value.
 _TERMINAL_DISCOURSE_MARKERS: frozenset[str] = frozenset({"mà", "đó", "nhé", "nha"})
 
-# Leading current-state update markers ("bây giờ người yêu của tôi là quý").
+# Current-state update markers ("bây giờ người yêu của tôi là quý"). P0-7J-FIX1 adds
+# no-diacritic/typo variants (bay giờ / hien tai / tu nay / gio) and inline positions
+# ("người yêu bây giờ của tôi là X", "người yêu của tôi bây giờ là X").
+_TEMPORAL_MARKER_CORE = (
+    r'(?:(?:bây|bay)\s+(?:giờ|gio)'
+    r'|(?:hiện|hien)\s+(?:tại|tai)'
+    r'|(?:từ|tu)\s+(?:nay|giờ|gio)'
+    r'|(?:giờ|gio)(?:\s+thì)?)'
+)
 _RE_TEMPORAL_MARKER = re.compile(
-    r'^(?:bây\s+giờ|hiện\s+tại|từ\s+nay|từ\s+giờ|giờ(?:\s+thì)?)\s*,?\s+',
+    r'^' + _TEMPORAL_MARKER_CORE + r'\s*,?\s+',
+    re.IGNORECASE,
+)
+_RE_INLINE_TEMPORAL_MARKER = re.compile(
+    r'\s+' + _TEMPORAL_MARKER_CORE + r'(?=\s)',
     re.IGNORECASE,
 )
 
@@ -146,6 +161,32 @@ def _goal_conflict_key(value: str) -> str:
     return key
 
 
+def _goal_keys_match(stored_key: str, query_key: str) -> bool:
+    """Token-containment goal matching: "llm" negates the stored goal "ai llm".
+
+    Either key's token set may contain the other's — bounded to the goal domain, so a
+    partial mention ("không làm LLM nữa") still resolves the fuller stored goal.
+    """
+    stored_tokens = set(stored_key.split())
+    query_tokens = set(query_key.split())
+    if not stored_tokens or not query_tokens:
+        return False
+    return stored_tokens <= query_tokens or query_tokens <= stored_tokens
+
+
+# P0-7J-FIX1: additive markers that make a goal write ADD alongside existing goals
+# instead of superseding them ("tôi còn muốn làm AI Agent"). "không còn" is negation,
+# not additive, hence the fixed-width lookbehind.
+_RE_ADDITIVE_GOAL_MARKER = re.compile(
+    r'(?:ngoài\s+ra|\bcũng\b|\bthêm\b|(?<!không)\s+còn\s+)',
+    re.IGNORECASE,
+)
+
+
+def _has_additive_goal_marker(text: str) -> bool:
+    return bool(_RE_ADDITIVE_GOAL_MARKER.search(" " + re.sub(r"\s+", " ", text.strip()) + " "))
+
+
 # ---------------------------------------------------------------------------
 # Parser (DomainParser) — text in, MemoryOperation out; never touches the store
 # ---------------------------------------------------------------------------
@@ -179,6 +220,20 @@ _RE_OP_REL_ASSERT = re.compile(
 # Future intent: "tôi sẽ build AI model LLM" — goal ADD (professional-token gated).
 _RE_OP_GOAL_WILL = re.compile(
     r'^(?:tôi|mình)\s+sẽ\s+(.+?)\s*[.!]*\s*$',
+    re.IGNORECASE | re.DOTALL,
+)
+# P0-7J-FIX1 goal negation. The "sẽ không" form is an explicit future negation (gets a
+# deterministic no-op reply even when nothing is stored); the "không muốn làm/build"
+# form falls through when nothing matches so the P0-7G negative-desire clarify keeps
+# owning non-goal desires ("tôi không muốn đi học").
+_RE_OP_GOAL_NEGATE_SE = re.compile(
+    r'^(?:tôi|mình)\s+(?:sẽ|se)\s+không\s+(?:còn\s+)?(?:làm|build)\s+'
+    r'(.+?)(?:\s+nữa)?\s*[.!]*\s*$',
+    re.IGNORECASE | re.DOTALL,
+)
+_RE_OP_GOAL_NEGATE_WANT = re.compile(
+    r'^(?:tôi|mình)\s+không\s+(?:còn\s+)?(?:muốn\s+(?:làm|build)|build)\s+'
+    r'(.+?)(?:\s+nữa)?\s*[.!]*\s*$',
     re.IGNORECASE | re.DOTALL,
 )
 
@@ -218,7 +273,23 @@ def parse_memory_operation(text: str) -> MemoryOperation | None:
                 raw_text=stripped,
             )
 
-    # 2. Occupation stop ("không làm X nữa", "không còn làm X", "nghỉ làm X").
+    # 2. P0-7J-FIX1: standalone goal negation ("tôi sẽ không làm LLM nữa",
+    #    "tôi không muốn build X nữa"). Never saved as a positive goal.
+    for pat, source in (
+        (_RE_OP_GOAL_NEGATE_SE, "goal_negation_se"),
+        (_RE_OP_GOAL_NEGATE_WANT, "user_explicit"),
+    ):
+        m = pat.match(stripped)
+        if m:
+            value = _clean_op_value(m.group(1))
+            if value and not _looks_interrogative(value):
+                return MemoryOperation(
+                    op="REMOVE", domain="goal", subject="self", value=value,
+                    canonical_key=_goal_conflict_key(value), polarity="negative",
+                    source=source, raw_text=stripped,
+                )
+
+    # 3. Occupation stop ("không làm X nữa", "không còn làm X", "nghỉ làm X").
     m = _RE_OP_OCC_REMOVE.match(stripped)
     if m:
         value = _clean_op_value(m.group(1))
@@ -229,7 +300,7 @@ def parse_memory_operation(text: str) -> MemoryOperation | None:
                 raw_text=stripped,
             )
 
-    # 3. Affection removal ("không thích/yêu/quan tâm X (nữa)"). The resolver applies
+    # 4. Affection removal ("không thích/yêu/quan tâm X (nữa)"). The resolver applies
     #    this only when X is an active affection; otherwise the turn falls through to
     #    the ordinary negative-preference path unchanged.
     m = _RE_OP_AFFECTION_REMOVE.match(stripped)
@@ -242,8 +313,15 @@ def parse_memory_operation(text: str) -> MemoryOperation | None:
                 raw_text=stripped,
             )
 
-    # 4. Relationship current-update ("bây giờ/hiện tại/từ nay người yêu của tôi là X").
+    # 5. Relationship current-update: leading marker ("bây giờ người yêu của tôi là X")
+    #    or inline marker ("người yêu bây giờ của tôi là X" / "... của tôi bây giờ là X").
+    #    P0-7J-FIX1 also accepts no-diacritic marker typos ("bay giờ", "hien tai").
     remainder, had_marker = strip_temporal_update_marker(stripped)
+    if not had_marker:
+        cleaned, n_subs = _RE_INLINE_TEMPORAL_MARKER.subn(" ", remainder, count=1)
+        if n_subs:
+            remainder = re.sub(r"\s+", " ", cleaned).strip()
+            had_marker = True
     if had_marker:
         m = _RE_OP_REL_ASSERT.match(remainder)
         if m:
@@ -256,7 +334,7 @@ def parse_memory_operation(text: str) -> MemoryOperation | None:
                     relation=label, raw_text=stripped,
                 )
 
-    # 5. Future intent ("tôi sẽ build X") — goal ADD, professional-token gated so
+    # 6. Future intent ("tôi sẽ build X") — goal ADD, professional-token gated so
     #    everyday plans ("tôi sẽ đi ngủ") keep flowing to the router.
     m = _RE_OP_GOAL_WILL.match(stripped)
     if m:
@@ -318,17 +396,34 @@ def delete_affection_fact(value: str, store: "MemoryStoreProtocol") -> str | Non
 
 
 def delete_goal_facts(conflict_key: str, store: "MemoryStoreProtocol") -> str | None:
-    """Delete goal records whose conflict key matches; return matched display value."""
+    """Delete goal records whose conflict key matches (token containment).
+
+    Returns the matched display value, or None. "llm" matches the stored goal
+    "làm AI LLM" so a partial negation still resolves the fuller goal (P0-7J-FIX1).
+    """
     matched: str | None = None
     for rec in _confirmed_profile_facts(store):
         md = rec.metadata
         if md.get("subject") != "self" or md.get("relation") != "goal":
             continue
         stored = md.get("value", "")
-        if stored and _goal_conflict_key(stored) == conflict_key:
+        if stored and _goal_keys_match(_goal_conflict_key(stored), conflict_key):
             store.delete(rec.id, reason="goal_superseded")
             matched = matched or stored
     return matched
+
+
+def resolve_goal_current_state(raw_text: str, store: "MemoryStoreProtocol") -> None:
+    """P0-7J-FIX1: goal memory is current-state by default — a new explicit goal
+    supersedes ALL previous goals unless the utterance carries an additive marker
+    (ngoài ra / còn / cũng / thêm), which keeps existing goals alongside the new one.
+    """
+    if _has_additive_goal_marker(raw_text):
+        return
+    for rec in _confirmed_profile_facts(store):
+        md = rec.metadata
+        if md.get("subject") == "self" and md.get("relation") == "goal":
+            store.delete(rec.id, reason="goal_superseded")
 
 
 # ---------------------------------------------------------------------------
@@ -363,6 +458,20 @@ def build_goal_switched_ack(new_value: str) -> str:
     )
 
 
+def build_goal_removed_ack(value: str) -> str:
+    return (
+        f"Đã ghi nhận: bạn không còn theo đuổi mục tiêu '{value}' nữa. "
+        "Mình đã bỏ mục tiêu này khỏi hồ sơ của bạn."
+    )
+
+
+def build_goal_negation_noop_response(value: str) -> str:
+    return (
+        f"Đã ghi nhận: bạn không làm {value} nữa. Hiện mình cũng không thấy "
+        f"mục tiêu hay công việc nào về {value} đang được lưu."
+    )
+
+
 # ---------------------------------------------------------------------------
 # Transaction — apply one validated operation against the store
 # ---------------------------------------------------------------------------
@@ -383,11 +492,37 @@ def apply_memory_operation(
 
     if op.op == "REMOVE" and op.domain == "occupation":
         removed = delete_occupation_fact(op.value, store)
-        if removed is None:
-            return None
-        return MemoryOperationOutcome(
-            build_occupation_stop_ack(removed), "conv:memop_occupation_removed"
-        )
+        if removed is not None:
+            return MemoryOperationOutcome(
+                build_occupation_stop_ack(removed), "conv:memop_occupation_removed"
+            )
+        # P0-7J-FIX1: "tôi không làm X nữa" may negate a GOAL rather than an occupation.
+        removed_goal = delete_goal_facts(_goal_conflict_key(op.value), store)
+        if removed_goal is not None:
+            return MemoryOperationOutcome(
+                build_goal_removed_ack(removed_goal), "conv:memop_goal_removed"
+            )
+        return None
+
+    if op.op == "REMOVE" and op.domain == "goal":
+        # P0-7J-FIX1: "tôi sẽ không làm X nữa" / "tôi không muốn build X nữa".
+        removed_goal = delete_goal_facts(op.canonical_key, store)
+        if removed_goal is not None:
+            return MemoryOperationOutcome(
+                build_goal_removed_ack(removed_goal), "conv:memop_goal_removed"
+            )
+        removed_occ = delete_occupation_fact(op.value, store)
+        if removed_occ is not None:
+            return MemoryOperationOutcome(
+                build_occupation_stop_ack(removed_occ), "conv:memop_occupation_removed"
+            )
+        # The explicit future-negation form gets an honest deterministic reply even
+        # when nothing matches; other forms fall through (negative-desire clarify).
+        if op.source == "goal_negation_se":
+            return MemoryOperationOutcome(
+                build_goal_negation_noop_response(op.value), "conv:memop_goal_negation_noop"
+            )
+        return None
 
     if op.op == "REMOVE" and op.domain == "affection":
         snap = collect_profile_snapshot(store)
@@ -415,6 +550,8 @@ def apply_memory_operation(
 
     if op.op == "SWITCH" and op.domain == "goal":
         delete_goal_facts(op.canonical_key, store)  # absent old goal is not an error
+        # P0-7J-FIX1: a switch names the new CURRENT goal — supersede remaining goals.
+        resolve_goal_current_state(op.raw_text, store)
         candidate = AutoProfileCandidate(
             subject="self", relation="goal", value=op.value, original_text=op.raw_text,
         )
@@ -425,6 +562,8 @@ def apply_memory_operation(
         )
 
     if op.op == "ADD" and op.domain == "goal":
+        # P0-7J-FIX1: goal memory is current-state — non-additive writes supersede.
+        resolve_goal_current_state(op.raw_text, store)
         candidate = AutoProfileCandidate(
             subject="self", relation="goal", value=op.value, original_text=op.raw_text,
         )

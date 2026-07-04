@@ -130,3 +130,73 @@ def test_validate_rejects_unsafe_value():
         canonical_key="mua cần sa",
     )
     assert not validate_memory_operation(op)
+
+
+# ---------------------------------------------------------------------------
+# P0-7J-FIX1 unit tests
+# ---------------------------------------------------------------------------
+
+def test_p0_7j_fix1_strip_additive_target_marker():
+    from agent_core.conversation.profile_semantics import strip_additive_target_marker
+    assert strip_additive_target_marker("cả may") == "may"
+    assert strip_additive_target_marker("cả may nữa") == "may"
+    assert strip_additive_target_marker("thêm quý nhé") == "quý"
+    assert strip_additive_target_marker("may") == "may"
+    # Never emptied.
+    assert strip_additive_target_marker("cả") == "cả"
+
+
+def test_p0_7j_fix1_parse_relationship_bay_gio_typo_marker():
+    op = parse_memory_operation("bay giờ người yêu của tôi là may")
+    assert op is not None
+    assert (op.op, op.domain) == ("UPDATE_CURRENT", "relationship")
+    assert op.relation == "người yêu"
+    assert op.value == "may"
+
+
+def test_p0_7j_fix1_parse_relationship_marker_inside_phrase():
+    for text in [
+        "người yêu bây giờ của tôi là may",
+        "người yêu của tôi bây giờ là may",
+    ]:
+        op = parse_memory_operation(text)
+        assert op is not None, f"no operation parsed from {text!r}"
+        assert (op.op, op.domain) == ("UPDATE_CURRENT", "relationship")
+        assert op.value == "may"
+
+
+def test_p0_7j_fix1_parse_goal_standalone_negation():
+    for text in [
+        "tôi sẽ không làm LLM nữa",
+        "tôi không muốn làm LLM nữa",
+        "tôi không muốn build LLM nữa",
+        "tôi không build LLM nữa",
+    ]:
+        op = parse_memory_operation(text)
+        assert op is not None, f"no operation parsed from {text!r}"
+        assert (op.op, op.domain) == ("REMOVE", "goal"), f"wrong op for {text!r}: {op}"
+        assert op.canonical_key == "llm", f"wrong key for {text!r}: {op.canonical_key}"
+    # Non-goal desires stay out of the kernel ("tôi không muốn đi học").
+    assert parse_memory_operation("tôi không muốn đi học") is None
+
+
+def test_p0_7j_fix1_parse_goal_yes_no_query():
+    from agent_core.conversation.profile_memory import detect_profile_query
+    for text in [
+        "tôi có làm LLM nữa không?",
+        "tôi có còn làm LLM không?",
+        "tôi có muốn làm LLM nữa không?",
+        "tôi có build LLM nữa không?",
+    ]:
+        query = detect_profile_query(text)
+        assert query is not None, f"no query detected from {text!r}"
+        assert query.kind == "self_do_yesno", f"wrong kind for {text!r}: {query.kind}"
+        assert query.value == "LLM", f"wrong value for {text!r}: {query.value}"
+
+
+def test_p0_7j_fix1_parse_goal_no_accent_query():
+    from agent_core.conversation.profile_memory import detect_profile_query
+    for text in ["tôi se làm gì?", "tôi se build gì?", "toi se lam gi?"]:
+        query = detect_profile_query(text)
+        assert query is not None, f"no query detected from {text!r}"
+        assert query.kind == "self_current_goal", f"wrong kind for {text!r}: {query.kind}"

@@ -107,14 +107,30 @@ _COMMON_OBJECT_TOKENS: frozenset[str] = frozenset({
 # P0-7I: trailing Vietnamese discourse particles that can follow an affection/person
 # target ("tôi thích quý mà"). Stripped only for the person-affinity check so the object
 # is recognized as "quý" (a person), not saved verbatim as an ordinary preference "quý mà".
-_DISCOURSE_MARKER_SUFFIXES: frozenset[str] = frozenset({"mà", "đó", "nhé"})
+_DISCOURSE_MARKER_SUFFIXES: frozenset[str] = frozenset({"mà", "đó", "nhé", "nha", "nữa"})
+
+# P0-7J-FIX1: leading additive markers that can precede an affection/person target
+# ("tôi thích cả may", "tôi thích thêm may"). Stripped for the person check so "may" is
+# recognized as a person; ordinary objects ("cả kem") stay ordinary preferences.
+_ADDITIVE_TARGET_PREFIXES: frozenset[str] = frozenset({"cả", "cũng", "còn", "thêm"})
 
 
 def _strip_discourse_marker(value: str) -> str:
     tokens = value.split()
-    if len(tokens) >= 2 and tokens[-1].lower() in _DISCOURSE_MARKER_SUFFIXES:
-        return " ".join(tokens[:-1]).strip()
-    return value
+    while len(tokens) >= 2 and tokens[-1].lower() in _DISCOURSE_MARKER_SUFFIXES:
+        tokens = tokens[:-1]
+    return " ".join(tokens).strip()
+
+
+def strip_additive_target_marker(value: str) -> str:
+    """Strip leading additive markers + trailing discourse markers from a target.
+
+    "cả may" → "may"; "cả may nữa" → "may"; "may" → "may". Never empties the value.
+    """
+    tokens = value.split()
+    while len(tokens) >= 2 and tokens[0].lower() in _ADDITIVE_TARGET_PREFIXES:
+        tokens = tokens[1:]
+    return _strip_discourse_marker(" ".join(tokens).strip())
 
 _VAGUE_VALUE_TOKENS: frozenset[str] = frozenset({
     "cái này", "cái đó", "cái kia", "việc này", "việc đó", "nó", "đó", "này",
@@ -219,15 +235,19 @@ def _valid_value(value: str, *, min_len: int = 2) -> bool:
 # Write patterns
 # ---------------------------------------------------------------------------
 
+# P0-7J-FIX1: optional pre-verb additive markers cover "tôi cũng thích may" /
+# "tôi còn thích X" (the marker never enters the captured value).
 _RE_PREF = re.compile(
-    r'^(?:tôi|mình)\s+(?:thích|yêu\s+thích|mê|có\s+sở\s+thích)\s+(.+)$',
+    r'^(?:tôi|mình)\s+(?:cũng\s+|còn\s+|vẫn\s+)?'
+    r'(?:thích|yêu\s+thích|mê|có\s+sở\s+thích)\s+(.+)$',
     re.IGNORECASE | re.DOTALL,
 )
 # P0-7J: quan tâm is an affection-domain verb ("tôi quan tâm quý" saves affection when
 # the target is a person; "tôi quan tâm đến AI" still falls through to the legacy
 # professional-preference path because "AI" is not person-shaped).
+# P0-7J-FIX1: optional pre-verb additive markers ("tôi cũng yêu may").
 _RE_AFFECTION = re.compile(
-    r'^(?:tôi|mình)\s+(?:đang\s+)?'
+    r'^(?:tôi|mình)\s+(?:đang\s+)?(?:cũng\s+|còn\s+|vẫn\s+)?'
     r'(?:thích|yêu|nhớ|crush|quan\s+tâm(?:\s+(?:đến|tới))?)\s+(.+)$',
     re.IGNORECASE | re.DOTALL,
 )
@@ -257,8 +277,11 @@ _RE_GHET = re.compile(
     re.IGNORECASE | re.DOTALL,
 )
 # P0-7J: optional "đang" covers "tôi đang muốn làm AI LLM".
+# P0-7J-FIX1: optional additive marker covers "tôi còn muốn làm AI Agent" (the marker
+# stays out of the captured value; the runtime reads it from the raw text to decide
+# additive-vs-supersede goal semantics).
 _RE_WANT = re.compile(
-    r'^(?:tôi|mình)\s+(?:đang\s+)?(?:muốn|định)\s+(.+)$',
+    r'^(?:tôi|mình)\s+(?:đang\s+)?(?:còn\s+|cũng\s+|vẫn\s+)?(?:muốn|định)\s+(.+)$',
     re.IGNORECASE | re.DOTALL,
 )
 _RE_RELATIONSHIP = re.compile(
@@ -623,9 +646,10 @@ def classify_profile_semantic_intent(text: str) -> SemanticProfileIntent | None:
                 kind="profile_write", category="sensitive", value=value,
                 sensitivity="unsafe", write_policy="block",
             )
-        # P0-7I: check the discourse-marker-stripped form too, so "quý mà" is recognized
-        # as the person "quý" (not saved verbatim as an ordinary preference "quý mà").
-        stripped_value = _strip_discourse_marker(value)
+        # P0-7I/P0-7J-FIX1: check the marker-stripped form too, so "quý mà" and
+        # "cả may" are recognized as the persons "quý"/"may" (never saved verbatim
+        # as ordinary preferences). Non-person objects ("cả kem") stay preferences.
+        stripped_value = strip_additive_target_marker(value)
         if _is_person_affinity_value(value) or (
             stripped_value != value and _is_person_affinity_value(stripped_value)
         ):
@@ -645,9 +669,10 @@ def classify_profile_semantic_intent(text: str) -> SemanticProfileIntent | None:
 
     # Bare affection verbs ("tôi yêu Quý", "tôi nhớ Quý", "tôi crush X") — person only.
     # P0-7G saves this as affection/person memory (was clarify).
+    # P0-7J-FIX1: additive/discourse markers stripped ("tôi yêu cả may" → target "may").
     m = _RE_AFFECTION.match(stripped)
     if m:
-        value = _clean_value(m.group(1))
+        value = strip_additive_target_marker(_clean_value(m.group(1)))
         if value and _is_person_affinity_value(value):
             return SemanticProfileIntent(
                 kind="profile_write", category="relationship.affection_candidate",

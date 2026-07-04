@@ -117,6 +117,8 @@ class ProfileQuery:
         "self_occupation_yesno",
         # P0-7J
         "self_current_goal", "old_name_confirm",
+        # P0-7J-FIX1
+        "self_do_yesno",
     ]
     value: str | None = None          # for inverse_value: the name to look up
     relation_label: str | None = None  # for relation_name / relation_existence
@@ -586,8 +588,19 @@ _RE_SELF_OCC_YESNO_Q = re.compile(
 )
 
 # P0-7J: current goal/intention query — "tôi đang muốn làm gì?", "tôi đang định build gì?"
+# P0-7J-FIX1: no-diacritic/typo variants ("tôi se làm gì?", "toi se lam gi?").
 _RE_CURRENT_GOAL_Q = re.compile(
-    r'^(?:tôi|mình)\s+(?:đang\s+)?(?:muốn|định|sẽ)\s+(?:làm|build)\s+g[ìi]\s*[?？]?\s*$',
+    r'^(?:tôi|mình|toi|minh)\s+(?:đang\s+|dang\s+)?(?:muốn|muon|định|dinh|sẽ|se)\s+'
+    r'(?:làm|lam|build)\s+g[ìi]\s*[?？]?\s*$',
+    re.IGNORECASE,
+)
+
+# P0-7J-FIX1: self do/goal yes-no — "tôi có làm LLM nữa không?", "tôi có còn làm X không?",
+# "tôi có muốn làm X nữa không?", "tôi có build X nữa không?". Answered against active
+# occupations and active goals (current-state).
+_RE_SELF_DO_YESNO_Q = re.compile(
+    r'^(?:tôi|mình)\s+có\s+(?:còn\s+)?(?:muốn\s+)?(?:làm|build)\s+'
+    r'(.+?)(?:\s+nữa)?\s+(?:không|ko|hông|hong)\s*[?？]?\s*$',
     re.IGNORECASE,
 )
 
@@ -1117,6 +1130,13 @@ def detect_profile_query(text: str) -> ProfileQuery | None:
         value = re.sub(r"\s+", " ", m.group(1).strip().rstrip("?？")).strip()
         if value:
             return ProfileQuery(kind="self_occupation_yesno", value=value)
+
+    # 6c. P0-7J-FIX1: self do/goal yes-no ("tôi có làm LLM nữa không?").
+    m = _RE_SELF_DO_YESNO_Q.match(stripped)
+    if m:
+        value = re.sub(r"\s+", " ", m.group(1).strip().rstrip("?？")).strip()
+        if value:
+            return ProfileQuery(kind="self_do_yesno", value=value)
 
     # 7. P0-7F-FIX2: affection query ("tôi thích ai?") — before general preference query.
     #    P0-7F-FIX5 Part D adds the "người tôi thích là ai?" alias to the same lane.
@@ -2495,17 +2515,36 @@ def answer_profile_query(
                 return f"Mục tiêu của bạn là {val}."
         return "Tôi chưa có thông tin về mục tiêu của bạn."
 
-    # --- P0-7J: self_current_goal ("tôi đang muốn làm gì?") — latest goal wins ---
+    # --- P0-7J: self_current_goal ("tôi đang muốn làm gì?") ---
+    # P0-7J-FIX1: goal memory is current-state at WRITE time (supersede-on-write), so
+    # every stored goal here is active — list all of them (covers additive goals).
     elif query.kind == "self_current_goal":
-        goals = [
-            rec for rec in confirmed
-            if rec.metadata.get("subject") == "self"
-            and rec.metadata.get("relation") == "goal"
-        ]
-        if goals:
-            latest = sorted(goals, key=lambda r: r.created_at)[-1]
-            return f"Mình đang nhớ bạn đang muốn {latest.metadata.get('value', '')}."
+        snap = collect_profile_snapshot(store)
+        if snap.goals:
+            return "Mình đang nhớ bạn đang muốn " + ", ".join(snap.goals) + "."
         return "Mình chưa có thông tin về dự định hiện tại của bạn."
+
+    # --- P0-7J-FIX1: self_do_yesno ("tôi có làm LLM nữa không?") ---
+    elif query.kind == "self_do_yesno":
+        snap = collect_profile_snapshot(store)
+        target = _norm_cmp(query.value or "")
+        target_tokens = set(target.split())
+        if target_tokens:
+            for occ in snap.occupation:
+                occ_tokens = set(_norm_cmp(occ).split())
+                if target_tokens <= occ_tokens or occ_tokens <= target_tokens:
+                    return f"Có, mình đang nhớ bạn đang làm {occ}."
+            for goal in snap.goals:
+                goal_key = _norm_cmp(goal)
+                for verb in ("làm ", "build "):
+                    if goal_key.startswith(verb):
+                        goal_key = goal_key[len(verb):].strip()
+                goal_tokens = set(goal_key.split())
+                if target_tokens <= goal_tokens or goal_tokens <= target_tokens:
+                    return f"Có, mình đang nhớ bạn đang muốn {goal}."
+        return (
+            f"Không, hiện tại mình không thấy bạn còn làm hay dự định làm {query.value}."
+        )
 
     # --- P0-7J: old_name_confirm ("Bắc là tên cũ của tôi, bạn còn nhớ không?") ---
     elif query.kind == "old_name_confirm":
@@ -2566,8 +2605,14 @@ def answer_profile_query(
     elif query.kind == "self_affection":
         snap = collect_profile_snapshot(store)
         # P0-7G: prefer a first-class affection fact, then affection-type relationships.
+        # P0-7J-FIX1: ALL active affection targets are returned, not only the first.
         if snap.affections:
-            return f"Mình đang nhớ {snap.affections[0]} là người bạn thích/quan tâm."
+            if len(snap.affections) == 1:
+                return f"Mình đang nhớ {snap.affections[0]} là người bạn thích/quan tâm."
+            return (
+                "Mình đang nhớ những người bạn thích/quan tâm: "
+                + ", ".join(snap.affections) + "."
+            )
         _AFFECTION_LABELS = frozenset({"người yêu", "bạn gái", "bạn trai", "partner", "vợ", "chồng"})
         affection_vals = [name for label, name in snap.relations if label in _AFFECTION_LABELS]
         if affection_vals:

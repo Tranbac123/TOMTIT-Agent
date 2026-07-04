@@ -1070,16 +1070,18 @@ def test_relation_query_after_auto_save():
 
 
 def test_relation_conflict_does_not_silently_overwrite():
+    # P0-7J-FIX1 policy change: an explicit relationship reassignment now UPDATES the
+    # current relationship — but never SILENTLY: the ack explicitly names the new value,
+    # and recall reflects the update immediately.
     sr = _make_sr()
-    sr.handle_turn("bạn gái tôi tên là Quý")     # auto-saved
-    s = sr.handle_turn("bạn gái tôi tên là Lan")  # conflict
+    sr.handle_turn("bạn gái tôi tên là Quý")      # auto-saved
+    s = sr.handle_turn("bạn gái tôi tên là Lan")  # explicit reassignment → update
     assert s.status == AgentStatus.COMPLETED
     answer = s.final_answer or ""
-    assert "Quý" in answer
-    assert not _auto_saved(answer), answer
+    assert "Lan" in answer, answer
     q = sr.handle_turn("bạn gái tôi tên gì?")
-    assert "Quý" in (q.final_answer or "")
-    assert "Lan" not in (q.final_answer or "")
+    assert "Lan" in (q.final_answer or "")
+    assert "Quý" not in (q.final_answer or "")
 
 
 def test_safe_preference_post_save_response_is_natural():
@@ -1249,12 +1251,16 @@ def test_nguoi_yeu_la_ai_unknown_state_is_specific():
 
 
 def test_relationship_cua_toi_conflict_safe():
+    # P0-7J-FIX1 policy change: an explicit self relationship assertion now UPDATES the
+    # current relationship (latest explicit user fact wins) instead of refusing with a
+    # conflict prompt. Safety = the ack names the new value and recall reflects it.
     sr = _make_sr()
     sr.handle_turn("bạn gái của tôi là Quý")
     s = sr.handle_turn("bạn gái của tôi là Lan")
     answer = s.final_answer or ""
-    assert "Quý" in answer
-    assert not _auto_saved(answer), answer
+    assert "Lan" in answer, answer
+    follow = (sr.handle_turn("bạn gái của tôi là ai?").final_answer or "").lower()
+    assert "lan" in follow and "quý" not in follow, follow
 
 
 # --- Person-affinity guard ---
@@ -3672,3 +3678,149 @@ def test_p0_7j_manual_spec_contains_update_semantics_addendum():
     ]
     missing = [tok for tok in required if tok not in text]
     assert not missing, f"Manual spec missing P0-7J tokens: {missing}"
+
+
+# ---------------------------------------------------------------------------
+# P0-7J-FIX1 tests — manual Web edge case hardening
+# ---------------------------------------------------------------------------
+
+def test_p0_7j_fix1_affection_query_returns_multiple_targets():
+    sr = _make_sr()
+    sr.handle_turn("tôi thích quý")
+    sr.handle_turn("tôi yêu may")
+    ans = (sr.handle_turn("tôi thích ai?").final_answer or "").lower()
+    assert "quý" in ans, f"first affection target missing: {ans}"
+    assert "may" in ans, f"second affection target missing: {ans}"
+    # No duplicates on repeated assertion.
+    sr.handle_turn("tôi yêu may")
+    again = (sr.handle_turn("tôi yêu ai?").final_answer or "").lower()
+    assert again.count("may") == 1, f"duplicate affection target: {again}"
+
+
+def test_p0_7j_fix1_thich_ca_may_is_affection_not_ordinary_preference():
+    sr = _make_sr()
+    sr.handle_turn("tôi thích quý")
+    ack = (sr.handle_turn("tôi thích cả may").final_answer or "").lower()
+    assert "tình cảm" in ack or "không xếp" in ack, f"not routed to affection: {ack}"
+    aff = (sr.handle_turn("tôi thích ai?").final_answer or "").lower()
+    assert "quý" in aff and "may" in aff, f"affection targets incomplete: {aff}"
+    pref = (sr.handle_turn("tôi thích gì?").final_answer or "").lower()
+    assert "cả may" not in pref and "may" not in pref, f"'cả may' leaked to preference: {pref}"
+
+
+def test_p0_7j_fix1_affection_additive_markers_do_not_pollute_value():
+    sr = _make_sr()
+    sr.handle_turn("tôi cũng thích may")
+    ans = (sr.handle_turn("tôi thích ai?").final_answer or "").lower()
+    assert "may" in ans, f"additive-marker target not saved: {ans}"
+    assert "cũng" not in ans, f"marker polluted the stored value: {ans}"
+    # Ordinary object stays an ordinary preference.
+    sr2 = _make_sr()
+    sr2.handle_turn("tôi thích cả kem")
+    pref = (sr2.handle_turn("tôi thích gì?").final_answer or "").lower()
+    assert "kem" in pref, f"ordinary additive preference lost: {pref}"
+
+
+def test_p0_7j_fix1_relationship_bay_gio_typo_updates_current():
+    sr = _make_sr()
+    sr.handle_turn("người yêu của tôi là quý")
+    sr.handle_turn("bay giờ người yêu của tôi là may")
+    ans = (sr.handle_turn("người yêu của tôi là ai?").final_answer or "").lower()
+    assert "may" in ans, f"typo marker did not update partner: {ans}"
+    assert "quý" not in ans, f"old partner still current: {ans}"
+
+
+def test_p0_7j_fix1_relationship_marker_inside_phrase_updates_current():
+    sr = _make_sr()
+    sr.handle_turn("người yêu của tôi là quý")
+    sr.handle_turn("người yêu bây giờ của tôi là may")
+    ans = (sr.handle_turn("người yêu của tôi là ai?").final_answer or "").lower()
+    assert "may" in ans, f"inline marker did not update partner: {ans}"
+    assert "quý" not in ans, f"old partner still current: {ans}"
+
+
+def test_p0_7j_fix1_direct_relationship_reassignment_updates_current():
+    sr = _make_sr()
+    sr.handle_turn("người yêu của tôi là quý")
+    ack = (sr.handle_turn("người yêu của tôi là may").final_answer or "").lower()
+    assert "may" in ack, f"reassignment not acknowledged with new value: {ack}"
+    ans = (sr.handle_turn("người yêu của tôi là ai?").final_answer or "").lower()
+    assert "may" in ans and "quý" not in ans, f"reassignment not applied: {ans}"
+
+
+def test_p0_7j_fix1_goal_standalone_negation_removes_goal():
+    sr = _make_sr()
+    sr.handle_turn("tôi sẽ làm AI LLM")
+    ack = (sr.handle_turn("tôi sẽ không làm LLM nữa").final_answer or "").lower()
+    assert "rule-based mvp" not in ack, f"goal negation fell to fallback: {ack}"
+    ans = (sr.handle_turn("tôi đang muốn làm gì?").final_answer or "").lower()
+    assert "llm" not in ans, f"negated goal still active: {ans}"
+
+
+def test_p0_7j_fix1_goal_negation_not_saved_as_positive_goal():
+    sr = _make_sr()
+    sr.handle_turn("tôi sẽ làm AI LLM")
+    sr.handle_turn("tôi sẽ không làm LLM nữa")
+    summary = (sr.handle_turn("bạn nhớ gì về tôi").final_answer or "").lower()
+    assert "không làm llm nữa" not in summary, f"negation saved as positive goal: {summary}"
+    assert "llm" not in summary, f"stale LLM goal still in summary: {summary}"
+
+
+def test_p0_7j_fix1_goal_latest_current_goal_wins():
+    sr = _make_sr()
+    sr.handle_turn("tôi sẽ làm AI LLM")
+    sr.handle_turn("tôi sẽ làm AI Agent")
+    ans = (sr.handle_turn("tôi đang muốn làm gì?").final_answer or "").lower()
+    assert "agent" in ans, f"latest goal missing: {ans}"
+    assert "llm" not in ans, f"superseded goal still current: {ans}"
+
+
+def test_p0_7j_fix1_goal_additive_marker_preserves_multiple_goals():
+    sr = _make_sr()
+    sr.handle_turn("tôi sẽ làm AI LLM")
+    sr.handle_turn("tôi còn muốn làm AI Agent")
+    ans = (sr.handle_turn("tôi đang muốn làm gì?").final_answer or "").lower()
+    assert "llm" in ans, f"additive write dropped prior goal: {ans}"
+    assert "agent" in ans, f"additive goal missing: {ans}"
+
+
+def test_p0_7j_fix1_goal_yes_no_removed_goal_returns_no():
+    sr = _make_sr()
+    sr.handle_turn("tôi sẽ làm AI LLM")
+    sr.handle_turn("tôi sẽ không làm LLM nữa")
+    ans = (sr.handle_turn("tôi có làm LLM nữa không?").final_answer or "").lower()
+    assert "rule-based mvp" not in ans and "kiến thức mở" not in ans, f"fell back: {ans}"
+    assert "không" in ans or "chưa" in ans, f"expected negative answer: {ans}"
+
+
+def test_p0_7j_fix1_goal_yes_no_active_goal_returns_yes():
+    sr = _make_sr()
+    sr.handle_turn("tôi sẽ làm AI Agent")
+    ans = (sr.handle_turn("tôi có làm AI Agent không?").final_answer or "").lower()
+    assert "có" in ans or "đúng" in ans, f"expected affirmative answer: {ans}"
+
+
+def test_p0_7j_fix1_goal_query_no_accent_se_lam_gi():
+    sr = _make_sr()
+    sr.handle_turn("tôi sẽ làm AI Agent")
+    ans = (sr.handle_turn("tôi se làm gì?").final_answer or "").lower()
+    assert "rule-based mvp" not in ans, f"no-accent goal query fell back: {ans}"
+    assert "agent" in ans, f"active goal missing: {ans}"
+
+
+def test_p0_7j_fix1_manual_spec_contains_web_edge_cases():
+    import pathlib
+    spec_path = pathlib.Path(__file__).parent / "manual" / "CONV_P0_MEMORY_CORE_MANUAL_REGRESSION_SPEC.md"
+    text = spec_path.read_text(encoding="utf-8").lower()
+    required = [
+        "p0-7j-fix1",
+        "tôi thích cả may",
+        "bay giờ người yêu của tôi là may",
+        "người yêu bây giờ của tôi là may",
+        "tôi sẽ không làm llm nữa",
+        "tôi có làm llm nữa không",
+        "tôi se làm gì",
+        "needs_fix",
+    ]
+    missing = [tok for tok in required if tok not in text]
+    assert not missing, f"Manual spec missing FIX1 tokens: {missing}"

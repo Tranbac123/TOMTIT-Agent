@@ -72,6 +72,7 @@ from agent_core.conversation.profile_memory import (
 from agent_core.conversation.memory_operations import (
     apply_memory_operation,
     parse_memory_operation,
+    resolve_goal_current_state,
 )
 from agent_core.conversation.profile_semantics import (
     SemanticProfileIntent,
@@ -908,23 +909,43 @@ class SessionRuntime:
     def _handle_semantic_relationship(
         self, intent: SemanticProfileIntent, user_message: str, state: AgentState
     ) -> AgentState:
-        """Relationship partner-name write (conflict-safe, reuses P0-7E name storage)."""
+        """Relationship partner-name write (reuses P0-7E name storage).
+
+        P0-7J-FIX1 policy: an explicit self relationship assertion from the user UPDATES
+        the current relationship (latest explicit fact wins) — no "sửa ..." command is
+        required for common partner updates. A same-value repeat keeps the
+        "vẫn đang nhớ" acknowledgement.
+        """
         candidate = ProfileFactCandidate(
             subject="relation", relation="name",
             value=intent.value or "", relation_label=intent.relation_label,
             original_text=user_message.strip(),
         )
         existing = find_existing_profile_value(candidate, self._store)
-        # P0-7G-FIX3A: the "bạn" (friend) label allows a different friend name as a fresh
-        # last-write-wins save instead of a conflict prompt (the friend_name query returns
-        # the latest). A same-value repeat still falls through to the "vẫn đang nhớ" path.
-        # Partner labels keep the P0-7E conflict-safe contract (no silent overwrite).
-        friend_relabel = candidate.relation_label == "bạn"
-        if existing is not None and not (friend_relabel and existing != candidate.value):
-            return self._complete_conv(
-                state, "conv:profile_name_conflict",
-                build_profile_conflict_message(candidate, existing),
-            )
+        if existing is not None:
+            if existing == candidate.value:
+                return self._complete_conv(
+                    state, "conv:profile_name_conflict",
+                    build_profile_conflict_message(candidate, existing),
+                )
+            # P0-7G-FIX3A: the "bạn" (friend) label keeps its append + latest-wins
+            # recall flow (falls through to the fresh save below).
+            if candidate.relation_label != "bạn":
+                label = candidate.relation_label or ""
+                if not save_relation_update(
+                    label, candidate.value, self._store, state.session_id,
+                    original_text=user_message.strip(),
+                ):
+                    state.errors.append("profile_save_failed")
+                    return self._complete_conv(
+                        state, "conv:profile_autosave_failed",
+                        "Không thể lưu thông tin. Vui lòng thử lại.",
+                    )
+                self._confirmed_profile_fact_count += 1
+                return self._complete_conv(
+                    state, "conv:relation_updated",
+                    build_relation_update_ack(label, candidate.value),
+                )
         ok = save_confirmed_profile_fact(
             candidate, self._store, state.session_id, confirmation_source="auto_safe"
         )
@@ -1231,6 +1252,10 @@ class SessionRuntime:
         # the same object (memory conflict resolution).
         if candidate.relation == "preference":
             resolve_preference_conflicts(candidate.value, "preference", self._store)
+        # P0-7J-FIX1: goal memory is current-state — a new explicit goal supersedes
+        # previous goals unless the utterance carries an additive marker ("còn muốn ...").
+        if candidate.relation == "goal":
+            resolve_goal_current_state(user_message, self._store)
         ok = save_auto_profile_fact(candidate, self._store, state.session_id)
         if not ok:
             return None

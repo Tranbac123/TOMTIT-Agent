@@ -2104,12 +2104,112 @@ tôi đang muốn làm gì?
 - Schedule/calendar failures are out-of-scope for P0-7J and should be tracked for P0-7N.
 ```
 
+### P0-7J-FIX1 — Manual Web Edge Cases
+
+Real manual Web testing found gaps the backend replay missed. These are now required.
+
+#### Multiple affection targets
+
+```
+tôi thích quý
+tôi yêu may
+tôi thích ai?
+=> includes quý and may
+```
+
+```
+tôi thích quý
+tôi thích cả may
+tôi thích ai?
+=> includes quý and may
+```
+
+```
+tôi thích cả may
+tôi thích gì?
+=> must NOT include "cả may" as ordinary preference
+```
+
+#### Relationship current-update variants
+
+```
+người yêu của tôi là quý
+bay giờ người yêu của tôi là may
+người yêu của tôi là ai?
+=> may, not quý
+```
+
+```
+người yêu của tôi là quý
+người yêu bây giờ của tôi là may
+người yêu của tôi là ai?
+=> may, not quý
+```
+
+```
+người yêu của tôi là quý
+người yêu của tôi là may
+người yêu của tôi là ai?
+=> may, not quý
+Policy: explicit current relationship assertion by user updates current relationship.
+```
+
+#### Goal current-state, negation, and yes/no
+
+```
+tôi sẽ làm AI LLM
+tôi sẽ làm AI Agent
+tôi đang muốn làm gì?
+=> should answer current/latest active goal. Prefer AI Agent.
+```
+
+```
+tôi sẽ làm AI LLM
+tôi sẽ làm AI Agent
+tôi sẽ không làm LLM nữa
+bạn nhớ gì về tôi
+=> must NOT show "không làm LLM nữa" as a positive active goal.
+=> should not show stale LLM as current active goal if it was removed.
+=> should include AI Agent as active/current goal.
+```
+
+```
+tôi sẽ làm AI LLM
+tôi sẽ không làm LLM nữa
+tôi có làm LLM nữa không?
+=> no / not currently / no active LLM goal
+```
+
+```
+tôi sẽ làm AI Agent
+tôi se làm gì?
+=> AI Agent
+```
+
+#### Classification rules
+
+```text
+- If "cả/cũng/còn X" where X is person-shaped gets saved as ordinary preference, classify NEEDS_FIX.
+- If affection query after multiple affection targets returns only the oldest/first target, classify NEEDS_FIX.
+- If no-diacritic/typo temporal marker "bay giờ" fails to update relationship, classify NEEDS_FIX.
+- If reordered marker "người yêu bây giờ của tôi là X" fails, classify NEEDS_FIX.
+- If explicit current relationship assertion does not update current relationship, classify NEEDS_FIX.
+- If "tôi sẽ không làm X nữa" is saved as a positive goal, classify NEEDS_FIX.
+- If stale/removed goals appear as active current goals in summary, classify NEEDS_FIX.
+- If "tôi có làm X nữa không?" falls back after a goal was removed, classify NEEDS_FIX.
+- Schedule/agenda remains P0-7N out-of-scope.
+```
+
 ### P0-7N candidate — Schedule/Agenda Memory (future, out of scope here)
+
+Not claimed by P0-7J or P0-7J-FIX1.
 
 ```
 mai tôi có lịch không?
 hôm nay tôi sẽ làm gì?
 hôm nay tôi muốn đi đâu?
+hôm nay tôi có lịch gì không?
+hôm nay tôi nên làm gì?
 ```
 
 ---
