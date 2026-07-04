@@ -342,6 +342,12 @@ _RE_YESNO_SKILL = re.compile(
     r'^(?:tôi|mình)\s+(?:có\s+)?biết\s+(.+?)\s+' + _YESNO_SUFFIX + r'\s*[?？]?\s*$',
     re.IGNORECASE,
 )
+# P0-7K: preference yes/no WITHOUT a final particle or question mark
+# ("tôi có thích ăn cá"). The leading "có" marks it as a query, never a write.
+_RE_YESNO_PREF_BARE = re.compile(
+    r'^(?:tôi|mình)\s+có\s+thích\s+(.+?)\s*[.!]*\s*$',
+    re.IGNORECASE | re.DOTALL,
+)
 # P0-7F-FIX3 Part C: affection explanation ("tôi thích quý có nghĩa là ...",
 # "tôi thích quý đơn phương", "tôi thích quý nhưng chúng tôi chưa là người yêu").
 # The person target is group(1); everything after is an explanation, never a hobby value.
@@ -445,6 +451,16 @@ def classify_profile_semantic_intent(text: str) -> SemanticProfileIntent | None:
         if value:
             return SemanticProfileIntent(
                 kind="yes_no_memory_query", category="skill",
+                value=value, write_policy="none",
+            )
+    # P0-7K: preference yes/no without a final particle ("tôi có thích ăn cá").
+    # Checked after the particle form so "tôi có thích cafe không" keeps its lane.
+    m = _RE_YESNO_PREF_BARE.match(stripped)
+    if m:
+        value = _clean_value(m.group(1))
+        if value and not _is_interrogative_value(value):
+            return SemanticProfileIntent(
+                kind="yes_no_memory_query", category="preference",
                 value=value, write_policy="none",
             )
 

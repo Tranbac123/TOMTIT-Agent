@@ -3824,3 +3824,147 @@ def test_p0_7j_fix1_manual_spec_contains_web_edge_cases():
     ]
     missing = [tok for tok in required if tok not in text]
     assert not missing, f"Manual spec missing FIX1 tokens: {missing}"
+
+
+# ---------------------------------------------------------------------------
+# P0-7K tests — hybrid semantic memory extractor / natural multi-fact memory
+# ---------------------------------------------------------------------------
+
+_P0_7K_MULTIFACT_SENTENCE = (
+    "tôi không thích ăn cay, bơi, tắm biển và thể dục, "
+    "tôi thích ăn chối, ăn cam nhưng không thích ăn ổi"
+)
+
+
+def test_p0_7k_multifact_preference_extraction_splits_positive_and_negative():
+    sr = _make_sr()
+    ack = (sr.handle_turn(_P0_7K_MULTIFACT_SENTENCE).final_answer or "").lower()
+    assert "rule-based mvp" not in ack, f"multi-fact sentence fell to fallback: {ack}"
+    likes = (sr.handle_turn("tôi thích gì?").final_answer or "").lower()
+    assert "ăn chối" in likes and "ăn cam" in likes, f"positives missing: {likes}"
+    assert "ăn cay" not in likes and "ăn ổi" not in likes, f"negatives leaked: {likes}"
+    dislikes = (sr.handle_turn("tôi không thích gì?").final_answer or "").lower()
+    for item in ["ăn cay", "bơi", "tắm biển", "thể dục", "ăn ổi"]:
+        assert item in dislikes, f"dislike {item!r} missing: {dislikes}"
+    assert "ăn chối" not in dislikes and "ăn cam" not in dislikes, f"positives leaked: {dislikes}"
+
+
+def test_p0_7k_multifact_preference_does_not_store_raw_long_sentence():
+    sr = _make_sr()
+    sr.handle_turn(_P0_7K_MULTIFACT_SENTENCE)
+    likes = (sr.handle_turn("tôi thích gì?").final_answer or "").lower()
+    dislikes = (sr.handle_turn("tôi không thích gì?").final_answer or "").lower()
+    for answer in (likes, dislikes):
+        assert "tôi thích" not in answer, f"raw sentence fragment stored: {answer}"
+        assert "nhưng" not in answer, f"raw sentence fragment stored: {answer}"
+
+
+def test_p0_7k_name_correction_moi_dung_updates_current_name():
+    sr = _make_sr()
+    sr.handle_turn("tôi là bắc")
+    ack = (sr.handle_turn("tôi tên là Â mới đúng").final_answer or "").lower()
+    assert "rule-based mvp" not in ack, f"name correction fell to fallback: {ack}"
+    ans = (sr.handle_turn("tôi tên là gì?").final_answer or "").lower()
+    assert "â" in ans, f"corrected name missing: {ans}"
+    assert "bắc" not in ans, f"old name still current: {ans}"
+
+
+def test_p0_7k_relationship_da_doi_nguoi_yeu_updates_current():
+    sr = _make_sr()
+    sr.handle_turn("người yêu của tôi là quý")
+    ack = (sr.handle_turn("tôi đã đổi người yêu thành may rồi").final_answer or "").lower()
+    assert "rule-based mvp" not in ack, f"relationship correction fell to fallback: {ack}"
+    ans = (sr.handle_turn("người yêu của tôi là ai?").final_answer or "").lower()
+    assert "may" in ans and "quý" not in ans, f"relationship not corrected: {ans}"
+
+
+def test_p0_7k_compound_goal_partial_removal_keeps_slm():
+    sr = _make_sr()
+    sr.handle_turn("tôi muốn build cả LLM và SLM")
+    sr.handle_turn("tôi không build LLM nữa")
+    ans = (sr.handle_turn("tôi sẽ build gì?").final_answer or "").lower()
+    assert "slm" in ans, f"SLM lost after partial removal: {ans}"
+    assert "llm" not in ans.replace("slm", ""), f"LLM still active: {ans}"
+
+
+def test_p0_7k_compound_goal_does_not_delete_all_parts_when_removing_llm():
+    sr = _make_sr()
+    ack = (sr.handle_turn("tôi muốn build cả LLM và SLM").final_answer or "").lower()
+    assert "llm" in ack.replace("slm", "") and "slm" in ack, f"compound not decomposed: {ack}"
+    sr.handle_turn("tôi không build LLM nữa")
+    ans = (sr.handle_turn("tôi đang muốn làm gì?").final_answer or "").lower()
+    assert "slm" in ans, f"whole compound goal was deleted: {ans}"
+
+
+def test_p0_7k_remove_all_affection_khong_thich_ai_nua():
+    sr = _make_sr()
+    sr.handle_turn("tôi thích quý")
+    sr.handle_turn("tôi thích linh")
+    ack = (sr.handle_turn("bây giờ tôi không thích ai nữa").final_answer or "").lower()
+    assert "rule-based mvp" not in ack, f"remove-all fell to fallback: {ack}"
+    ans = (sr.handle_turn("tôi thích ai?").final_answer or "").lower()
+    assert "quý" not in ans and "linh" not in ans, f"affection targets survived: {ans}"
+    assert "chưa có thông tin" in ans, f"expected empty affection state: {ans}"
+
+
+def test_p0_7k_inverse_affection_assertion_may_la_nguoi_toi_thich():
+    sr = _make_sr()
+    ack = (sr.handle_turn("may là người tôi thích").final_answer or "").lower()
+    assert "rule-based mvp" not in ack, f"inverse assertion fell to fallback: {ack}"
+    ans = (sr.handle_turn("tôi thích ai?").final_answer or "").lower()
+    assert "may" in ans, f"inverse affection target missing: {ans}"
+
+
+def test_p0_7k_preference_yesno_without_question_mark():
+    sr = _make_sr()
+    sr.handle_turn("tôi thích ăn cá")
+    ans = (sr.handle_turn("tôi có thích ăn cá").final_answer or "").lower()
+    assert "rule-based mvp" not in ans, f"bare yes/no fell to fallback: {ans}"
+    assert "có" in ans and "ăn cá" in ans, f"active preference not confirmed: {ans}"
+
+
+def test_p0_7k_unsupported_schedule_does_not_write_profile_memory():
+    sr = _make_sr()
+    ans = (sr.handle_turn("lịch hôm nay là gì?").final_answer or "").lower()
+    assert "chưa hỗ trợ" in ans, f"schedule not classified unsupported: {ans}"
+    assert "chưa lưu" in ans, f"no-write disclosure missing: {ans}"
+    likes = (sr.handle_turn("tôi thích gì?").final_answer or "").lower()
+    assert "lịch" not in likes, f"schedule leaked into preferences: {likes}"
+
+
+def test_p0_7k_unsupported_historical_query_does_not_write_profile_memory():
+    sr = _make_sr()
+    ans = (sr.handle_turn("tôi đã từng thích ai?").final_answer or "").lower()
+    assert "chưa hỗ trợ" in ans, f"historical query not classified unsupported: {ans}"
+    aff = (sr.handle_turn("tôi thích ai?").final_answer or "").lower()
+    assert "chưa có thông tin" in aff, f"historical query corrupted affection: {aff}"
+
+
+def test_p0_7k_unsupported_assistant_nickname_does_not_write_user_name():
+    sr = _make_sr()
+    ans = (sr.handle_turn("tôt đặt tên bạn là tèo được không?").final_answer or "").lower()
+    assert "chưa hỗ trợ" in ans, f"nickname not classified unsupported: {ans}"
+    name = (sr.handle_turn("tôi tên là gì?").final_answer or "").lower()
+    assert "tèo" not in name, f"nickname corrupted user name: {name}"
+    assert "chưa biết tên" in name, f"expected unknown name state: {name}"
+
+
+def test_p0_7k_manual_spec_contains_hybrid_semantic_cases():
+    import pathlib
+    spec_path = pathlib.Path(__file__).parent / "manual" / "CONV_P0_MEMORY_CORE_MANUAL_REGRESSION_SPEC.md"
+    text = spec_path.read_text(encoding="utf-8").lower()
+    required = [
+        "p0-7k",
+        "hybrid semantic memory extractor",
+        "tôi tên là â mới đúng",
+        "tôi đã đổi người yêu thành may rồi",
+        "tôi muốn build cả llm và slm",
+        "bây giờ tôi không thích ai nữa",
+        "may là người tôi thích",
+        "tôi có thích ăn cá",
+        "p0-7l",
+        "p0-7m",
+        "needs_fix",
+    ]
+    missing = [tok for tok in required if tok not in text]
+    assert not missing, f"Manual spec missing P0-7K tokens: {missing}"

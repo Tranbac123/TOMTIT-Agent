@@ -30,13 +30,18 @@ from agent_core.conversation.profile_memory import (
     _is_valid_auto_value_shape,
     _norm_cmp,
     _normalize_relation_label,
+    build_name_update_ack,
     build_relation_update_ack,
     collect_profile_snapshot,
     delete_occupation_fact,
+    resolve_preference_conflicts,
+    save_affection_fact,
     save_auto_profile_fact,
     save_relation_update,
+    save_self_name_update,
 )
 from agent_core.conversation.profile_semantics import (
+    _classify_preference_kind,
     _has_professional_token,
     strip_additive_target_marker,
 )
@@ -55,6 +60,9 @@ MemoryOpType = Literal[
     "QUERY",
     "CORRECT",
     "SWITCH",
+    # P0-7K: partial removal (compound goals) and whole-domain removal (affection).
+    "REMOVE_PART",
+    "REMOVE_ALL",
 ]
 
 MemoryDomain = Literal[
@@ -395,6 +403,17 @@ def delete_affection_fact(value: str, store: "MemoryStoreProtocol") -> str | Non
     return matched
 
 
+def delete_all_affection_facts(store: "MemoryStoreProtocol") -> int:
+    """P0-7K: delete ALL active affection records ("bây giờ tôi không thích ai nữa")."""
+    removed = 0
+    for rec in _confirmed_profile_facts(store):
+        md = rec.metadata
+        if md.get("subject") == "self" and md.get("relation") == "affection":
+            store.delete(rec.id, reason="user_removal")
+            removed += 1
+    return removed
+
+
 def delete_goal_facts(conflict_key: str, store: "MemoryStoreProtocol") -> str | None:
     """Delete goal records whose conflict key matches (token containment).
 
@@ -574,3 +593,197 @@ def apply_memory_operation(
         )
 
     return None
+
+# ---------------------------------------------------------------------------
+# P0-7K: MemoryOperation batch application (semantic extractor transaction)
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class BatchApplyResult:
+    """Result of applying an extracted MemoryOperation batch.
+
+    Operations that fail validation are skipped and counted in ``failed`` —
+    partial failure is reported, never silently absorbed.
+    """
+    applied: int
+    failed: int
+    saved_count: int
+    response_text: str | None
+
+
+def apply_memory_operations(
+    ops: tuple[MemoryOperation, ...] | list[MemoryOperation],
+    store: "MemoryStoreProtocol",
+    session_id: str,
+    *,
+    raw_text: str = "",
+) -> BatchApplyResult:
+    """Validate, conflict-resolve, and apply a batch of extracted operations.
+
+    Within one batch, goal ADDs supersede PRE-EXISTING goals exactly once, so a
+    decomposed compound goal ("build LLM" + "build SLM") keeps all of its own parts.
+    """
+    applied = 0
+    failed = 0
+    saved = 0
+    pos_prefs: list[str] = []
+    neg_prefs: list[str] = []
+    goals_added: list[str] = []
+    affections_added: list[str] = []
+    ack_parts: list[str] = []
+    goal_supersede_done = False
+
+    snap = collect_profile_snapshot(store)
+    current_name = snap.name
+    active_affections = {_norm_cmp(a) for a in snap.affections}
+
+    for op in ops:
+        if op.op == "REMOVE_ALL" and op.domain == "affection":
+            removed = delete_all_affection_facts(store)
+            applied += 1
+            if removed:
+                ack_parts.append(
+                    "Đã ghi nhận: hiện tại bạn không thích ai nữa. "
+                    "Mình đã xóa thông tin về người bạn thích."
+                )
+            else:
+                ack_parts.append(
+                    "Đã ghi nhận: hiện tại bạn không thích ai. "
+                    "Mình cũng không thấy thông tin nào về người bạn thích đang được lưu."
+                )
+            continue
+
+        if not validate_memory_operation(op):
+            failed += 1
+            continue
+
+        if op.domain == "preference" and op.op in ("ADD", "NEGATE"):
+            if op.polarity == "negative" or op.op == "NEGATE":
+                resolve_preference_conflicts(op.value, "negative_preference", store)
+                candidate = AutoProfileCandidate(
+                    relation="negative_preference", value=op.value,
+                    original_text=raw_text or op.raw_text,
+                )
+                if save_auto_profile_fact(candidate, store, session_id):
+                    applied += 1
+                    saved += 1
+                    neg_prefs.append(op.value)
+                else:
+                    failed += 1
+            else:
+                resolve_preference_conflicts(op.value, "preference", store)
+                candidate = AutoProfileCandidate(
+                    relation="preference", value=op.value,
+                    original_text=raw_text or op.raw_text,
+                    preference_kind=_classify_preference_kind(op.value),
+                )
+                if save_auto_profile_fact(candidate, store, session_id):
+                    applied += 1
+                    saved += 1
+                    pos_prefs.append(op.value)
+                else:
+                    failed += 1
+            continue
+
+        if op.domain == "affection" and op.op == "ADD":
+            if _norm_cmp(op.value) in active_affections:
+                applied += 1
+                affections_added.append(op.value)
+                continue
+            if save_affection_fact(
+                op.value, store, session_id, original_text=raw_text or op.raw_text
+            ):
+                applied += 1
+                saved += 1
+                active_affections.add(_norm_cmp(op.value))
+                affections_added.append(op.value)
+            else:
+                failed += 1
+            continue
+
+        if op.domain == "affection" and op.op in ("REMOVE", "REMOVE_PART"):
+            if delete_affection_fact(op.value, store) is not None:
+                applied += 1
+                ack_parts.append(
+                    f"Đã ghi nhận bạn không còn thích/quan tâm {op.value} nữa."
+                )
+            else:
+                failed += 1
+            continue
+
+        if op.domain == "name" and op.op in ("CORRECT", "UPDATE_CURRENT", "ADD"):
+            if save_self_name_update(
+                op.value, store, session_id, original_text=raw_text or op.raw_text
+            ):
+                applied += 1
+                saved += 1
+                if current_name:
+                    ack_parts.append(build_name_update_ack(current_name, op.value))
+                else:
+                    ack_parts.append(f"Đã nhớ tên bạn là {op.value}.")
+                current_name = op.value
+            else:
+                failed += 1
+            continue
+
+        if op.domain == "relationship" and op.op in ("UPDATE_CURRENT", "CORRECT", "ADD"):
+            label = op.relation or ""
+            if label and save_relation_update(
+                label, op.value, store, session_id, original_text=raw_text or op.raw_text
+            ):
+                applied += 1
+                saved += 1
+                ack_parts.append(build_relation_update_ack(label, op.value))
+            else:
+                failed += 1
+            continue
+
+        if op.domain == "goal" and op.op == "ADD":
+            if not goal_supersede_done:
+                resolve_goal_current_state(raw_text or op.raw_text, store)
+                goal_supersede_done = True
+            candidate = AutoProfileCandidate(
+                subject="self", relation="goal", value=op.value,
+                original_text=raw_text or op.raw_text,
+            )
+            if save_auto_profile_fact(candidate, store, session_id):
+                applied += 1
+                saved += 1
+                goals_added.append(op.value)
+            else:
+                failed += 1
+            continue
+
+        if op.domain == "goal" and op.op in ("REMOVE", "REMOVE_PART"):
+            if delete_goal_facts(op.canonical_key, store) is not None:
+                applied += 1
+                ack_parts.append(build_goal_removed_ack(op.value))
+            else:
+                failed += 1
+            continue
+
+        failed += 1
+
+    if pos_prefs and neg_prefs:
+        ack_parts.insert(0, (
+            "Đã nhớ: bạn thích " + ", ".join(pos_prefs)
+            + "; bạn không thích " + ", ".join(neg_prefs) + "."
+        ))
+    elif pos_prefs:
+        ack_parts.insert(0, "Đã nhớ là bạn thích " + ", ".join(pos_prefs) + ".")
+    elif neg_prefs:
+        ack_parts.insert(0, "Đã nhớ là bạn không thích " + ", ".join(neg_prefs) + ".")
+    if goals_added:
+        ack_parts.append(
+            "Đã nhớ dự định hiện tại của bạn: " + ", ".join(goals_added) + "."
+        )
+    if affections_added:
+        ack_parts.append(
+            "Đã nhớ là bạn có tình cảm/thích " + ", ".join(affections_added)
+            + ". Mình sẽ không xếp thông tin này vào sở thích thông thường."
+        )
+
+    response = " ".join(ack_parts) if (applied and ack_parts) else None
+    return BatchApplyResult(
+        applied=applied, failed=failed, saved_count=saved, response_text=response,
+    )

@@ -2212,6 +2212,116 @@ hôm nay tôi có lịch gì không?
 hôm nay tôi nên làm gì?
 ```
 
+(P0-7K reassigns future phases: schedule/agenda → P0-7L, historical memory query →
+P0-7M, assistant nickname/personalization → P0-7N. See the P0-7K section below.)
+
+---
+
+### P0-7K — Hybrid Semantic Memory Extractor / Natural Multi-Fact Memory
+
+P0-7J-FIX1 backend/runtime passed, but real Web natural-memory testing still failed
+on long multi-fact utterances, natural corrections, compound goals, partial removal,
+and unsupported memory domains. P0-7K adds a bounded hybrid pipeline: deterministic
+parser first; complex/ambiguous/multi-fact/correction utterances route to a semantic
+operation extractor that PROPOSES `MemoryOperation[]` — validated and
+conflict-resolved before any write. The extractor never writes memory directly.
+
+#### A. Long multi-fact preference extraction
+
+```
+tôi không thích ăn cay, bơi, tắm biển và thể dục, tôi thích ăn chối, ăn cam nhưng không thích ăn ổi
+=> likes include ăn chối/chuối and ăn cam
+=> dislikes include ăn cay, bơi, tắm biển, thể dục, ăn ổi
+=> must NOT save the whole sentence as one preference/dislike value
+```
+
+#### B. Natural name correction
+
+```
+tôi là bắc
+tôi tên là Â mới đúng
+tôi tên là gì?
+=> Â
+```
+
+#### C. Natural relationship correction
+
+```
+người yêu của tôi là quý
+tôi đã đổi người yêu thành may rồi
+người yêu của tôi là ai?
+=> may
+```
+
+#### D/E. Compound goal and partial removal
+
+```
+tôi muốn build cả LLM và SLM
+tôi không build LLM nữa
+tôi sẽ build gì?
+=> SLM, not LLM
+=> must NOT remove the whole compound goal
+```
+
+Compound goals are decomposed into parts (build LLM + build SLM) so removing only
+LLM preserves SLM.
+
+#### F. Remove all affection
+
+```
+tôi thích quý
+tôi thích linh
+bây giờ tôi không thích ai nữa
+tôi thích ai?
+=> no active affection targets
+```
+
+#### G. Inverse affection assertion
+
+```
+may là người tôi thích
+tôi thích ai?
+=> may
+```
+
+#### H. Preference yes/no without question mark
+
+```
+tôi thích ăn cá
+tôi có thích ăn cá
+=> answer yes / confirms active preference; must not fallback
+```
+
+#### I. Unsupported future domains — classified, never claimed
+
+```
+lịch hôm nay là gì?
+tôi đã từng thích ai?
+tôt đặt tên bạn là tèo được không?
+=> classified unsupported/future domain, honest deterministic reply
+=> no wrong profile memory write
+```
+
+Future phase mapping:
+
+```text
+- schedule/agenda → P0-7L
+- historical memory query → P0-7M
+- assistant nickname/personalization → P0-7N
+```
+
+#### Classification rules
+
+```text
+- If a multi-fact utterance is stored as one raw long preference/dislike value, classify NEEDS_FIX.
+- If natural correction markers like "mới đúng" or "đã đổi ... rồi" fallback, classify NEEDS_FIX.
+- If compound goal "LLM và SLM" cannot preserve SLM when LLM is removed, classify NEEDS_FIX.
+- If "bây giờ tôi không thích ai nữa" does not remove all active affection targets, classify NEEDS_FIX.
+- If inverse assertion "may là người tôi thích" falls back, classify NEEDS_FIX.
+- If supported preference yes/no without question mark falls back, classify NEEDS_FIX.
+- If unsupported domains are written into wrong memory domains, classify NEEDS_FIX.
+```
+
 ---
 
 ## 10. Merge Gate Policy

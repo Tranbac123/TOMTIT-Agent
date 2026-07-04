@@ -71,8 +71,16 @@ from agent_core.conversation.profile_memory import (
 )
 from agent_core.conversation.memory_operations import (
     apply_memory_operation,
+    apply_memory_operations,
     parse_memory_operation,
     resolve_goal_current_state,
+)
+from agent_core.conversation.semantic_extractor import (
+    MIN_EXTRACTION_CONFIDENCE,
+    RuleBasedSemanticOperationExtractor,
+    SemanticExtractionRequest,
+    SemanticOperationExtractorProtocol,
+    detect_unsupported_memory_domain,
 )
 from agent_core.conversation.profile_semantics import (
     SemanticProfileIntent,
@@ -216,6 +224,7 @@ class SessionRuntime:
         user_id: str | None = None,
         conversation_router: ConversationRouter | None = None,
         llm_responder: TextLLMResponder | None = None,
+        semantic_extractor: SemanticOperationExtractorProtocol | None = None,
     ) -> None:
         if session is None and session_store is not None:
             raise ValueError(
@@ -236,6 +245,11 @@ class SessionRuntime:
         self._conversation_router = conversation_router or ConversationRouter()
         self._response_composer = ResponseComposer()
         self._llm_responder = llm_responder
+        # CONV-P0 P0-7K: hybrid semantic memory extractor. Injectable (tests use the
+        # fake fixture extractor); the default is the deterministic rule-based backend —
+        # provider-free, no LLM/network. An LLM adapter would slot in behind the same
+        # protocol and can only PROPOSE operations; every write still passes validation.
+        self._semantic_extractor = semantic_extractor or RuleBasedSemanticOperationExtractor()
         # CONV-P0 P0-6B: short-term pending state for note slot continuation (session-local).
         self._pending_conversation_state: PendingConversationState | None = None
         # CONV-P0 P0-7B: short-term pending state for profile fact confirmation (session-local).
@@ -304,6 +318,14 @@ class SessionRuntime:
         if comparison is not None:
             return comparison
 
+        # CONV-P0 P0-7K priority 3.9: unsupported/future memory domains (schedule,
+        # historical query, assistant nickname) — classified honestly, never written,
+        # so they cannot corrupt profile memory. Schedule → P0-7L, history → P0-7M,
+        # nickname → P0-7N.
+        unsupported = self._maybe_answer_unsupported_memory_domain(user_message, state)
+        if unsupported is not None:
+            return unsupported
+
         # CONV-P0 P0-7B priority 4: profile query — answer from confirmed facts before router.
         profile_answer = self._maybe_answer_profile_query(user_message, state)
         if profile_answer is not None:
@@ -315,6 +337,14 @@ class SessionRuntime:
         correction = self._maybe_handle_correction(user_message, state)
         if correction is not None:
             return correction
+
+        # CONV-P0 P0-7K priority 4.11: hybrid semantic extraction — complex/multi-fact/
+        # correction utterances route through the semantic extractor, which PROPOSES
+        # MemoryOperation[]; every operation passes policy validation and conflict
+        # resolution before any write. Simple utterances stay deterministic.
+        extraction = self._maybe_handle_semantic_extraction(user_message, state)
+        if extraction is not None:
+            return extraction
 
         # CONV-P0 P0-7J priority 4.12: Memory Kernel v1 — structured update semantics
         # (occupation stop "không làm X nữa", affection removal, relationship
@@ -1047,6 +1077,46 @@ class SessionRuntime:
             )
         return self._complete_conv(
             state, "conv:profile_name_updated", build_name_update_ack(current, value)
+        )
+
+    def _maybe_answer_unsupported_memory_domain(
+        self, user_message: str, state: AgentState
+    ) -> AgentState | None:
+        """P0-7K priority 3.9: honest reply for unsupported/future memory domains.
+
+        Schedule/agenda (P0-7L), historical memory queries (P0-7M), and assistant
+        nickname (P0-7N) are classified and answered deterministically — never
+        written into profile memory.
+        """
+        detected = detect_unsupported_memory_domain(user_message.strip())
+        if detected is None:
+            return None
+        domain, response = detected
+        return self._complete_conv(state, f"conv:unsupported_{domain}", response)
+
+    def _maybe_handle_semantic_extraction(
+        self, user_message: str, state: AgentState
+    ) -> AgentState | None:
+        """P0-7K priority 4.11: hybrid semantic extraction for complex utterances.
+
+        The extractor only PROPOSES MemoryOperation[]; low-confidence, erroneous, or
+        empty proposals fall through to the deterministic handlers unchanged. Applied
+        operations go through validation + conflict resolution in the batch applier.
+        """
+        text = user_message.strip()
+        result = self._semantic_extractor.extract(SemanticExtractionRequest(raw_text=text))
+        if result.error or not result.operations:
+            return None
+        if result.confidence < MIN_EXTRACTION_CONFIDENCE:
+            return None
+        batch = apply_memory_operations(
+            result.operations, self._store, state.session_id, raw_text=text
+        )
+        if batch.applied == 0 or batch.response_text is None:
+            return None
+        self._confirmed_profile_fact_count += batch.saved_count
+        return self._complete_conv(
+            state, "conv:semantic_ops_applied", batch.response_text
         )
 
     def _maybe_handle_memory_operation(
