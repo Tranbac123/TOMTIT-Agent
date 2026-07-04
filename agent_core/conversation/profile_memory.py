@@ -115,6 +115,8 @@ class ProfileQuery:
         "relation_yesno",
         # P0-7I
         "self_occupation_yesno",
+        # P0-7J
+        "self_current_goal", "old_name_confirm",
     ]
     value: str | None = None          # for inverse_value: the name to look up
     relation_label: str | None = None  # for relation_name / relation_existence
@@ -177,6 +179,8 @@ _ROLE_KEYWORDS: frozenset[str] = frozenset({
     "enginer",   # typo accepted per spec
     "blogger", "bloger",  # P0-7H: occupation variants (bloger = common typo of blogger)
     "founder", "startup",
+    # P0-7J: short role terms — "tôi là DEV/IT/developper" saves occupation, never a name.
+    "it", "dev", "developper",
     "kỹ sư", "lập trình", "bác sĩ", "giáo viên", "chuyên gia",
     "nhà nghiên cứu", "nhà thiết kế", "giám đốc", "kế toán", "nhà báo",
     "nông dân", "sinh viên",  # P0-7H: Vietnamese occupation phrases
@@ -581,6 +585,18 @@ _RE_SELF_OCC_YESNO_Q = re.compile(
     re.IGNORECASE,
 )
 
+# P0-7J: current goal/intention query — "tôi đang muốn làm gì?", "tôi đang định build gì?"
+_RE_CURRENT_GOAL_Q = re.compile(
+    r'^(?:tôi|mình)\s+(?:đang\s+)?(?:muốn|định|sẽ)\s+(?:làm|build)\s+g[ìi]\s*[?？]?\s*$',
+    re.IGNORECASE,
+)
+
+# P0-7J: old-name confirmation — "Bắc là tên cũ của tôi, bạn còn nhớ không?"
+_RE_OLD_NAME_CONFIRM_Q = re.compile(
+    r'^(.+?)\s+là\s+tên\s+(?:cũ|trước\s+đây)\s+của\s+(?:tôi|mình)\b',
+    re.IGNORECASE,
+)
+
 # P0-7C: profile summary queries. P0-7F broadens to "đã/đang" tenses,
 # "lưu thông tin gì", and "hồ sơ của tôi có gì".
 _RE_PROFILE_SUMMARY_Q = re.compile(
@@ -648,8 +664,11 @@ _RE_NEGATIVE_PREF_Q = re.compile(
 # P0-7F-FIX3 Part B: "ai" is matched case-sensitively via a scoped no-ignorecase group
 # so the lowercase question word "ai" routes here, while the uppercase technology token
 # "AI" ("tôi thích AI") does NOT — it falls through to a professional-interest write.
+# P0-7J: thích/yêu/quan tâm/crush are one affection domain — all query the same lane;
+# optional "đang" covers "tôi đang crush ai?".
 _RE_AFFECTION_Q = re.compile(
-    r'^(?:tôi|mình)\s+(?:thích|yêu|crush)\s+(?-i:ai)\s*[?？]?\s*$',
+    r'^(?:tôi|mình)\s+(?:đang\s+)?'
+    r'(?:thích|yêu|crush|quan\s+tâm(?:\s+(?:đến|tới))?)\s+(?-i:ai)\s*[?？]?\s*$',
     re.IGNORECASE,
 )
 # P0-7F-FIX3 Part D: third-party mind-state ("quý có thích tôi không?"). Subject (group 1)
@@ -1057,6 +1076,13 @@ def detect_profile_query(text: str) -> ProfileQuery | None:
         if person:
             return ProfileQuery(kind="relation_yesno", value=person, relation_label=label)
 
+    # 0.9. P0-7J: old-name confirmation ("Bắc là tên cũ của tôi, bạn còn nhớ không?").
+    m = _RE_OLD_NAME_CONFIRM_Q.match(stripped)
+    if m:
+        name = re.sub(r"\s+", " ", m.group(1).strip()).strip()
+        if name and _is_self_name_phrase(name):
+            return ProfileQuery(kind="old_name_confirm", value=name)
+
     # 1. Relation name "tên gì?" form
     m = _RE_RELATION_NAME_Q.match(stripped)
     if m:
@@ -1113,6 +1139,11 @@ def detect_profile_query(text: str) -> ProfileQuery | None:
     # 8. P0-7D: learning focus query
     if _RE_LEARNING_Q.match(stripped):
         return ProfileQuery(kind="self_learning_focus")
+
+    # 8c. P0-7J: current goal/intention query ("tôi đang muốn làm gì?") — before the
+    #     legacy goal query; answers with the LATEST goal (current-state semantics).
+    if _RE_CURRENT_GOAL_Q.match(stripped):
+        return ProfileQuery(kind="self_current_goal")
 
     # 9. P0-7D: goal query
     if _RE_GOAL_Q.match(stripped):
@@ -2096,6 +2127,8 @@ class ProfileSnapshot:
     dislikes: list[str] = field(default_factory=list)          # negative preferences
     affections: list[str] = field(default_factory=list)        # people the user likes
     external_affections: list[str] = field(default_factory=list)  # people who like the user
+    # P0-7J: names the user held before the current one (oldest-first, current excluded)
+    previous_names: list[str] = field(default_factory=list)
 
 
 def _norm_cmp(value: str) -> str:
@@ -2189,6 +2222,9 @@ def collect_profile_snapshot(store: "MemoryStoreProtocol") -> ProfileSnapshot:
         if subject == "self" and rel == "name":
             # P0-7G: latest name wins (records are sorted ascending by created_at), so a
             # name update supersedes older values instead of keeping the first.
+            # P0-7J: superseded names are kept as previous_names for old-name queries.
+            if snap.name and _norm_cmp(snap.name) != _norm_cmp(val):
+                _add(snap.previous_names, snap.name)
             snap.name = val
         elif subject == "self" and rel == "negative_preference":
             _add(snap.dislikes, val)
@@ -2219,6 +2255,10 @@ def collect_profile_snapshot(store: "MemoryStoreProtocol") -> ProfileSnapshot:
             label = md.get("relation_label", "người liên quan")
             if (label, val) not in snap.relations:
                 snap.relations.append((label, val))
+    # P0-7J: a re-adopted name is current again, not a previous name.
+    if snap.name:
+        current = _norm_cmp(snap.name)
+        snap.previous_names = [n for n in snap.previous_names if _norm_cmp(n) != current]
     return snap
 
 
@@ -2244,6 +2284,13 @@ def _answer_entity_lookup(name: str, store: "MemoryStoreProtocol") -> str | None
             return f"{val} là người có tình cảm với bạn (theo thông tin bạn cung cấp)."
     if snap.name and _norm_cmp(snap.name) == lookup:
         return f"{snap.name} là tên của bạn."
+    # P0-7J: old-name lookup ("Bắc là ai?" after the user renamed to bb).
+    for val in snap.previous_names:
+        if _norm_cmp(val) == lookup:
+            suffix = (
+                f" Hiện tại mình đang nhớ tên bạn là {snap.name}." if snap.name else ""
+            )
+            return f"{val} là tên cũ/tên trước đây của bạn.{suffix}"
     return None
 
 
@@ -2447,6 +2494,34 @@ def answer_profile_query(
                 val = rec.metadata.get("value", "")
                 return f"Mục tiêu của bạn là {val}."
         return "Tôi chưa có thông tin về mục tiêu của bạn."
+
+    # --- P0-7J: self_current_goal ("tôi đang muốn làm gì?") — latest goal wins ---
+    elif query.kind == "self_current_goal":
+        goals = [
+            rec for rec in confirmed
+            if rec.metadata.get("subject") == "self"
+            and rec.metadata.get("relation") == "goal"
+        ]
+        if goals:
+            latest = sorted(goals, key=lambda r: r.created_at)[-1]
+            return f"Mình đang nhớ bạn đang muốn {latest.metadata.get('value', '')}."
+        return "Mình chưa có thông tin về dự định hiện tại của bạn."
+
+    # --- P0-7J: old_name_confirm ("Bắc là tên cũ của tôi, bạn còn nhớ không?") ---
+    elif query.kind == "old_name_confirm":
+        snap = collect_profile_snapshot(store)
+        target = _norm_cmp(query.value or "")
+        if any(_norm_cmp(n) == target for n in snap.previous_names):
+            suffix = (
+                f" Hiện tại mình đang nhớ tên bạn là {snap.name}." if snap.name else ""
+            )
+            return f"Đúng, mình còn nhớ: {query.value} là tên cũ của bạn.{suffix}"
+        if snap.name and _norm_cmp(snap.name) == target:
+            return (
+                f"Mình đang nhớ {query.value} là tên hiện tại của bạn, "
+                "không phải tên cũ."
+            )
+        return f"Mình chưa có thông tin {query.value} từng là tên của bạn."
 
     # --- P0-7E: self_habit ---
     elif query.kind == "self_habit":

@@ -77,6 +77,8 @@ _PROFESSIONAL_TOKENS: frozenset[str] = frozenset({
     "python", "java", "golang", "rust", "react", "sql", "cloud", "api",
     "blogger", "bloger",  # P0-7H: occupation variants
     "founder",
+    # P0-7J: short role terms — "tôi làm IT" / "tôi là DEV/developer/developper".
+    "it", "dev", "developer", "developper",
 })
 
 # P0-7H: Vietnamese single-word occupation terms whose diacritics prevent ASCII-word matching.
@@ -221,8 +223,12 @@ _RE_PREF = re.compile(
     r'^(?:tôi|mình)\s+(?:thích|yêu\s+thích|mê|có\s+sở\s+thích)\s+(.+)$',
     re.IGNORECASE | re.DOTALL,
 )
+# P0-7J: quan tâm is an affection-domain verb ("tôi quan tâm quý" saves affection when
+# the target is a person; "tôi quan tâm đến AI" still falls through to the legacy
+# professional-preference path because "AI" is not person-shaped).
 _RE_AFFECTION = re.compile(
-    r'^(?:tôi|mình)\s+(?:thích|yêu|nhớ|crush)\s+(.+)$',
+    r'^(?:tôi|mình)\s+(?:đang\s+)?'
+    r'(?:thích|yêu|nhớ|crush|quan\s+tâm(?:\s+(?:đến|tới))?)\s+(.+)$',
     re.IGNORECASE | re.DOTALL,
 )
 _RE_SKILL = re.compile(
@@ -250,8 +256,9 @@ _RE_GHET = re.compile(
     r'^(?:tôi|mình)\s+ghét\s+(.+)$',
     re.IGNORECASE | re.DOTALL,
 )
+# P0-7J: optional "đang" covers "tôi đang muốn làm AI LLM".
 _RE_WANT = re.compile(
-    r'^(?:tôi|mình)\s+(?:muốn|định)\s+(.+)$',
+    r'^(?:tôi|mình)\s+(?:đang\s+)?(?:muốn|định)\s+(.+)$',
     re.IGNORECASE | re.DOTALL,
 )
 _RE_RELATIONSHIP = re.compile(
@@ -451,6 +458,9 @@ def classify_profile_semantic_intent(text: str) -> SemanticProfileIntent | None:
     m = _RE_NEGATIVE_PREFERENCE.match(stripped)
     if m:
         value = _clean_value(m.group(1))
+        # P0-7J: "tôi không thích X nữa" means "no longer" — "nữa" is never part of the
+        # value, so "quý nữa" cannot leak into memory as a stored object.
+        value = re.sub(r'\s+nữa$', '', value, flags=re.IGNORECASE)
         if value and not _is_interrogative_value(value):
             if _is_person_affinity_value(value):
                 return SemanticProfileIntent(

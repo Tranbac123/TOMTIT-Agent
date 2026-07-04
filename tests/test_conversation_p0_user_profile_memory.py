@@ -3498,3 +3498,177 @@ def test_p0_7i_manual_spec_contains_conflict_resolution_addendum():
     ]
     missing = [tok for tok in required if tok not in text]
     assert not missing, f"Manual spec missing P0-7I tokens: {missing}"
+
+
+# ---------------------------------------------------------------------------
+# P0-7J tests — Memory Kernel v1 / update semantics expansion
+# ---------------------------------------------------------------------------
+
+def test_p0_7j_occupation_khong_lam_blogger_nua_removes_blogger():
+    sr = _make_sr()
+    sr.handle_turn("tôi làm blogger")
+    ack = (sr.handle_turn("tôi không làm blogger nữa").final_answer or "").lower()
+    assert "rule-based mvp" not in ack, f"occupation stop fell to generic fallback: {ack}"
+    ans = (sr.handle_turn("tôi làm gì?").final_answer or "").lower()
+    assert "blogger" not in ans, f"blogger still active after stop: {ans}"
+
+
+def test_p0_7j_occupation_removal_keeps_unrelated_ai():
+    sr = _make_sr()
+    sr.handle_turn("tôi làm AI")
+    sr.handle_turn("tôi làm blogger")
+    sr.handle_turn("tôi không làm blogger nữa")
+    ans = (sr.handle_turn("tôi làm gì?").final_answer or "").lower()
+    assert "ai" in ans, f"unrelated occupation AI was removed: {ans}"
+    assert "blogger" not in ans, f"blogger still active after stop: {ans}"
+
+
+def test_p0_7j_occupation_it_is_supported():
+    sr = _make_sr()
+    ack = (sr.handle_turn("tôi làm IT").final_answer or "").lower()
+    assert "rule-based mvp" not in ack, f"IT occupation fell to generic fallback: {ack}"
+    ans = (sr.handle_turn("tôi làm gì?").final_answer or "").lower()
+    assert "it" in ans, f"IT occupation not recalled: {ans}"
+
+
+def test_p0_7j_role_dev_not_saved_as_name():
+    sr = _make_sr()
+    sr.handle_turn("tôi là Bắc")
+    sr.handle_turn("tôi là DEV")
+    ans = (sr.handle_turn("tôi là ai?").final_answer or "").lower()
+    assert "bắc" in ans, f"name Bắc lost after role assertion: {ans}"
+    assert "dev" not in ans, f"role DEV corrupted the name: {ans}"
+    occ = (sr.handle_turn("tôi làm gì?").final_answer or "").lower()
+    assert "dev" in occ or "chưa" in occ, f"DEV role neither saved nor clarified: {occ}"
+
+
+def test_p0_7j_role_developer_not_saved_as_name():
+    sr = _make_sr()
+    sr.handle_turn("tôi là Bắc")
+    sr.handle_turn("tôi là developer")
+    ans = (sr.handle_turn("tôi là ai?").final_answer or "").lower()
+    assert "bắc" in ans, f"name Bắc lost after role assertion: {ans}"
+    assert "developer" not in ans, f"role developer corrupted the name: {ans}"
+
+
+def test_p0_7j_affection_khong_thich_quy_nua_removes_affection():
+    sr = _make_sr()
+    sr.handle_turn("tôi thích quý")
+    ack = (sr.handle_turn("tôi không thích quý nữa").final_answer or "").lower()
+    assert "rule-based mvp" not in ack, f"affection removal fell to fallback: {ack}"
+    ans = (sr.handle_turn("tôi thích ai?").final_answer or "").lower()
+    assert "quý" not in ans, f"quý still active affection after removal: {ans}"
+
+
+def test_p0_7j_affection_khong_thich_may_removes_affection_not_negative_preference():
+    sr = _make_sr()
+    sr.handle_turn("tôi thích may")
+    sr.handle_turn("tôi không thích may")
+    yn = (sr.handle_turn("tôi có thích may không?").final_answer or "").lower()
+    assert "may" in yn, f"yes/no answer missing target: {yn}"
+    assert "không" in yn or "chưa" in yn, f"expected negative after removal: {yn}"
+    neg = (sr.handle_turn("tôi không thích gì?").final_answer or "").lower()
+    assert "may" not in neg, f"person target leaked into negative preferences: {neg}"
+
+
+def test_p0_7j_affection_khong_yeu_may_removes_affection():
+    sr = _make_sr()
+    sr.handle_turn("tôi yêu may")
+    sr.handle_turn("tôi không yêu may")
+    ans = (sr.handle_turn("tôi yêu ai?").final_answer or "").lower()
+    assert "may" not in ans, f"may still active affection after removal: {ans}"
+
+
+def test_p0_7j_affection_quan_tam_query_alias():
+    sr = _make_sr()
+    sr.handle_turn("tôi thích quý")
+    ans = (sr.handle_turn("tôi quan tâm ai?").final_answer or "").lower()
+    assert "quý" in ans, f"quan tâm query did not read affection domain: {ans}"
+
+
+def test_p0_7j_affection_quan_tam_write_alias():
+    sr = _make_sr()
+    sr.handle_turn("tôi quan tâm quý")
+    ans = (sr.handle_turn("tôi thích ai?").final_answer or "").lower()
+    assert "quý" in ans, f"quan tâm write did not save affection: {ans}"
+
+
+def test_p0_7j_relationship_bay_gio_nguoi_yeu_updates_current():
+    sr = _make_sr()
+    sr.handle_turn("người yêu của tôi là may")
+    ack = (sr.handle_turn("bây giờ người yêu của tôi là quý").final_answer or "").lower()
+    assert "quý" in ack, f"current-update not acknowledged: {ack}"
+    ans = (sr.handle_turn("người yêu của tôi là ai?").final_answer or "").lower()
+    assert "quý" in ans, f"current partner not updated to quý: {ans}"
+    assert "may" not in ans, f"old partner may still current: {ans}"
+
+
+def test_p0_7j_relationship_hien_tai_ban_gai_updates_current():
+    sr = _make_sr()
+    sr.handle_turn("bạn gái của tôi là may")
+    sr.handle_turn("hiện tại bạn gái của tôi là quý")
+    ans = (sr.handle_turn("bạn gái của tôi là ai?").final_answer or "").lower()
+    assert "quý" in ans, f"current partner not updated to quý: {ans}"
+    assert "may" not in ans, f"old partner may still current: {ans}"
+
+
+def test_p0_7j_old_name_query_bac_la_ai():
+    sr = _make_sr()
+    sr.handle_turn("tôi là Bắc")
+    sr.handle_turn("tôi là bb")
+    ans = (sr.handle_turn("Bắc là ai?").final_answer or "").lower()
+    assert "rule-based mvp" not in ans, f"old-name query fell to fallback: {ans}"
+    assert "bắc" in ans and "tên" in ans, f"Bắc not recognized as prior name: {ans}"
+    confirm = (sr.handle_turn(
+        "Bắc là tên cũ của tôi, bạn còn nhớ không?"
+    ).final_answer or "").lower()
+    assert "bắc" in confirm, f"old-name confirmation missing name: {confirm}"
+    assert "đúng" in confirm or "còn nhớ" in confirm, f"old name not confirmed: {confirm}"
+
+
+def test_p0_7j_goal_want_ai_llm():
+    sr = _make_sr()
+    sr.handle_turn("tôi muốn làm AI LLM")
+    ans = (sr.handle_turn("tôi đang muốn làm gì?").final_answer or "").lower()
+    assert "rule-based mvp" not in ans, f"current-goal query fell to fallback: {ans}"
+    assert "ai" in ans and "llm" in ans, f"goal AI LLM not recalled: {ans}"
+
+
+def test_p0_7j_goal_build_ai_model_llm():
+    sr = _make_sr()
+    ack = (sr.handle_turn("tôi sẽ build AI model LLM").final_answer or "").lower()
+    assert "rule-based mvp" not in ack, f"'tôi sẽ build' fell to fallback: {ack}"
+    ans = (sr.handle_turn("tôi đang muốn làm gì?").final_answer or "").lower()
+    assert "ai" in ans and "llm" in ans, f"goal build AI model LLM not recalled: {ans}"
+
+
+def test_p0_7j_goal_switch_llm_to_ai_agent():
+    sr = _make_sr()
+    sr.handle_turn("tôi muốn build LLM")
+    ack = (sr.handle_turn(
+        "tôi không muốn build LLM nữa tôi muốn build AI Agent"
+    ).final_answer or "").lower()
+    assert "agent" in ack, f"goal switch not acknowledged: {ack}"
+    ans = (sr.handle_turn("tôi đang muốn làm gì?").final_answer or "").lower()
+    assert "agent" in ans, f"new goal AI Agent not current: {ans}"
+    assert "build llm" not in ans, f"old goal build LLM still current: {ans}"
+
+
+def test_p0_7j_manual_spec_contains_update_semantics_addendum():
+    import pathlib
+    spec_path = pathlib.Path(__file__).parent / "manual" / "CONV_P0_MEMORY_CORE_MANUAL_REGRESSION_SPEC.md"
+    text = spec_path.read_text(encoding="utf-8").lower()
+    required = [
+        "p0-7j",
+        "memory kernel",
+        "memory update semantics",
+        "tôi không làm blogger nữa",
+        "tôi không thích quý nữa",
+        "bây giờ người yêu của tôi là quý",
+        "tôi muốn làm ai llm",
+        "tôi không muốn build llm nữa",
+        "p0-7n",
+        "needs_fix",
+    ]
+    missing = [tok for tok in required if tok not in text]
+    assert not missing, f"Manual spec missing P0-7J tokens: {missing}"

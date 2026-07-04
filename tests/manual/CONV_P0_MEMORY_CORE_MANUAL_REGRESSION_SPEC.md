@@ -1952,6 +1952,168 @@ tôi thích ai?
 
 ---
 
+## P0-7J — TOMTIT Memory Kernel v1 / Update Semantics Expansion
+
+This section covers memory update semantics for occupation, affection, relationship,
+name history, and goal/intention — implemented via a bounded Memory Kernel v1 pipeline
+(parse → validate → conflict-resolve → apply) instead of scattered one-off patches.
+
+### Required behaviors
+
+#### Occupation update/removal
+
+```
+tôi làm blogger
+tôi không làm blogger nữa
+tôi làm gì?
+=> must NOT include blogger
+```
+
+```
+tôi làm AI
+tôi không làm blogger nữa
+tôi làm gì?
+=> must still include AI
+```
+
+Also supported phrasings: "tôi không còn làm X", "tôi nghỉ làm X".
+
+```
+tôi làm IT
+tôi làm gì?
+=> includes IT
+```
+
+#### Role-like values must never corrupt the name
+
+```
+tôi là DEV
+tôi là ai?
+=> must NOT set name to DEV
+
+tôi làm gì?
+=> includes DEV / dev role if saved, or asks clarification; no name corruption
+```
+
+```
+tôi là developer
+tôi là ai?
+=> must NOT set name to developer
+```
+
+Also covers the "developper" typo.
+
+#### Affection synonyms + removal (thích/yêu/quan tâm/crush = one domain)
+
+```
+tôi thích quý
+tôi không thích quý nữa
+tôi thích ai?
+=> must NOT include quý
+```
+
+```
+tôi thích may
+tôi không thích may
+tôi có thích may không?
+=> no
+```
+
+```
+tôi yêu may
+tôi không yêu may
+tôi yêu ai?
+=> must NOT include may
+```
+
+```
+tôi thích quý
+tôi quan tâm ai?
+=> quý
+```
+
+```
+tôi quan tâm quý
+tôi thích ai?
+=> quý
+```
+
+Must not save "quý nữa" / "may nữa" as ordinary preference or negative preference.
+
+#### Relationship current update
+
+```
+người yêu của tôi là may
+bây giờ người yêu của tôi là quý
+người yêu của tôi là ai?
+=> quý, not may
+```
+
+```
+bạn gái của tôi là may
+hiện tại bạn gái của tôi là quý
+bạn gái của tôi là ai?
+=> quý, not may
+```
+
+Update markers: "bây giờ", "hiện tại", "giờ", "từ nay".
+
+#### Old-name / self alias query
+
+```
+tôi là Bắc
+tôi là bb
+Bắc là ai?
+=> Bắc is previous/old name of current user
+```
+
+```
+Bắc là tên cũ của tôi, bạn còn nhớ không?
+=> yes / recognizes Bắc as prior name of user
+```
+
+#### Goal / intention (minimal current-state)
+
+```
+tôi muốn làm AI LLM
+tôi đang muốn làm gì?
+=> AI LLM
+```
+
+```
+tôi sẽ build AI model LLM
+tôi đang muốn làm gì?
+=> build AI model LLM / AI model LLM
+```
+
+```
+tôi không muốn build LLM nữa tôi muốn build AI Agent
+tôi đang muốn làm gì?
+=> AI Agent, not LLM
+```
+
+### Classification rules
+
+```text
+- If "không làm X nữa" does not remove occupation X, classify NEEDS_FIX.
+- If role-like values DEV/developer/developper become current name, classify NEEDS_FIX.
+- If "không thích/yêu/quan tâm X nữa" leaves X active in affection, classify NEEDS_FIX.
+- If "nữa" is saved as part of a person/object value, classify NEEDS_FIX.
+- If "bây giờ/hiện tại/từ nay người yêu/bạn gái..." does not update current relationship, classify NEEDS_FIX.
+- If goal switch "không muốn X nữa ... muốn Y" leaves X as current active goal, classify NEEDS_FIX.
+- Schedule/calendar failures are out-of-scope for P0-7J and should be tracked for P0-7N.
+```
+
+### P0-7N candidate — Schedule/Agenda Memory (future, out of scope here)
+
+```
+mai tôi có lịch không?
+hôm nay tôi sẽ làm gì?
+hôm nay tôi muốn đi đâu?
+```
+
+---
+
 ## 10. Merge Gate Policy
 
 Passing this file does not automatically merge.

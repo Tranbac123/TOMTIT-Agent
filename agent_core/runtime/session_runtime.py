@@ -69,6 +69,10 @@ from agent_core.conversation.profile_memory import (
     save_relation_update,
     save_self_name_update,
 )
+from agent_core.conversation.memory_operations import (
+    apply_memory_operation,
+    parse_memory_operation,
+)
 from agent_core.conversation.profile_semantics import (
     SemanticProfileIntent,
     classify_profile_semantic_intent,
@@ -310,6 +314,14 @@ class SessionRuntime:
         correction = self._maybe_handle_correction(user_message, state)
         if correction is not None:
             return correction
+
+        # CONV-P0 P0-7J priority 4.12: Memory Kernel v1 — structured update semantics
+        # (occupation stop "không làm X nữa", affection removal, relationship
+        # current-update "bây giờ người yêu...", goal add/switch). Operations that do
+        # not apply to current memory state fall through to the handlers below.
+        memop = self._maybe_handle_memory_operation(user_message, state)
+        if memop is not None:
+            return memop
 
         # CONV-P0 P0-7I priority 4.15: occupation removal ("tôi không phải nông dân").
         occ_removed = self._maybe_handle_occupation_removal(user_message, state)
@@ -1015,6 +1027,28 @@ class SessionRuntime:
         return self._complete_conv(
             state, "conv:profile_name_updated", build_name_update_ack(current, value)
         )
+
+    def _maybe_handle_memory_operation(
+        self, user_message: str, state: AgentState
+    ) -> AgentState | None:
+        """P0-7J priority 4.12: Memory Kernel v1 — parse → validate → resolve → apply.
+
+        Bounded structured update semantics: occupation stop ("tôi không làm X nữa"),
+        affection removal ("tôi không thích/yêu/quan tâm X nữa"), relationship
+        current-update ("bây giờ người yêu của tôi là X"), and goal add/switch. An
+        operation that does not apply to current memory state (e.g. removing an
+        affection that is not active) returns None so the turn keeps flowing through
+        the normal handler chain unchanged.
+        """
+        op = parse_memory_operation(user_message.strip())
+        if op is None:
+            return None
+        outcome = apply_memory_operation(op, self._store, state.session_id)
+        if outcome is None:
+            return None
+        if outcome.saved:
+            self._confirmed_profile_fact_count += 1
+        return self._complete_conv(state, outcome.trace_marker, outcome.response_text)
 
     def _maybe_handle_occupation_removal(
         self, user_message: str, state: AgentState
