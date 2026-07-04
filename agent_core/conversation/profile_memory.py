@@ -123,6 +123,9 @@ class ProfileQuery:
         "self_do_yesno",
         # P0-7K-FIX1
         "self_preference_ranking", "self_ai_yesno", "goal_challenge", "goal_followup",
+        # P0-7K-FIX2
+        "self_food_favorite", "self_comparative", "self_food_preference",
+        "self_food_dislike", "self_negative_skill",
     ]
     value: str | None = None          # for inverse_value: the name to look up
     relation_label: str | None = None  # for relation_name / relation_existence
@@ -293,6 +296,27 @@ def _is_unsafe_or_sensitive_auto_value(value: str) -> bool:
         return True
     tokens = _RE_UNICODE_TOKEN.findall(v)
     return any(tok in _UNSAFE_VALUE_TOKENS for tok in tokens)
+
+
+# P0-7K-FIX2: query/ranking/comparative markers that must never enter an ordinary
+# preference via the legacy auto-save path (defense in depth for the semantic guard).
+_LEGACY_QUERY_WORD_TOKENS: frozenset[str] = frozenset({"gì", "gi", "nào", "đâu"})
+_LEGACY_RANKING_COMPARATIVE_TOKENS: frozenset[str] = frozenset({
+    "nhất", "nhat", "nhata", "hơn", "hay",
+})
+
+
+def _value_has_query_word(value: str) -> bool:
+    """True if value contains a bare query word or a ranking/comparative marker token.
+
+    Blocks the legacy preference auto-save for phrases like "ăn gì nhất",
+    "code hay thích vẽ hơn" — favorites/comparatives are owned by the semantic layer.
+    """
+    tokens = re.sub(r"\s+", " ", value.strip().lower()).split()
+    return any(
+        t in _LEGACY_QUERY_WORD_TOKENS or t in _LEGACY_RANKING_COMPARATIVE_TOKENS
+        for t in tokens
+    )
 
 
 def _is_valid_auto_value_shape(value: str) -> bool:
@@ -618,6 +642,31 @@ _RE_OLD_NAME_CONFIRM_Q = re.compile(
 # (with or without "?"). Answered safely (no ranking engine), never written as a fact.
 _RE_PREF_RANKING_Q = re.compile(
     r'^(?:tôi|mình)\s+thích\s+(?:cái\s+)?g[ìi]\s+(?:\S.*)$',
+    re.IGNORECASE,
+)
+# P0-7K-FIX2 A/B: food-favorite / food-ranking query — "tôi thích ăn gì nhất".
+_RE_FOOD_FAVORITE_Q = re.compile(
+    r'^(?:tôi|mình)\s+thích\s+(?:ăn|uống)\s+(?:cái\s+)?g[ìi]\s+nhất\s*[?？]?\s*$',
+    re.IGNORECASE,
+)
+# P0-7K-FIX2 C: comparative query — "tôi thích A hay (thích) B hơn?".
+_RE_COMPARATIVE_Q = re.compile(
+    r'^(?:tôi|mình)\s+thích\s+(.+?)\s+hay\s+(?:thích\s+)?(.+?)\s+hơn\s*[?？]?\s*$',
+    re.IGNORECASE,
+)
+# P0-7K-FIX2 H: food-specific negative query — "tôi không thích ăn gì?".
+_RE_FOOD_NEG_Q = re.compile(
+    r'^(?:tôi|mình)\s+không\s+thích\s+ăn\s+(?:cái\s+)?g[ìi]\s*[?？]?\s*$',
+    re.IGNORECASE,
+)
+# P0-7K-FIX2 H: food-specific positive query — "tôi thích ăn gì?".
+_RE_FOOD_POS_Q = re.compile(
+    r'^(?:tôi|mình)\s+thích\s+ăn\s+(?:cái\s+)?g[ìi]\s*[?？]?\s*$',
+    re.IGNORECASE,
+)
+# P0-7K-FIX2 E: negative-skill list query — "tôi không biết gì?", "tôi không biết làm gì?".
+_RE_NEGATIVE_SKILL_Q = re.compile(
+    r'^(?:tôi|mình)\s+không\s+biết\s+(?:làm\s+)?g[ìi]\s*[?？]?\s*$',
     re.IGNORECASE,
 )
 
@@ -1187,10 +1236,33 @@ def detect_profile_query(text: str) -> ProfileQuery | None:
     if _RE_GOAL_FOLLOWUP_Q.match(stripped):
         return ProfileQuery(kind="goal_followup")
 
+    # 6f. P0-7K-FIX2 C: comparative query ("tôi thích A hay B hơn?") — most specific
+    #     "thích ... hơn" form; before affection/ranking/preference lanes.
+    m = _RE_COMPARATIVE_Q.match(stripped)
+    if m:
+        a = re.sub(r"\s+", " ", m.group(1).strip().rstrip("?？")).strip()
+        b = re.sub(r"\s+", " ", m.group(2).strip().rstrip("?？")).strip()
+        if a and b:
+            return ProfileQuery(kind="self_comparative", value=a, object_value=b)
+
+    # 6g. P0-7K-FIX2 A/B: food-favorite / food-ranking query ("tôi thích ăn gì nhất").
+    if _RE_FOOD_FAVORITE_Q.match(stripped):
+        return ProfileQuery(kind="self_food_favorite")
+
+    # 6h. P0-7K-FIX2 H: food-specific negative query ("tôi không thích ăn gì?") — before
+    #     the general negative-preference query so it is not read as "không thích gì".
+    if _RE_FOOD_NEG_Q.match(stripped):
+        return ProfileQuery(kind="self_food_dislike")
+
     # 7. P0-7F-FIX2: affection query ("tôi thích ai?") — before general preference query.
     #    P0-7F-FIX5 Part D adds the "người tôi thích là ai?" alias to the same lane.
     if _RE_AFFECTION_Q.match(stripped) or _RE_AFFECTION_ALIAS_Q.match(stripped):
         return ProfileQuery(kind="self_affection")
+
+    # 7a. P0-7K-FIX2 H: food-specific positive query ("tôi thích ăn gì?"). Answers only
+    #     food preferences + a food favorite (drink query stays "tôi thích uống gì?").
+    if _RE_FOOD_POS_Q.match(stripped):
+        return ProfileQuery(kind="self_food_preference")
 
     # 7b. P0-7F-FIX2: drink/food preference query ("tôi thích uống gì?")
     if _RE_DRINK_PREF_Q.match(stripped):
@@ -1227,6 +1299,11 @@ def detect_profile_query(text: str) -> ProfileQuery | None:
     # 9b. P0-7E: habit query
     if _RE_HABIT_Q.match(stripped):
         return ProfileQuery(kind="self_habit")
+
+    # 9c'. P0-7K-FIX2 E: negative-skill list query ("tôi không biết gì?") — before the
+    #      positive skill query so "không biết gì" is never read as "biết gì".
+    if _RE_NEGATIVE_SKILL_Q.match(stripped):
+        return ProfileQuery(kind="self_negative_skill")
 
     # 9c. P0-7F: skill query
     if _RE_SKILL_Q.match(stripped):
@@ -1291,7 +1368,10 @@ def _match_auto_pattern(stripped: str) -> tuple[str, str] | None:
         m = pat.match(stripped)
         if m:
             value = m.group(1).strip().rstrip('.!')
-            if _is_valid_auto_value_shape(value):
+            # P0-7K-FIX2: the legacy auto-save path must also reject query phrases
+            # ("ăn gì nhất") and ranking/comparative markers so they never leak into
+            # ordinary preferences when the semantic layer declined the turn.
+            if _is_valid_auto_value_shape(value) and not _value_has_query_word(value):
                 return ("preference", value)
 
     # --- Habit / lifestyle ("tôi hay ...", "tôi thường ...") ---
@@ -1662,6 +1742,13 @@ def answer_yes_no_memory_query(
             return f"Không, bạn từng nói là không thích {value}."
         if target in prefs or any(_matches_preference_query(v, value) for v in pref_values):
             return f"Có, mình đang nhớ bạn thích {value}."
+        # P0-7K-FIX2: a comparative winner ("thích cafe hơn trà") answers the yes/no too.
+        if any(_norm_cmp(w) == target for w, _l in snap.comparatives):
+            return f"Có, mình đang nhớ bạn thích {value}."
+        if snap.favorite_food and _norm_cmp(snap.favorite_food) == target:
+            return f"Có, mình đang nhớ bạn thích {value}."
+        if snap.favorite_general and _norm_cmp(snap.favorite_general) == target:
+            return f"Có, mình đang nhớ bạn thích {value}."
         if target in skills:
             return (
                 f'Mình đang nhớ bạn biết {value}, nhưng chưa lưu "{value}" như một sở thích.'
@@ -1867,6 +1954,44 @@ def save_affection_fact(
         content=f"bạn có tình cảm/thích {value}",
         tags=["user_profile", "self", "affection"],
         original_text=original_text,
+    )
+
+
+def save_favorite_fact(
+    value: str, domain: str, store: "MemoryStoreProtocol", session_id: str,
+    *, original_text: str = "",
+) -> bool:
+    """P0-7K-FIX2: save a favorite ("tôi thích X nhất") as a distinct self fact.
+
+    Stored under relation ``favorite`` with a ``favorite_domain`` (food/general), so it
+    never pollutes ordinary preference retrieval while answering the "... gì nhất?" lane.
+    """
+    return _save_profile_v2_fact(
+        store, session_id,
+        subject="self", relation="favorite", value=value,
+        content=f"bạn thích {value} nhất",
+        tags=["user_profile", "self", "favorite"],
+        original_text=original_text,
+        extra_metadata={"favorite_domain": domain},
+    )
+
+
+def save_comparative_fact(
+    winner: str, loser: str, domain: str, store: "MemoryStoreProtocol", session_id: str,
+    *, original_text: str = "",
+) -> bool:
+    """P0-7K-FIX2: save a comparative preference ("tôi thích A hơn B") as a self fact.
+
+    Stored under relation ``comparative`` (winner value + ``compared_to`` loser), so the
+    raw comparative phrase never enters ordinary preference retrieval.
+    """
+    return _save_profile_v2_fact(
+        store, session_id,
+        subject="self", relation="comparative", value=winner,
+        content=f"bạn thích {winner} hơn {loser}",
+        tags=["user_profile", "self", "comparative"],
+        original_text=original_text,
+        extra_metadata={"compared_to": loser, "comparative_domain": domain},
     )
 
 
@@ -2290,6 +2415,11 @@ class ProfileSnapshot:
     negative_skills: list[str] = field(default_factory=list)
     # P0-7K-FIX1: the user's stated main goal focus ("mục tiêu chính của tôi là X")
     current_focus: str | None = None
+    # P0-7K-FIX2: favorites ("tôi thích X nhất") — latest wins per domain
+    favorite_food: str | None = None
+    favorite_general: str | None = None
+    # P0-7K-FIX2: comparative preferences ("tôi thích A hơn B") — (winner, loser)
+    comparatives: list[tuple[str, str]] = field(default_factory=list)
 
 
 def _norm_cmp(value: str) -> str:
@@ -2438,6 +2568,17 @@ def collect_profile_snapshot(store: "MemoryStoreProtocol") -> ProfileSnapshot:
             # P0-7K-FIX1: latest focus wins; also recorded as an active goal.
             snap.current_focus = val
             _add(snap.goals, val)
+        elif subject == "self" and rel == "favorite":
+            # P0-7K-FIX2: latest favorite wins, per domain (food vs general).
+            if md.get("favorite_domain") == "food":
+                snap.favorite_food = val
+            else:
+                snap.favorite_general = val
+        elif subject == "self" and rel == "comparative":
+            loser = md.get("compared_to", "")
+            pair = (val, loser)
+            if pair not in snap.comparatives:
+                snap.comparatives.append(pair)
         elif subject == "self" and rel == "preference":
             if _is_polluted_preference(val):
                 continue
@@ -2630,6 +2771,15 @@ def answer_profile_query(
             lines.append(f"- Bạn hay {', '.join(snap.habits)}.")
         if snap.pets:
             lines.append(f"- Nhà bạn có nuôi {', '.join(snap.pets)}.")
+        # P0-7K-FIX1/FIX2: negative skills and favorites/comparatives shown distinctly.
+        if snap.negative_skills:
+            lines.append(f"- Bạn không biết {', '.join(snap.negative_skills)}.")
+        if snap.favorite_food:
+            lines.append(f"- Món bạn thích ăn nhất là {snap.favorite_food}.")
+        if snap.favorite_general:
+            lines.append(f"- Điều bạn thích nhất là {snap.favorite_general}.")
+        for winner, loser in snap.comparatives:
+            lines.append(f"- Bạn thích {winner} hơn {loser}.")
         # P0-7G: dislikes shown separately from positive likes.
         if snap.dislikes:
             lines.append(f"- Bạn không thích {', '.join(snap.dislikes)}.")
@@ -2662,9 +2812,13 @@ def answer_profile_query(
             return f"Có, mình đang nhớ bạn là {query.value}."
         return f"Không, hiện mình không có thông tin bạn là {query.value}."
 
-    # --- P0-7K-FIX1 J: self_preference_ranking ("tôi thích gì nhất") — safe, no ranking ---
+    # --- P0-7K-FIX1 J / P0-7K-FIX2 B: self_preference_ranking ("tôi thích gì nhất") ---
     elif query.kind == "self_preference_ranking":
         snap = collect_profile_snapshot(store)
+        # A stored general (or food) favorite answers directly.
+        fav = snap.favorite_general or snap.favorite_food
+        if fav:
+            return f"Mình đang nhớ bạn thích {fav} nhất."
         likes = snap.preferences_personal + snap.preferences_professional
         if likes:
             return (
@@ -2672,6 +2826,47 @@ def answer_profile_query(
                 "bạn thích: " + ", ".join(likes) + "."
             )
         return "Mình chưa đủ thông tin để biết bạn thích gì nhất."
+
+    # --- P0-7K-FIX2 A/B: self_food_favorite ("tôi thích ăn gì nhất?") ---
+    elif query.kind == "self_food_favorite":
+        snap = collect_profile_snapshot(store)
+        if snap.favorite_food:
+            return f"Mình đang nhớ món bạn thích ăn nhất là {snap.favorite_food}."
+        return "Mình chưa đủ thông tin để biết bạn thích ăn gì nhất."
+
+    # --- P0-7K-FIX2 C: self_comparative ("tôi thích A hay B hơn?") ---
+    elif query.kind == "self_comparative":
+        snap = collect_profile_snapshot(store)
+        a = _norm_cmp(query.value or "")
+        b = _norm_cmp(query.object_value or "")
+        for winner, loser in snap.comparatives:
+            w, l = _norm_cmp(winner), _norm_cmp(loser)
+            if {a, b} == {w, l}:
+                return f"Bạn thích {winner} hơn {loser}."
+        return (
+            f"Mình chưa đủ thông tin để so sánh {query.value} và {query.object_value}."
+        )
+
+    # --- P0-7K-FIX2 H: self_food_preference ("tôi thích ăn gì?") ---
+    elif query.kind == "self_food_preference":
+        snap = collect_profile_snapshot(store)
+        foods = [
+            v for v in (snap.preferences_personal + snap.preferences_professional)
+            if _norm_cmp(v).startswith(("ăn ", "uống "))
+        ]
+        if snap.favorite_food and snap.favorite_food not in foods:
+            foods = [snap.favorite_food] + foods
+        if foods:
+            return "Bạn thích " + ", ".join(foods) + "."
+        return "Mình chưa có thông tin về món ăn bạn thích."
+
+    # --- P0-7K-FIX2 H: self_food_dislike ("tôi không thích ăn gì?") ---
+    elif query.kind == "self_food_dislike":
+        snap = collect_profile_snapshot(store)
+        foods = [d for d in snap.dislikes if _norm_cmp(d).startswith(("ăn ", "uống "))]
+        if foods:
+            return "Bạn không thích " + ", ".join(foods) + "."
+        return "Mình chưa có thông tin về món ăn bạn không thích."
 
     # --- P0-7K-FIX1 E: self_ai_yesno ("tôi có làm AI không?") — via AI taxonomy ---
     elif query.kind == "self_ai_yesno":
@@ -2738,6 +2933,13 @@ def answer_profile_query(
         if not snap.skills:
             return "Tôi chưa có thông tin về kỹ năng của bạn."
         return "Bạn biết " + ", ".join(snap.skills) + "."
+
+    # --- P0-7K-FIX2 E: self_negative_skill ("tôi không biết gì?") ---
+    elif query.kind == "self_negative_skill":
+        snap = collect_profile_snapshot(store)
+        if not snap.negative_skills:
+            return "Mình chưa có thông tin về những việc bạn không biết làm."
+        return "Bạn không biết " + ", ".join(snap.negative_skills) + "."
 
     # --- P0-7D: self_learning_focus ---
     elif query.kind == "self_learning_focus":

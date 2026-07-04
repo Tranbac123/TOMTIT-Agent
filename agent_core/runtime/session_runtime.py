@@ -67,6 +67,8 @@ from agent_core.conversation.profile_memory import (
     resolve_preference_conflicts,
     resolve_skill_conflicts,
     save_affection_fact,
+    save_comparative_fact,
+    save_favorite_fact,
     save_auto_profile_fact,
     save_confirmed_profile_fact,
     save_external_affection_fact,
@@ -1317,6 +1319,38 @@ class SessionRuntime:
         # write_policy == "auto_safe"
         if intent.category == "relationship.partner_name":
             return self._handle_semantic_relationship(intent, user_message, state)
+
+        # P0-7K-FIX2: favorite ("tôi thích X nhất") — stored distinctly, never as an
+        # ordinary preference.
+        if intent.category and intent.category.startswith("favorite."):
+            value = intent.value or ""
+            domain = intent.category.split(".", 1)[1]
+            if not save_favorite_fact(
+                value, domain, self._store, state.session_id,
+                original_text=user_message.strip(),
+            ):
+                return None
+            self._confirmed_profile_fact_count += 1
+            return self._complete_conv(
+                state, "conv:favorite_saved",
+                f"Đã nhớ là bạn thích {value} nhất.",
+            )
+
+        # P0-7K-FIX2: comparative ("tôi thích A hơn B") — stored distinctly.
+        if intent.category and intent.category.startswith("comparative."):
+            winner = intent.value or ""
+            loser = intent.relation_label or ""
+            domain = intent.category.split(".", 1)[1]
+            if not save_comparative_fact(
+                winner, loser, domain, self._store, state.session_id,
+                original_text=user_message.strip(),
+            ):
+                return None
+            self._confirmed_profile_fact_count += 1
+            return self._complete_conv(
+                state, "conv:comparative_saved",
+                f"Đã nhớ là bạn thích {winner} hơn {loser}.",
+            )
 
         # P0-7G: affection/person memory ("tôi thích/yêu/crush Quý") — saved distinctly.
         if intent.category in ("relationship.affection_candidate", "affection_relation"):

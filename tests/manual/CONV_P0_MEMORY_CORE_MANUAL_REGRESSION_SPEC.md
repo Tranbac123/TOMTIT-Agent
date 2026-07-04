@@ -2459,6 +2459,123 @@ tôi thích gì nhất?
 
 ---
 
+### P0-7K-FIX2 — Preference Ranking + Skill Conflict + Goal Consistency
+
+Memory-core correctness patch after pre-merge manual Web rerun found ranking/comparative
+write pollution, skill multi-item/conflict gaps, goal AI-taxonomy removal inconsistency,
+a missing goal replace phrase, and missing food-specific preference queries.
+
+#### A. Food-ranking query/write guard
+
+```
+tôi thích ăn gì nhất
+tôi thích ăn gì nhất?
+=> must NOT save "ăn gì nhất"; answer food favorite if known, else not enough info
+
+bạn nhớ gì về tôi
+=> summary must NOT contain "ăn gì nhất"
+```
+
+#### B. Favorite / ranking preference marker
+
+```
+tôi thích ăn chuối nhất
+tôi thích ăn gì nhất?
+=> favorite_food = ăn chuối; answer ăn chuối; do NOT store raw "ăn chuối nhất"
+
+tôi thích xem phim nhất
+tôi thích gì nhất?
+=> favorite = xem phim; do NOT store raw "xem phim nhất"
+```
+
+#### C. Comparative preference
+
+```
+tôi thích code hơn là vẽ
+tôi thích code hay thích vẽ hơn?
+=> answer code; do NOT save "code hay thích vẽ hơn"
+
+tôi thích ăn kẹo hơn ăn kem
+tôi thích ăn kẹo hay ăn kem hơn?
+=> answer ăn kẹo; do NOT store raw comparative as plain preference
+```
+
+#### D. Skill multi-item decomposition
+
+```
+tôi biết đọc sách và hát
+tôi có biết hát không?
+tôi có biết đọc sách không?
+=> both yes; active skills đọc sách + hát (not one raw "đọc sách và hát")
+```
+
+#### E. Skill conflict over decomposed parts
+
+```
+tôi biết nấu ăn
+tôi biết đọc sách và hát
+tôi không biết đọc sách
+tôi không biết hát
+tôi biết gì?          => nấu ăn only
+tôi không biết gì?    => đọc sách, hát
+```
+
+#### F. Goal taxonomy-consistent removal
+
+```
+tôi sẽ làm LLM và Agent AI
+tôi không làm AI nữa
+tôi có làm AI nữa không?   => Không
+tôi sẽ làm gì?             => must NOT contain LLM or Agent AI
+```
+
+AI-related: LLM, SLM, AI, Agent AI, AI Agent, AI Agent coder, AI model, machine
+learning, ML, deep learning.
+
+#### G. Goal replace/focus phrase
+
+```
+tôi sẽ làm LLM và Agent
+bây giờ tôi chỉ muốn làm LLM
+tôi sẽ làm gì?
+=> only LLM remains active; Agent removed
+```
+
+#### H. Food-specific positive/negative queries
+
+```
+tôi thích ăn cam
+tôi không thích ăn ổi
+tôi thích ăn gì?          => ăn cam
+tôi không thích ăn gì?    => ăn ổi
+
+tôi không thích ăn kem, me và dâu tây
+tôi không thích ăn gì?    => ăn kem, me, dâu tây  (do NOT drop "me")
+```
+
+#### I. No raw memory pollution
+
+```
+bạn nhớ gì về tôi
+=> summary must NOT contain: ăn gì nhất, code hay thích vẽ hơn, raw
+   "ăn kẹo hơn ăn kem"/"ăn chuối nhất"/"xem phim nhất" as ordinary preference,
+   "đọc sách và hát" as one raw skill
+```
+
+#### Classification rules
+
+```text
+- If a ranking/comparative query is saved as a preference, classify CRITICAL_BLOCKER / NEEDS_FIX.
+- If "thích X nhất"/"thích A hơn B" is stored raw as an ordinary preference, classify NEEDS_FIX.
+- If skill "biết A và B" is stored as one raw skill, classify NEEDS_FIX.
+- If skill conflict does not remove the decomposed positive part, classify NEEDS_FIX.
+- If "không làm AI nữa" leaves any AI-related goal active, classify NEEDS_FIX.
+- If "bây giờ tôi chỉ muốn làm X" does not replace the active goal set, classify NEEDS_FIX.
+- If a food query drops a short valid item like "me", classify NEEDS_FIX.
+```
+
+---
+
 ## 10. Merge Gate Policy
 
 Passing this file does not automatically merge.

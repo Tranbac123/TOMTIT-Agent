@@ -1403,9 +1403,14 @@ def test_detect_drink_pref_query_uong_gi():
 
 
 def test_detect_drink_pref_query_an_gi():
+    # P0-7K-FIX2 §7.8: "tôi thích ăn gì?" now routes to the dedicated food-preference
+    # query (a strict refinement of the old drink/food lane); "tôi thích uống gì?" keeps
+    # the drink lane.
     q = detect_profile_query("tôi thích ăn gì?")
     assert q is not None
-    assert q.kind == "self_drink_preference"
+    assert q.kind == "self_food_preference"
+    qd = detect_profile_query("tôi thích uống gì?")
+    assert qd is not None and qd.kind == "self_drink_preference"
 
 
 # ---------------------------------------------------------------------------
@@ -4126,3 +4131,156 @@ def test_p0_7k_fix1_manual_spec_contains_guardrails_goal_semantics():
     ]
     missing = [tok for tok in required if tok not in text]
     assert not missing, f"Manual spec missing FIX1 tokens: {missing}"
+
+
+# ---------------------------------------------------------------------------
+# P0-7K-FIX2 tests — preference ranking + skill conflict + goal consistency
+# ---------------------------------------------------------------------------
+
+def test_p0_7k_fix2_food_ranking_query_not_saved():
+    sr = _make_sr()
+    sr.handle_turn("tôi thích ăn kem")
+    ack = (sr.handle_turn("tôi thích ăn gì nhất").final_answer or "").lower()
+    assert "đã nhớ" not in ack, f"food ranking query acked as saved: {ack}"
+    summary = (sr.handle_turn("bạn nhớ gì về tôi").final_answer or "").lower()
+    assert "ăn gì nhất" not in summary, f"food ranking query saved: {summary}"
+
+
+def test_p0_7k_fix2_food_favorite_answers_an_gi_nhat():
+    sr = _make_sr()
+    sr.handle_turn("tôi thích ăn chuối nhất")
+    ans = (sr.handle_turn("tôi thích ăn gì nhất?").final_answer or "").lower()
+    assert "chuối" in ans, f"food favorite not answered: {ans}"
+    summary = (sr.handle_turn("bạn nhớ gì về tôi").final_answer or "").lower()
+    assert "- bạn thích ăn chuối nhất" not in summary, f"raw favorite as preference: {summary}"
+
+
+def test_p0_7k_fix2_general_favorite_answers_gi_nhat():
+    sr = _make_sr()
+    sr.handle_turn("tôi thích xem phim nhất")
+    ans = (sr.handle_turn("tôi thích gì nhất?").final_answer or "").lower()
+    assert "xem phim" in ans, f"general favorite not answered: {ans}"
+
+
+def test_p0_7k_fix2_comparative_code_vs_ve_query():
+    sr = _make_sr()
+    sr.handle_turn("tôi thích code hơn là vẽ")
+    ans = (sr.handle_turn("tôi thích code hay thích vẽ hơn?").final_answer or "").lower()
+    assert "code" in ans and "vẽ" in ans, f"comparative not answered: {ans}"
+
+
+def test_p0_7k_fix2_comparative_food_keo_vs_kem_query():
+    sr = _make_sr()
+    sr.handle_turn("tôi thích ăn kẹo hơn ăn kem")
+    ans = (sr.handle_turn("tôi thích ăn kẹo hay ăn kem hơn?").final_answer or "").lower()
+    assert "kẹo" in ans, f"food comparative not answered: {ans}"
+
+
+def test_p0_7k_fix2_comparative_query_not_saved():
+    sr = _make_sr()
+    ack = (sr.handle_turn("tôi thích code hay thích vẽ hơn").final_answer or "").lower()
+    assert "đã nhớ" not in ack, f"comparative query acked as saved: {ack}"
+    summary = (sr.handle_turn("bạn nhớ gì về tôi").final_answer or "").lower()
+    assert "code hay thích vẽ hơn" not in summary, f"comparative query saved raw: {summary}"
+
+
+def test_p0_7k_fix2_skill_multitem_doc_sach_hat_decomposed():
+    sr = _make_sr()
+    sr.handle_turn("tôi biết đọc sách và hát")
+    hat = (sr.handle_turn("tôi có biết hát không?").final_answer or "").lower()
+    assert "có" in hat or "đúng" in hat, f"hát not a known skill: {hat}"
+    doc = (sr.handle_turn("tôi có biết đọc sách không?").final_answer or "").lower()
+    assert "có" in doc or "đúng" in doc, f"đọc sách not a known skill: {doc}"
+
+
+def test_p0_7k_fix2_skill_conflict_removes_decomposed_positive():
+    sr = _make_sr()
+    sr.handle_turn("tôi biết nấu ăn")
+    sr.handle_turn("tôi biết đọc sách và hát")
+    sr.handle_turn("tôi không biết đọc sách")
+    sr.handle_turn("tôi không biết hát")
+    known = (sr.handle_turn("tôi biết gì?").final_answer or "").lower()
+    assert "nấu ăn" in known, f"nấu ăn missing: {known}"
+    assert "đọc sách" not in known and "hát" not in known, f"negated skill still known: {known}"
+
+
+def test_p0_7k_fix2_negative_skill_list_query():
+    sr = _make_sr()
+    sr.handle_turn("tôi biết đọc sách và hát")
+    sr.handle_turn("tôi không biết đọc sách")
+    sr.handle_turn("tôi không biết hát")
+    neg = (sr.handle_turn("tôi không biết gì?").final_answer or "").lower()
+    assert "đọc sách" in neg and "hát" in neg, f"negative skill list incomplete: {neg}"
+
+
+def test_p0_7k_fix2_goal_remove_ai_removes_llm_and_agent_ai():
+    sr = _make_sr()
+    sr.handle_turn("tôi sẽ làm LLM và Agent AI")
+    sr.handle_turn("tôi không làm AI nữa")
+    yn = (sr.handle_turn("tôi có làm AI nữa không?").final_answer or "").lower()
+    assert "không" in yn, f"AI removal query wrong: {yn}"
+    goals = (sr.handle_turn("tôi sẽ làm gì?").final_answer or "").lower()
+    assert "llm" not in goals and "agent ai" not in goals, f"AI goals remain: {goals}"
+
+
+def test_p0_7k_fix2_goal_replace_bay_gio_chi_muon_lam_llm():
+    sr = _make_sr()
+    sr.handle_turn("tôi sẽ làm LLM và Agent")
+    sr.handle_turn("bây giờ tôi chỉ muốn làm LLM")
+    goals = (sr.handle_turn("tôi sẽ làm gì?").final_answer or "").lower()
+    assert "llm" in goals, f"LLM lost after replace: {goals}"
+    assert "agent" not in goals.replace("llm", ""), f"Agent not removed after replace: {goals}"
+
+
+def test_p0_7k_fix2_food_specific_positive_query():
+    sr = _make_sr()
+    sr.handle_turn("tôi thích ăn cam")
+    ans = (sr.handle_turn("tôi thích ăn gì?").final_answer or "").lower()
+    assert "cam" in ans, f"food positive query missing cam: {ans}"
+
+
+def test_p0_7k_fix2_food_specific_negative_query():
+    sr = _make_sr()
+    sr.handle_turn("tôi không thích ăn ổi")
+    ans = (sr.handle_turn("tôi không thích ăn gì?").final_answer or "").lower()
+    assert "ổi" in ans, f"food negative query missing ổi: {ans}"
+
+
+def test_p0_7k_fix2_negative_food_list_keeps_me():
+    sr = _make_sr()
+    sr.handle_turn("tôi không thích ăn kem, me và dâu tây")
+    ans = (sr.handle_turn("tôi không thích ăn gì?").final_answer or "").lower()
+    assert "kem" in ans, f"kem missing: {ans}"
+    assert "me" in ans, f"'me' was dropped: {ans}"
+    assert "dâu tây" in ans, f"dâu tây missing: {ans}"
+
+
+def test_p0_7k_fix2_summary_has_no_raw_ranking_or_comparative_pollution():
+    sr = _make_sr()
+    sr.handle_turn("tôi thích ăn chuối nhất")
+    sr.handle_turn("tôi thích code hơn là vẽ")
+    sr.handle_turn("tôi biết đọc sách và hát")
+    sr.handle_turn("tôi thích ăn gì nhất")
+    summary = (sr.handle_turn("bạn nhớ gì về tôi").final_answer or "").lower()
+    assert "ăn gì nhất" not in summary, f"ranking query pollution: {summary}"
+    assert "- bạn thích ăn chuối nhất" not in summary, f"raw favorite: {summary}"
+    assert "đọc sách và hát" not in summary, f"raw multi-skill: {summary}"
+
+
+def test_p0_7k_fix2_manual_spec_contains_preference_skill_goal_consistency_cases():
+    import pathlib
+    spec_path = pathlib.Path(__file__).parent / "manual" / "CONV_P0_MEMORY_CORE_MANUAL_REGRESSION_SPEC.md"
+    text = spec_path.read_text(encoding="utf-8").lower()
+    required = [
+        "p0-7k-fix2",
+        "tôi thích ăn gì nhất",
+        "tôi thích ăn chuối nhất",
+        "tôi thích code hơn là vẽ",
+        "tôi biết đọc sách và hát",
+        "tôi không làm ai nữa",
+        "bây giờ tôi chỉ muốn làm llm",
+        "tôi không thích ăn kem, me và dâu tây",
+        "needs_fix",
+    ]
+    missing = [tok for tok in required if tok not in text]
+    assert not missing, f"Manual spec missing FIX2 tokens: {missing}"

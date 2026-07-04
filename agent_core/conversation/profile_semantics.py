@@ -122,34 +122,34 @@ def _strip_discourse_marker(value: str) -> str:
     return " ".join(tokens).strip()
 
 
-# P0-7K-FIX1 A/J: query/ranking markers that must never be written as a memory value.
-# A value that STARTS with a bare question word or CONTAINS a ranking marker is a
-# malformed query ("tôi thích gì nhata" → "gì nhata"), not a fact — block the write.
-_QUERY_LEADING_WORDS: frozenset[str] = frozenset({
-    "gì", "gi", "ai", "nào", "sao", "đâu",
+# P0-7K-FIX1 A/J: bare question words that must never be written as a memory value.
+# P0-7K-FIX2: a value CONTAINING any of these tokens ("ăn gì nhất" → has "gì") is a
+# misclassified query and must not be saved. NOTE: "nhất" is NOT here — "thích X nhất"
+# is a valid favorite statement (handled by the favorite marker), not a query.
+_QUERY_MARKER_WORDS: frozenset[str] = frozenset({
+    "gì", "gi", "nào", "đâu",
 })
-_RANKING_MARKERS: frozenset[str] = frozenset({
-    "nhất", "nhat", "nhata", "nhứt",
-})
+# Question words allowed as a tech token when uppercase ("AI"); blocked when lowercase.
+_QUERY_LEADING_WORDS: frozenset[str] = frozenset({"ai", "sao"})
 
 
 def _value_is_query_polluted(value: str) -> bool:
-    """True if value looks like a query/ranking phrase, not a storable fact.
+    """True if value looks like a query phrase, not a storable fact.
 
-    Guards every write path: a value whose FIRST token is a bare question word, or that
-    contains a ranking marker token, is a misclassified query and must not be saved.
+    Guards every write path: a value containing a bare question-word token ("gì", "nào"),
+    or LEADING with a lowercase question word ("ai"/"sao"), is a misclassified query.
+    "nhất" alone is a favorite marker (valid) and never blocks here.
     """
-    tokens = re.sub(r"\s+", " ", value.strip()).lower().split()
-    if not tokens:
+    orig_tokens = re.sub(r"\s+", " ", value.strip()).split()
+    if not orig_tokens:
         return True
-    # Case-sensitive-ish: bare lowercase "ai" is the question word, but "AI" (tech token)
-    # is caught separately by callers; here we operate on the lowered copy, so only block
-    # a leading question word when the ORIGINAL first token is not an uppercase tech token.
+    tokens = [t.lower() for t in orig_tokens]
+    if any(t in _QUERY_MARKER_WORDS for t in tokens):
+        return True
     first = tokens[0]
-    orig_first = re.sub(r"\s+", " ", value.strip()).split()[0]
-    if first in _QUERY_LEADING_WORDS and not (first == "ai" and orig_first.isupper()):
+    if first in _QUERY_LEADING_WORDS and not (first == "ai" and orig_tokens[0].isupper()):
         return True
-    return any(t in _RANKING_MARKERS for t in tokens)
+    return False
 
 
 def strip_additive_target_marker(value: str) -> str:
@@ -261,9 +261,28 @@ def _valid_value(value: str, *, min_len: int = 2) -> bool:
     return True
 
 
+# P0-7K-FIX2: food-context prefixes that mark a preference/favorite value as food.
+_FOOD_CONTEXT_PREFIXES: tuple[str, ...] = ("ăn ", "uống ")
+
+
+def _is_food_value(value: str) -> bool:
+    return value.strip().lower().startswith(_FOOD_CONTEXT_PREFIXES)
+
+
 # ---------------------------------------------------------------------------
 # Write patterns
 # ---------------------------------------------------------------------------
+
+# P0-7K-FIX2: favorite marker — "tôi thích X nhất" (X clean, no query word).
+_RE_FAVORITE = re.compile(
+    r'^(?:tôi|mình)\s+thích\s+(.+?)\s+nhất\s*[.!]*\s*$',
+    re.IGNORECASE | re.DOTALL,
+)
+# P0-7K-FIX2: comparative — "tôi thích A hơn (là) B".
+_RE_COMPARATIVE = re.compile(
+    r'^(?:tôi|mình)\s+thích\s+(.+?)\s+hơn(?:\s+là)?\s+(.+?)\s*[.!]*\s*$',
+    re.IGNORECASE | re.DOTALL,
+)
 
 # P0-7J-FIX1: optional pre-verb additive markers cover "tôi cũng thích may" /
 # "tôi còn thích X" (the marker never enters the captured value).
@@ -697,6 +716,46 @@ def classify_profile_semantic_intent(text: str) -> SemanticProfileIntent | None:
         if _valid_value(value) and not _is_unsafe_or_sensitive_auto_value(value):
             return SemanticProfileIntent(
                 kind="profile_write", category="household_pet",
+                value=value, write_policy="auto_safe",
+            )
+
+    # P0-7K-FIX2: comparative preference ("tôi thích A hơn (là) B") — before ordinary
+    # preference so the raw "A hơn B" is never stored as one value. Query forms
+    # ("A hay B hơn?") are handled earlier by detect_profile_query.
+    m = _RE_COMPARATIVE.match(stripped)
+    if m:
+        winner = _clean_value(m.group(1))
+        loser = _clean_value(m.group(2))
+        if (
+            winner and loser
+            and not _value_is_query_polluted(winner)
+            and not _value_is_query_polluted(loser)
+            and not _is_person_affinity_value(winner)
+            and not _is_unsafe_or_sensitive_auto_value(winner)
+            and not _is_unsafe_or_sensitive_auto_value(loser)
+        ):
+            domain = "food" if (_is_food_value(winner) or _is_food_value(loser)) else "general"
+            return SemanticProfileIntent(
+                kind="profile_write", category=f"comparative.{domain}",
+                value=winner, relation_label=loser, write_policy="auto_safe",
+            )
+
+    # P0-7K-FIX2: favorite marker ("tôi thích X nhất") — before ordinary preference so
+    # "X nhất" is never stored raw. A query value ("ăn gì nhất") is blocked here and is
+    # answered as a ranking query earlier.
+    m = _RE_FAVORITE.match(stripped)
+    if m:
+        value = _clean_value(m.group(1))
+        if (
+            value
+            and _valid_value(value)
+            and not _value_is_query_polluted(value)
+            and not _is_person_affinity_value(value)
+            and not _is_unsafe_or_sensitive_auto_value(value)
+        ):
+            domain = "food" if _is_food_value(value) else "general"
+            return SemanticProfileIntent(
+                kind="profile_write", category=f"favorite.{domain}",
                 value=value, write_policy="auto_safe",
             )
 

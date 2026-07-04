@@ -208,9 +208,15 @@ def test_p0_7j_fix1_parse_goal_no_accent_query():
 
 def test_p0_7k_fix1_detects_query_write_guard_markers():
     from agent_core.conversation.profile_semantics import _value_is_query_polluted
+    # P0-7K-FIX2: the guard blocks bare QUESTION-WORD tokens ("gì"). "nhất"/"hơn" are no
+    # longer blanket-blocked here — they are favorite/comparative markers owned by their
+    # own parsers; a value containing a query word is still blocked.
     assert _value_is_query_polluted("gì nhata")
     assert _value_is_query_polluted("gì nhất")
-    assert _value_is_query_polluted("code hơn vẽ nhất")
+    assert _value_is_query_polluted("ăn gì nhất")
+    # Favorite/comparative phrasings (no query word) are not blocked by this guard.
+    assert not _value_is_query_polluted("ăn chuối nhất")
+    assert not _value_is_query_polluted("code hơn vẽ")
     # Valid preference values are not blocked.
     assert not _value_is_query_polluted("ăn cay")
     assert not _value_is_query_polluted("cafe không đường")
@@ -282,3 +288,84 @@ def test_p0_7k_fix1_followup_goal_context_detector():
         query = detect_profile_query(text)
         assert query is not None, f"no query for {text!r}"
         assert query.kind == "goal_followup", f"wrong kind for {text!r}: {query.kind}"
+
+
+# ---------------------------------------------------------------------------
+# P0-7K-FIX2 unit tests
+# ---------------------------------------------------------------------------
+
+def test_p0_7k_fix2_detects_food_ranking_query_as_query():
+    from agent_core.conversation.profile_memory import detect_profile_query
+    q = detect_profile_query("tôi thích ăn gì nhất")
+    assert q is not None and q.kind == "self_food_favorite"
+    q2 = detect_profile_query("tôi thích ăn gì nhất?")
+    assert q2 is not None and q2.kind == "self_food_favorite"
+
+
+def test_p0_7k_fix2_parses_food_favorite_statement():
+    from agent_core.conversation.profile_semantics import classify_profile_semantic_intent
+    intent = classify_profile_semantic_intent("tôi thích ăn chuối nhất")
+    assert intent is not None
+    assert intent.category == "favorite.food"
+    assert intent.value == "ăn chuối"
+
+
+def test_p0_7k_fix2_parses_general_favorite_statement():
+    from agent_core.conversation.profile_semantics import classify_profile_semantic_intent
+    intent = classify_profile_semantic_intent("tôi thích xem phim nhất")
+    assert intent is not None
+    assert intent.category == "favorite.general"
+    assert intent.value == "xem phim"
+
+
+def test_p0_7k_fix2_parses_comparative_preference_statement():
+    from agent_core.conversation.profile_semantics import classify_profile_semantic_intent
+    intent = classify_profile_semantic_intent("tôi thích code hơn là vẽ")
+    assert intent is not None
+    assert intent.category.startswith("comparative")
+    assert intent.value == "code" and intent.relation_label == "vẽ"
+
+
+def test_p0_7k_fix2_detects_comparative_query():
+    from agent_core.conversation.profile_memory import detect_profile_query
+    q = detect_profile_query("tôi thích code hay thích vẽ hơn?")
+    assert q is not None and q.kind == "self_comparative"
+    assert q.value == "code" and q.object_value == "vẽ"
+
+
+def test_p0_7k_fix2_splits_skill_multitem_values():
+    from agent_core.conversation.semantic_extractor import (
+        RuleBasedSemanticOperationExtractor, SemanticExtractionRequest,
+    )
+    ex = RuleBasedSemanticOperationExtractor()
+    r = ex.extract(SemanticExtractionRequest(raw_text="tôi biết đọc sách và hát"))
+    values = [(op.value, op.polarity) for op in r.operations]
+    assert ("đọc sách", "positive") in values and ("hát", "positive") in values
+    assert all(op.domain == "skill" for op in r.operations)
+
+
+def test_p0_7k_fix2_ai_taxonomy_remove_all_matcher():
+    from agent_core.conversation.profile_memory import _value_relates_to_ai
+    for term in ["LLM", "SLM", "Agent AI", "AI Agent coder", "machine learning", "deep learning"]:
+        assert _value_relates_to_ai(term), term
+    assert not _value_relates_to_ai("blogger")
+
+
+def test_p0_7k_fix2_goal_replace_only_want_parser():
+    from agent_core.conversation.memory_operations import parse_memory_operation
+    for text in [
+        "tôi chỉ làm blogger thôi",
+        "bây giờ tôi chỉ muốn làm LLM",
+        "tôi chỉ muốn build AI Agent",
+    ]:
+        op = parse_memory_operation(text)
+        assert op is not None, f"no op for {text!r}"
+        assert (op.op, op.domain, op.canonical_key) == ("SWITCH", "goal", "*"), text
+
+
+def test_p0_7k_fix2_food_preference_filter():
+    from agent_core.conversation.semantic_extractor import _split_items
+    # A leading food verb distributes over bare items so "me" survives as "ăn me".
+    assert _split_items("ăn kem, me và dâu tây") == ["ăn kem", "ăn me", "ăn dâu tây"]
+    # No food context → items stay bare.
+    assert _split_items("bơi, hát và code") == ["bơi", "hát", "code"]

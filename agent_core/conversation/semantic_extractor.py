@@ -57,6 +57,8 @@ ALLOWED_OPS: frozenset[str] = frozenset({
 })
 ALLOWED_DOMAINS: frozenset[str] = frozenset({
     "name", "preference", "affection", "relationship", "goal",
+    # P0-7K-FIX2: multi-item skill decomposition ("tôi biết đọc sách và hát").
+    "skill",
 })
 MAX_OPERATIONS_PER_UTTERANCE = 12
 MIN_EXTRACTION_CONFIDENCE = 0.5
@@ -225,6 +227,10 @@ def detect_memory_complexity(text: str) -> str | None:
         return "inverse_affection"
 
     has_list = ("," in low) or (" và " in low)
+    # P0-7K-FIX2: multi-item skill ("tôi biết đọc sách và hát"), before the goal/
+    # preference lanes since "biết" is skill-specific.
+    if has_list and re.match(r'^(?:tôi|mình)\s+(?:không\s+)?biết\b', low):
+        return "multi_skill"
     if "thích" in low:
         mixed = "không thích" in low and "thích" in low.replace("không thích", "")
         if mixed:
@@ -306,8 +312,16 @@ _RE_COMPOUND_GOAL = re.compile(
 _RE_MOI_DUNG_TAIL = re.compile(r'\s+mới\s+đúng\s*[.!]*\s*$', re.IGNORECASE)
 
 
+_FOOD_VERB_PREFIXES: tuple[str, ...] = ("ăn ", "uống ")
+
+
 def _split_items(raw: str) -> list[str]:
-    """Split a Vietnamese object list: "ăn cay, bơi, tắm biển và thể dục" → 4 items."""
+    """Split a Vietnamese object list: "ăn cay, bơi, tắm biển và thể dục" → 4 items.
+
+    P0-7K-FIX2: if the FIRST item carries a food verb ("ăn kem, me và dâu tây"), the
+    verb distributes over subsequent bare items ("ăn kem", "ăn me", "ăn dâu tây") so a
+    short food name like "me" survives the shape check and food queries find it.
+    """
     parts: list[str] = []
     for chunk in raw.split(","):
         for item in re.split(r'\s+và\s+', chunk):
@@ -315,6 +329,15 @@ def _split_items(raw: str) -> list[str]:
             item = strip_additive_target_marker(item) if item else item
             if item:
                 parts.append(item)
+    if not parts:
+        return parts
+    first_low = parts[0].lower()
+    for prefix in _FOOD_VERB_PREFIXES:
+        if first_low.startswith(prefix):
+            return [
+                p if p.lower().startswith(_FOOD_VERB_PREFIXES) else f"{prefix}{p}"
+                for p in parts
+            ]
     return parts
 
 
@@ -351,6 +374,8 @@ class RuleBasedSemanticOperationExtractor:
             ops = self._extract_inverse_affection(text)
         elif reason in ("mixed_polarity_preference", "multi_fact_preference"):
             ops = self._extract_preference_clauses(text)
+        elif reason == "multi_skill":
+            ops = self._extract_skill_items(text)
         elif reason == "compound_goal":
             ops = self._extract_compound_goal(text)
         else:
@@ -425,6 +450,26 @@ class RuleBasedSemanticOperationExtractor:
                 ))
         # A single extracted item is not a multi-fact sentence — leave it to the
         # deterministic path (person-affection routing, acks, etc.).
+        return tuple(ops) if len(ops) >= 2 else ()
+
+    def _extract_skill_items(self, text: str) -> tuple[MemoryOperation, ...]:
+        m = re.match(
+            r'^(?:tôi|mình)\s+(không\s+)?biết\s+(?:làm\s+)?(.+)$', text, re.IGNORECASE
+        )
+        if not m:
+            return ()
+        polarity = "negative" if m.group(1) else "positive"
+        items = _split_items(m.group(2).strip())
+        ops = []
+        for item in items:
+            if not _valid_item(item):
+                continue
+            ops.append(MemoryOperation(
+                op="ADD", domain="skill", subject="self", value=item,
+                canonical_key=canonicalize_memory_value(item), polarity=polarity,
+                source=_RULE_BASED_SOURCE, confidence=_RULE_BASED_CONFIDENCE,
+                raw_text=text,
+            ))
         return tuple(ops) if len(ops) >= 2 else ()
 
     def _extract_compound_goal(self, text: str) -> tuple[MemoryOperation, ...]:

@@ -30,11 +30,13 @@ from agent_core.conversation.profile_memory import (
     _is_valid_auto_value_shape,
     _norm_cmp,
     _normalize_relation_label,
+    _value_relates_to_ai,
     build_name_update_ack,
     build_relation_update_ack,
     collect_profile_snapshot,
     delete_occupation_fact,
     resolve_preference_conflicts,
+    resolve_skill_conflicts,
     save_affection_fact,
     save_auto_profile_fact,
     save_relation_update,
@@ -258,9 +260,10 @@ _RE_OP_GOAL_FOCUS = re.compile(
     r'^mục\s+tiêu\s+chính\s+(?:build\s+)?(?:của\s+)?(?:tôi|mình)\s+(?:là|:)\s+(.+?)\s*[.!]*\s*$',
     re.IGNORECASE | re.DOTALL,
 )
-# P0-7K-FIX1 D: replace-all goal — "tôi chỉ làm/build X thôi".
+# P0-7K-FIX1/FIX2 D: replace-all goal — "tôi chỉ làm/build X thôi", "tôi chỉ muốn làm X",
+# "bây giờ tôi chỉ muốn làm X" (leading temporal marker stripped before matching).
 _RE_OP_GOAL_ONLY = re.compile(
-    r'^(?:tôi|mình)\s+chỉ\s+(?:làm|build)\s+(.+?)\s+thôi\s*[.!]*\s*$',
+    r'^(?:tôi|mình)\s+chỉ\s+(?:muốn\s+)?(?:làm|build)\s+(.+?)(?:\s+thôi)?\s*[.!]*\s*$',
     re.IGNORECASE | re.DOTALL,
 )
 
@@ -309,8 +312,9 @@ def parse_memory_operation(text: str) -> MemoryOperation | None:
                 raw_text=stripped,
             )
 
-    # 0b. P0-7K-FIX1 D: replace-all goal ("tôi chỉ làm X thôi").
-    m = _RE_OP_GOAL_ONLY.match(stripped)
+    # 0b. P0-7K-FIX1/FIX2 D: replace-all goal ("tôi chỉ làm X thôi", "bây giờ tôi chỉ
+    #     muốn làm X"). Strip a leading temporal marker so the "bây giờ ..." form matches.
+    m = _RE_OP_GOAL_ONLY.match(focus_text)
     if m:
         value = _clean_op_value(m.group(1))
         if value and not _looks_interrogative(value):
@@ -497,13 +501,22 @@ def delete_goal_facts(conflict_key: str, store: "MemoryStoreProtocol") -> str | 
     Returns the matched display value, or None. "llm" matches the stored goal
     "làm AI LLM" so a partial negation still resolves the fuller goal (P0-7J-FIX1).
     """
+    # P0-7K-FIX2: removing the GENERAL term "AI" removes ALL AI-related goals (LLM,
+    # Agent AI, ...) so the goal list and the AI yes/no query stay consistent. A SPECIFIC
+    # term ("LLM") only removes its own goal via token-containment — never siblings.
+    ai_removal = conflict_key == "ai"
     matched: str | None = None
     for rec in _confirmed_profile_facts(store):
         md = rec.metadata
-        if md.get("subject") != "self" or md.get("relation") != "goal":
+        if md.get("subject") != "self" or md.get("relation") not in ("goal", "goal_focus"):
             continue
         stored = md.get("value", "")
-        if stored and _goal_keys_match(_goal_conflict_key(stored), conflict_key):
+        if not stored:
+            continue
+        hit = _goal_keys_match(_goal_conflict_key(stored), conflict_key)
+        if not hit and ai_removal and _value_relates_to_ai(stored):
+            hit = True
+        if hit:
             store.delete(rec.id, reason="goal_superseded")
             matched = matched or stored
     return matched
@@ -781,6 +794,8 @@ def apply_memory_operations(
     neg_prefs: list[str] = []
     goals_added: list[str] = []
     affections_added: list[str] = []
+    skills_added: list[str] = []
+    neg_skills_added: list[str] = []
     ack_parts: list[str] = []
 
     snap = collect_profile_snapshot(store)
@@ -805,6 +820,23 @@ def apply_memory_operations(
 
         if not validate_memory_operation(op):
             failed += 1
+            continue
+
+        if op.domain == "skill" and op.op in ("ADD", "NEGATE"):
+            relation = "negative_skill" if op.polarity == "negative" else "skill"
+            resolve_skill_conflicts(op.value, relation, store)
+            candidate = AutoProfileCandidate(
+                relation=relation, value=op.value, original_text=raw_text or op.raw_text,
+            )
+            if save_auto_profile_fact(candidate, store, session_id):
+                applied += 1
+                saved += 1
+                if relation == "skill":
+                    skills_added.append(op.value)
+                else:
+                    neg_skills_added.append(op.value)
+            else:
+                failed += 1
             continue
 
         if op.domain == "preference" and op.op in ("ADD", "NEGATE"):
@@ -933,6 +965,12 @@ def apply_memory_operations(
         ack_parts.append(
             "Đã nhớ là bạn có tình cảm/thích " + ", ".join(affections_added)
             + ". Mình sẽ không xếp thông tin này vào sở thích thông thường."
+        )
+    if skills_added:
+        ack_parts.append("Đã nhớ là bạn biết " + ", ".join(skills_added) + ".")
+    if neg_skills_added:
+        ack_parts.append(
+            "Đã nhớ là bạn không biết " + ", ".join(neg_skills_added) + "."
         )
 
     response = " ".join(ack_parts) if (applied and ack_parts) else None
