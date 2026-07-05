@@ -203,6 +203,14 @@ _RE_DELETE_CANCEL = re.compile(
     re.IGNORECASE,
 )
 
+# CONV-P0 P0-7K-FIX4 C: current-state skill update ("bây giờ tôi biết hát và đọc sách").
+# Strips a leading temporal marker so the remainder re-runs through the skill pipeline.
+_RE_CURRENT_STATE_SKILL = re.compile(
+    r'^(?:bây\s+giờ|hiện\s+tại|giờ|từ\s+nay)\s*,?\s+'
+    r'((?:tôi|mình)\s+(?:không\s+)?biết\b.+)$',
+    re.IGNORECASE,
+)
+
 # CONV-P0 P0-6B: pending state helpers — narrow patterns, intentionally minimal.
 _PENDING_CANCEL = re.compile(
     r'^(?:hủy|bỏ\s+qua|không|thôi|cancel)\s*[.!?]*\s*$',
@@ -366,6 +374,13 @@ class SessionRuntime:
         continuation = self._maybe_handle_continuation(user_message, state)
         if continuation is not None:
             return continuation
+
+        # CONV-P0 P0-7K-FIX4 priority 1.85: current-state skill update
+        # ("bây giờ tôi biết hát và đọc sách") — strip the marker, re-dispatch the skill
+        # clause (positive skills supersede prior negatives).
+        cs_skill = self._maybe_handle_current_state_skill(user_message, state)
+        if cs_skill is not None:
+            return cs_skill
 
         # CONV-P0 P0-6B priority 2: pending note slot continuation.
         if self._pending_conversation_state is not None:
@@ -1322,6 +1337,16 @@ class SessionRuntime:
         return self._complete_conv(
             state, "conv:multi_query_answered", "\n".join(answers)
         )
+
+    def _maybe_handle_current_state_skill(
+        self, user_message: str, state: AgentState
+    ) -> AgentState | None:
+        """P0-7K-FIX4 C: "(bây giờ) tôi biết X (và Y)" — strip the temporal marker and
+        re-dispatch the skill clause so positive skills supersede prior negatives."""
+        m = _RE_CURRENT_STATE_SKILL.match(user_message.strip())
+        if m is None:
+            return None
+        return self._run_memory_write_pipeline(m.group(1).strip(), state)
 
     def _maybe_handle_continuation(
         self, user_message: str, state: AgentState

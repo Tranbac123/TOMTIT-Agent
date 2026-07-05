@@ -703,11 +703,14 @@ _RE_PROFILE_SUMMARY_Q = re.compile(
     re.IGNORECASE,
 )
 # P0-7F: skill/ability query — "tôi biết làm gì?", "tôi biết gì?", "tôi có kỹ năng gì?"
+# P0-7K-FIX4 B: aliases "bạn biết/nhớ tôi biết (làm) gì?" (no trailing "không" required).
 _RE_SKILL_Q = re.compile(
     (
         r'^(?:'
         r'(?:tôi|mình)\s+biết\s+(?:làm\s+)?gì'
         r'|(?:tôi|mình)\s+có\s+(?:những\s+)?kỹ\s+năng\s+gì'
+        r'|bạn\s+(?:có\s+)?(?:biết|nhớ)\s+(?:tôi|mình)\s+biết\s+(?:làm\s+)?g[ìi]'
+        r'(?:\s+(?:không|ko|hông|hong))?'
         + r'|' + _remember_wrapper(r'kỹ\s+năng\s+(?:của\s+)?(?:tôi|mình)')
         + r'|' + _remember_wrapper(r'(?:tôi|mình)\s+biết\s+(?:làm\s+)?gì')
         + r')\s*[?？]?\s*$'
@@ -1757,6 +1760,29 @@ def answer_yes_no_memory_query(
 
     if category == "skill":
         negative_skills = [_norm_cmp(v) for v in snap.negative_skills]
+        # P0-7K-FIX4 D: a batch yes/no ("tôi biết A và B không?") is answered per item,
+        # never as one raw object. Single-item queries keep the original phrasing.
+        items = _split_skill_query_items(raw_target)
+        if len(items) >= 2:
+            known, neg, unknown = [], [], []
+            for item in items:
+                it = _norm_cmp(item)
+                if it in skills:
+                    known.append(item)
+                elif it in negative_skills:
+                    neg.append(item)
+                else:
+                    unknown.append(item)
+            parts: list[str] = []
+            if known:
+                parts.append(f"Có, mình đang nhớ bạn biết {', '.join(known)}")
+            if neg:
+                parts.append(f"mình đang nhớ bạn không biết {', '.join(neg)}")
+            if unknown:
+                parts.append(f"mình chưa rõ về {', '.join(unknown)}")
+            return "; ".join(parts) + "." if parts else (
+                f"Mình chưa thấy thông tin rằng bạn biết {value}."
+            )
         if target in skills:
             return f"Đúng, mình đang nhớ bạn biết {value}."
         # P0-7K-FIX1: known negative skill ("tôi không biết bơi").
@@ -2361,9 +2387,16 @@ _RE_DELETE_ALL_MEMORY = re.compile(
     r'|clear\s+memory|forget\s+me',
     re.IGNORECASE,
 )
+# P0-7K-FIX4 F: expanded confirmation allowlist — "xác nhận xoá ký ức", "ok xoá đi",
+# "xoá đi", "đồng ý xoá", "yes delete", "confirm delete" (both "xóa"/"xoá" spellings).
 _RE_DELETE_CONFIRM = re.compile(
-    r'^(?:xác\s+nhận\s+' + _XOA + r'(?:\s+ký\s+ức)?|đồng\s+ý\s+' + _XOA
-    + r'|yes\s+delete|confirm\s+delete)\s*[.!]*\s*$',
+    r'^(?:'
+    r'xác\s+nhận\s+' + _XOA + r'(?:\s+ký\s+ức)?'
+    r'|đồng\s+ý\s+' + _XOA + r'(?:\s+(?:đi|ký\s+ức))?'
+    r'|(?:ok|okay|đồng\s+ý|ừ|ừm|vâng)\s+' + _XOA + r'\s+đi'
+    r'|' + _XOA + r'\s+đi'
+    r'|yes\s+delete|confirm\s+delete'
+    r')\s*[.!]*\s*$',
     re.IGNORECASE,
 )
 
@@ -2412,6 +2445,8 @@ def build_delete_all_done() -> str:
 _DIRTY_VALUE_MARKERS: tuple[str, ...] = (
     "tôi biết", "tôi không biết", "mình biết", "mình không biết",
     "tôi đã nói", "tôi bảo", "đã nói:", "nữa tôi", ":",
+    # P0-7K-FIX4 I: contrast fragments must never be stored as one value.
+    "nhưng không", "mà không biết", "còn không biết",
 )
 _DIRTY_VALUE_TERMINAL: tuple[str, ...] = (" nữa", " rồi", " mà", " đấy", " đó")
 
@@ -2573,6 +2608,16 @@ class ProfileSnapshot:
 
 def _norm_cmp(value: str) -> str:
     return re.sub(r"\s+", " ", value.strip().lower())
+
+
+def _split_skill_query_items(value: str) -> list[str]:
+    """Split a batch skill query object ("hát và đọc sách") into individual items."""
+    parts: list[str] = []
+    for chunk in re.split(r'\s*,\s*|\s+và\s+', value.strip(), flags=re.IGNORECASE):
+        item = re.sub(r"\s+", " ", chunk.strip().rstrip(".!?,")).strip()
+        if item:
+            parts.append(item)
+    return parts
 
 
 # P0-7K-FIX1 E: lightweight AI taxonomy — terms that count as "AI" for goal yes/no.
@@ -2751,9 +2796,11 @@ def collect_profile_snapshot(store: "MemoryStoreProtocol") -> ProfileSnapshot:
     if snap.name:
         current = _norm_cmp(snap.name)
         snap.previous_names = [n for n in snap.previous_names if _norm_cmp(n) != current]
-    # P0-7K-FIX1: a negated skill is never a known skill (read-time safety in addition to
-    # write-time supersede).
+    # P0-7K-FIX1/FIX4: a negated skill is never a known skill; latest-polarity wins so a
+    # positive skill also removes it from the negative list (no contradiction in snapshot).
     if snap.negative_skills:
+        pos = {_norm_cmp(s) for s in snap.skills}
+        snap.negative_skills = [s for s in snap.negative_skills if _norm_cmp(s) not in pos]
         neg = {_norm_cmp(s) for s in snap.negative_skills}
         snap.skills = [s for s in snap.skills if _norm_cmp(s) not in neg]
     # P0-7K-FIX1: if the current focus was later removed as a goal, drop the stale focus.
@@ -2761,6 +2808,10 @@ def collect_profile_snapshot(store: "MemoryStoreProtocol") -> ProfileSnapshot:
         _norm_cmp(g) for g in snap.goals
     }:
         snap.current_focus = None
+    # P0-7K-FIX4 A: a comparative winner ("thích A hơn B") is an active positive
+    # preference — project it into the preference snapshot so "tôi thích gì?" answers it.
+    for winner, _loser in snap.comparatives:
+        _add(snap.preferences_personal, winner)
     return snap
 
 

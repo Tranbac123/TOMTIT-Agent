@@ -4491,3 +4491,135 @@ def test_p0_7k_fix3_fix1_manual_spec_contains_delete_pending_persistence_case():
     ]
     missing = [tok for tok in required if tok not in text]
     assert not missing, f"Manual spec missing FIX3-FIX1 tokens: {missing}"
+
+
+# ---------------------------------------------------------------------------
+# P0-7K-FIX4 tests — confirmation state + clause segmentation + snapshot hygiene
+# ---------------------------------------------------------------------------
+
+def test_p0_7k_fix4_comparative_winner_appears_in_preference_snapshot():
+    sr = _make_sr()
+    sr.handle_turn("tôi thích ăn kẹo hơn ăn kem")
+    yn = (sr.handle_turn("tôi có thích ăn kẹo không?").final_answer or "").lower()
+    assert "có" in yn or "đúng" in yn, f"comparative winner yes/no wrong: {yn}"
+    pref = (sr.handle_turn("tôi thích gì?").final_answer or "").lower()
+    assert "kẹo" in pref, f"winner missing from preference snapshot: {pref}"
+
+
+def test_p0_7k_fix4_skill_query_aliases_ban_biet_toi_biet_gi():
+    sr = _make_sr()
+    sr.handle_turn("tôi biết nấu ăn")
+    for query in ["bạn biết tôi biết gì?", "bạn nhớ tôi biết gì?"]:
+        ans = (sr.handle_turn(query).final_answer or "").lower()
+        assert "rule-based mvp" not in ans, f"alias {query} fell to fallback: {ans}"
+        assert "nấu ăn" in ans, f"alias {query} did not answer skills: {ans}"
+
+
+def test_p0_7k_fix4_current_state_skill_update_supersedes_negative():
+    sr = _make_sr()
+    sr.handle_turn("tôi không biết hát và đọc sách")
+    ack = (sr.handle_turn("bây giờ tôi biết hát và đọc sách").final_answer or "").lower()
+    assert "rule-based mvp" not in ack, f"current-state skill fell to fallback: {ack}"
+    hat = (sr.handle_turn("tôi có biết hát không?").final_answer or "").lower()
+    assert "có" in hat or "đúng" in hat, f"hát not positive after update: {hat}"
+    doc = (sr.handle_turn("tôi có biết đọc sách không?").final_answer or "").lower()
+    assert "có" in doc or "đúng" in doc, f"đọc sách not positive after update: {doc}"
+
+
+def test_p0_7k_fix4_batch_skill_yesno_all_known():
+    sr = _make_sr()
+    sr.handle_turn("tôi biết hát và đọc sách")
+    ans = (sr.handle_turn("tôi biết hát và đọc sách không?").final_answer or "").lower()
+    assert "rule-based mvp" not in ans, f"batch yes/no fell to fallback: {ans}"
+    assert "hát" in ans and "đọc sách" in ans and ("có" in ans or "đúng" in ans), f"batch wrong: {ans}"
+
+
+def test_p0_7k_fix4_batch_skill_yesno_mixed_known_negative():
+    sr = _make_sr()
+    sr.handle_turn("tôi biết hát")
+    sr.handle_turn("tôi không biết đọc sách")
+    ans = (sr.handle_turn("tôi biết hát và đọc sách không?").final_answer or "").lower()
+    assert "rule-based mvp" not in ans, f"mixed batch fell to fallback: {ans}"
+    assert "hát" in ans and "đọc sách" in ans, f"mixed batch incomplete: {ans}"
+
+
+def test_p0_7k_fix4_contrast_skill_clause_honors_negative_side():
+    sr = _make_sr()
+    sr.handle_turn("tôi biết hát nhưng không biết đọc sách")
+    hat = (sr.handle_turn("tôi có biết hát không?").final_answer or "").lower()
+    assert "có" in hat or "đúng" in hat, f"hát not positive: {hat}"
+    doc = (sr.handle_turn("tôi có biết đọc sách không?").final_answer or "").lower()
+    assert "không" in doc, f"đọc sách not negative: {doc}"
+    known = (sr.handle_turn("tôi biết gì?").final_answer or "").lower()
+    assert "hát" in known and "đọc sách" not in known, f"known wrong: {known}"
+    neg = (sr.handle_turn("tôi không biết gì?").final_answer or "").lower()
+    assert "đọc sách" in neg, f"negative missing đọc sách: {neg}"
+
+
+def test_p0_7k_fix4_delete_ok_xoa_di_confirms_and_clears():
+    sr = _make_sr()
+    sr.handle_turn("tôi tên là bee")
+    sr.handle_turn("tôi thích ăn kem")
+    sr.handle_turn("bạn hãy xoá hết ký ức về tôi đi")
+    done = (sr.handle_turn("ok xoá đi").final_answer or "").lower()
+    assert "đã xoá" in done or "đã xóa" in done, f"ok xoá đi did not confirm: {done}"
+    summary = (sr.handle_turn("bạn nhớ gì về tôi").final_answer or "").lower()
+    assert "bee" not in summary and "kem" not in summary, f"memory not cleared: {summary}"
+
+
+def test_p0_7k_fix4_delete_confirmation_variants():
+    for phrase in ["đồng ý xoá", "xoá đi", "ok xóa đi", "yes delete", "confirm delete"]:
+        sr = _make_sr()
+        sr.handle_turn("tôi tên là bee")
+        sr.handle_turn("bạn hãy xoá hết ký ức về tôi đi")
+        done = (sr.handle_turn(phrase).final_answer or "").lower()
+        summary = (sr.handle_turn("bạn nhớ gì về tôi").final_answer or "").lower()
+        assert "bee" not in summary, f"variant {phrase!r} did not clear memory: {summary}"
+
+
+def test_p0_7k_fix4_delete_confirmation_without_pending_does_not_delete():
+    sr = _make_sr()
+    sr.handle_turn("tôi tên là bee")
+    ans = (sr.handle_turn("xóa đi").final_answer or "").lower()
+    assert not any(t in ans for t in ["đã xoá", "đã xóa", "đã quên"]), f"claimed success: {ans}"
+    summary = (sr.handle_turn("bạn nhớ gì về tôi").final_answer or "").lower()
+    assert "bee" in summary, f"deleted without pending: {summary}"
+
+
+def test_p0_7k_fix4_current_comparative_updates_food_favorite():
+    sr = _make_sr()
+    sr.handle_turn("tôi thích ăn chuối nhất")
+    first = (sr.handle_turn("tôi thích ăn gì nhất").final_answer or "").lower()
+    assert "chuối" in first, f"initial favorite wrong: {first}"
+    sr.handle_turn("bây giờ tôi thích ăn táo hơn")
+    after = (sr.handle_turn("tôi thích ăn gì nhất").final_answer or "").lower()
+    assert "táo" in after, f"favorite not updated: {after}"
+
+
+def test_p0_7k_fix4_summary_hygiene_filters_contrast_dirty_values():
+    sr = _make_sr()
+    sr.handle_turn("tôi biết hát nhưng không biết đọc sách")
+    summary = (sr.handle_turn("bạn đã nhớ gì về tôi").final_answer or "").lower()
+    for bad in ["nhưng không", "tôi biết", "tôi không biết", "hát nhưng không biết đọc sách"]:
+        assert bad not in summary, f"dirty value '{bad}' in summary: {summary}"
+    # No contradiction: đọc sách must not be listed as a KNOWN skill.
+    assert "- bạn biết đọc sách" not in summary, f"đọc sách shown as known: {summary}"
+    assert "hát" in summary, f"clean skill hát lost: {summary}"
+
+
+def test_p0_7k_fix4_manual_spec_contains_confirmation_clause_snapshot_cases():
+    import pathlib
+    spec_path = pathlib.Path(__file__).parent / "manual" / "CONV_P0_MEMORY_CORE_MANUAL_REGRESSION_SPEC.md"
+    text = spec_path.read_text(encoding="utf-8").lower()
+    required = [
+        "p0-7k-fix4",
+        "bạn biết tôi biết gì?",
+        "bây giờ tôi biết hát và đọc sách",
+        "tôi biết hát và đọc sách không?",
+        "tôi biết hát nhưng không biết đọc sách",
+        "ok xoá đi",
+        "bây giờ tôi thích ăn táo hơn",
+        "needs_fix",
+    ]
+    missing = [tok for tok in required if tok not in text]
+    assert not missing, f"Manual spec missing FIX4 tokens: {missing}"

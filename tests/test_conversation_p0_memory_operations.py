@@ -462,3 +462,74 @@ def test_p0_7k_fix3_dirty_memory_value_filter():
         assert _is_dirty_value(bad), bad
     for good in ["đọc sách", "nấu ăn", "ăn kẹo", "code", "ăn chuối"]:
         assert not _is_dirty_value(good), good
+
+
+# ---------------------------------------------------------------------------
+# P0-7K-FIX4 unit tests
+# ---------------------------------------------------------------------------
+
+def test_p0_7k_fix4_parses_contrast_skill_clause():
+    from agent_core.conversation.semantic_extractor import (
+        RuleBasedSemanticOperationExtractor, SemanticExtractionRequest,
+    )
+    ex = RuleBasedSemanticOperationExtractor()
+    r = ex.extract(SemanticExtractionRequest(raw_text="tôi biết hát nhưng không biết đọc sách"))
+    values = [(op.value, op.polarity) for op in r.operations]
+    assert values == [("hát", "positive"), ("đọc sách", "negative")]
+
+
+def test_p0_7k_fix4_splits_batch_skill_yesno_values():
+    from agent_core.conversation.profile_memory import _split_skill_query_items
+    assert _split_skill_query_items("hát và đọc sách") == ["hát", "đọc sách"]
+    assert _split_skill_query_items("nấu ăn, hát và đọc sách") == ["nấu ăn", "hát", "đọc sách"]
+    assert _split_skill_query_items("bơi") == ["bơi"]
+
+
+def test_p0_7k_fix4_detects_skill_query_aliases():
+    from agent_core.conversation.profile_memory import detect_profile_query
+    for text in ["bạn biết tôi biết gì?", "bạn nhớ tôi biết gì?", "bạn có nhớ tôi biết gì không?"]:
+        q = detect_profile_query(text)
+        assert q is not None and q.kind == "self_skill", f"{text!r} → {q}"
+
+
+def test_p0_7k_fix4_detects_current_state_skill_update():
+    from agent_core.runtime.session_runtime import _RE_CURRENT_STATE_SKILL
+    m = _RE_CURRENT_STATE_SKILL.match("bây giờ tôi biết hát và đọc sách")
+    assert m is not None and m.group(1).strip() == "tôi biết hát và đọc sách"
+    assert _RE_CURRENT_STATE_SKILL.match("hiện tại tôi biết bơi") is not None
+    assert _RE_CURRENT_STATE_SKILL.match("tôi biết bơi") is None
+
+
+def test_p0_7k_fix4_delete_confirmation_variants():
+    from agent_core.conversation.profile_memory import detect_delete_all_confirmation as c
+    for text in ["ok xoá đi", "ok xóa đi", "xoá đi", "xóa đi", "đồng ý xoá", "yes delete", "confirm delete", "xác nhận xoá ký ức"]:
+        assert c(text), text
+    assert not c("có")
+
+
+def test_p0_7k_fix4_comparative_winner_projects_to_preference_snapshot():
+    from agent_core.conversation.profile_memory import (
+        collect_profile_snapshot, save_comparative_fact, _norm_cmp,
+    )
+    from agent_core.memory.in_memory_store import InMemoryStore
+    store = InMemoryStore()
+    save_comparative_fact("ăn kẹo", "ăn kem", "food", store, "s1")
+    snap = collect_profile_snapshot(store)
+    assert any(_norm_cmp(p) == "ăn kẹo" for p in snap.preferences_personal)
+    assert ("ăn kẹo", "ăn kem") in snap.comparatives
+
+
+def test_p0_7k_fix4_current_food_comparative_supersedes_favorite():
+    from agent_core.conversation.memory_operations import parse_memory_operation
+    op = parse_memory_operation("bây giờ tôi thích ăn táo hơn")
+    assert op is not None
+    assert (op.op, op.domain) == ("UPDATE_CURRENT", "favorite")
+    assert op.value == "ăn táo"
+
+
+def test_p0_7k_fix4_snapshot_hygiene_rejects_contrast_dirty_skill():
+    from agent_core.conversation.profile_memory import _is_dirty_value
+    assert _is_dirty_value("hát nhưng không biết đọc sách")
+    assert _is_dirty_value("tôi biết đọc sách")
+    assert not _is_dirty_value("hát")
+    assert not _is_dirty_value("đọc sách")

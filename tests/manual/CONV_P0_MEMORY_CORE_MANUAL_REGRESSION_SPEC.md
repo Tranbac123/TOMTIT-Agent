@@ -2749,6 +2749,111 @@ xác nhận xoá ký ức
 
 ---
 
+### P0-7K-FIX4 — Confirmation State + Clause Segmentation + Snapshot Hygiene
+
+Memory-core hardening after pre-merge manual Web rerun found remaining inconsistencies in
+comparative snapshot projection, skill query aliases, current-state skill update, batch
+skill yes/no, contrast clause segmentation, delete confirmation variants, favorite update,
+and snapshot contradiction hygiene.
+
+#### A. Comparative winner appears in preference snapshot
+
+```
+tôi thích ăn kẹo hơn ăn kem
+tôi có thích ăn kẹo không?   => Có
+tôi thích gì?                => includes ăn kẹo
+```
+
+#### B. Skill query aliases
+
+```
+tôi biết nấu ăn
+tôi biết về AI
+và ML nữa
+bạn biết tôi biết gì?    => nấu ăn, về AI, ML
+bạn nhớ tôi biết gì?     => nấu ăn, về AI, ML
+tôi biết gì?             => nấu ăn, về AI, ML
+```
+
+#### C. Current-state skill update
+
+```
+tôi không biết hát và đọc sách
+bây giờ tôi biết hát và đọc sách
+tôi có biết hát không?       => Có
+tôi có biết đọc sách không?  => Có
+```
+
+#### D. Batch yes/no skill query
+
+```
+tôi biết hát và đọc sách
+tôi biết hát và đọc sách không?   => Có (both hát and đọc sách; not one raw object)
+
+tôi biết hát
+tôi không biết đọc sách
+tôi biết hát và đọc sách không?   => mixed: biết hát, không biết đọc sách
+```
+
+#### E. Contrast skill clause segmentation
+
+```
+tôi biết hát nhưng không biết đọc sách
+tôi có biết hát không?       => Có
+tôi có biết đọc sách không?  => Không
+tôi biết gì?                 => hát (not đọc sách)
+tôi không biết gì?           => đọc sách
+=> no raw "hát nhưng không biết đọc sách"
+```
+
+#### F. Delete confirmation accepts near-confirmation
+
+```
+tôi tên là bee
+tôi thích ăn kem
+bạn hãy xoá hết ký ức về tôi đi
+ok xoá đi
+bạn nhớ gì về tôi
+=> "ok xoá đi" is a delete confirmation; all memory cleared; no bee, no ăn kem
+```
+
+Also confirmations: đồng ý xoá, xoá đi, ok xóa đi, yes delete, confirm delete.
+No pending → "xóa đi" must not delete or claim success.
+
+#### H. Favorite / current comparative update
+
+```
+tôi thích ăn chuối nhất
+tôi thích ăn gì nhất          => ăn chuối
+bây giờ tôi thích ăn táo hơn
+tôi thích ăn gì nhất          => ăn táo (current priority), NOT ăn chuối
+```
+
+#### I. Summary hygiene / contradiction filter
+
+```
+tôi biết hát nhưng không biết đọc sách
+bạn đã nhớ gì về tôi
+=> summary must NOT contain: "nhưng không", "tôi biết", "tôi không biết", "đã nói:",
+   "hát nhưng không biết đọc sách"
+=> summary must NOT show đọc sách as both known and negative skill
+```
+
+#### Classification rules
+
+```text
+- If a comparative winner does not appear in the preference snapshot, classify NEEDS_FIX.
+- If a skill query alias falls back, classify NEEDS_FIX.
+- If a current-state skill update falls back or does not supersede the negative, classify NEEDS_FIX.
+- If a batch skill yes/no treats "A và B" as one object, classify NEEDS_FIX.
+- If a contrast clause stores the raw "nhưng không" phrase, classify NEEDS_FIX.
+- If a near-confirmation ("ok xoá đi") is not accepted while pending, classify NEEDS_FIX.
+- If a current comparative does not supersede the food favorite, classify NEEDS_FIX.
+- If the summary shows a positive/negative contradiction for the same key, classify NEEDS_FIX.
+```
+
+---
+
 ## 10. Merge Gate Policy
 
 Passing this file does not automatically merge.

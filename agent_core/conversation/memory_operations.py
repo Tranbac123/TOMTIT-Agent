@@ -39,12 +39,14 @@ from agent_core.conversation.profile_memory import (
     resolve_skill_conflicts,
     save_affection_fact,
     save_auto_profile_fact,
+    save_favorite_fact,
     save_relation_update,
     save_self_name_update,
 )
 from agent_core.conversation.profile_semantics import (
     _classify_preference_kind,
     _has_professional_token,
+    _is_food_value,
     strip_additive_target_marker,
 )
 from agent_core.memory.memory_records import MemoryQuery
@@ -75,6 +77,8 @@ MemoryDomain = Literal[
     "affection",
     "relationship",
     "goal",
+    # P0-7K-FIX4 H: current favorite update ("bây giờ tôi thích ăn táo hơn").
+    "favorite",
 ]
 
 
@@ -260,6 +264,12 @@ _RE_OP_PREF_NEGATIVE = re.compile(
     r'^(?:tôi|mình)\s+không\s+(?:còn\s+)?thích\s+(.+?)(?:\s+nữa)?(?:\s+rồi)?\s*[.!]*\s*$',
     re.IGNORECASE | re.DOTALL,
 )
+# P0-7K-FIX4 H: current favorite update — "(bây giờ) tôi thích X hơn" (X, then "hơn" at
+# the END, no losing side B) means X is now the current favorite/priority.
+_RE_OP_FAVORITE_UPDATE = re.compile(
+    r'^(?:tôi|mình)\s+(?:lại\s+)?thích\s+(.+?)\s+hơn\s*[.!]*\s*$',
+    re.IGNORECASE | re.DOTALL,
+)
 # P0-7K-FIX1 D: goal focus — "mục tiêu chính của tôi là X" (keeps other active goals).
 _RE_OP_GOAL_FOCUS = re.compile(
     r'^mục\s+tiêu\s+chính\s+(?:build\s+)?(?:của\s+)?(?:tôi|mình)\s+(?:là|:)\s+(.+?)\s*[.!]*\s*$',
@@ -400,6 +410,17 @@ def parse_memory_operation(text: str) -> MemoryOperation | None:
                     op="UPDATE_CURRENT", domain="relationship", subject="relation",
                     value=name, canonical_key=canonicalize_memory_value(name),
                     relation=label, raw_text=stripped,
+                )
+        # P0-7K-FIX4 H: current favorite update ("bây giờ tôi thích ăn táo hơn") —
+        # before the negative/positive forms since it ends in a bare "hơn".
+        m = _RE_OP_FAVORITE_UPDATE.match(remainder)
+        if m:
+            value = _clean_op_value(m.group(1))
+            if value and not _looks_interrogative(value):
+                return MemoryOperation(
+                    op="UPDATE_CURRENT", domain="favorite", subject="self", value=value,
+                    canonical_key=canonicalize_memory_value(value), polarity="positive",
+                    raw_text=stripped,
                 )
         # P0-7K-FIX3 J: current-state NEGATIVE preference ("bây giờ tôi không thích bơi
         # nữa") — checked before the positive form. Supersedes an active positive and
@@ -708,6 +729,18 @@ def apply_memory_operation(
         )
 
     # P0-7K-FIX1 B: current-state preference ("bây giờ tôi thích bơi rồi").
+    # P0-7K-FIX4 H: current favorite update ("bây giờ tôi thích ăn táo hơn").
+    if op.op == "UPDATE_CURRENT" and op.domain == "favorite":
+        domain = "food" if _is_food_value(op.value) else "general"
+        if not save_favorite_fact(
+            op.value, domain, store, session_id, original_text=op.raw_text
+        ):
+            return None
+        return MemoryOperationOutcome(
+            f"Đã ghi nhận: hiện tại bạn thích {op.value} hơn cả.",
+            "conv:memop_favorite_updated", saved=True,
+        )
+
     if op.op == "UPDATE_CURRENT" and op.domain == "preference":
         snap = collect_profile_snapshot(store)
         # P0-7K-FIX3 J: negative current-state ("bây giờ tôi không thích bơi nữa") —

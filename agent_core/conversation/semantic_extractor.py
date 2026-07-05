@@ -201,6 +201,11 @@ _RE_CX_GOAL_VERB = re.compile(
     r'(?:muốn|định|sẽ)\s+(?:làm|build)|(?:muốn|định|sẽ)\s+.*\bbuild\b',
     re.IGNORECASE,
 )
+# P0-7K-FIX4 E: contrast skill clause — "tôi biết A nhưng/mà/còn (tôi) không biết B".
+_RE_CX_CONTRAST_SKILL = re.compile(
+    r'^(?:tôi|mình)\s+biết\s+.+\s+(?:nhưng|mà|còn)\s+(?:tôi\s+|mình\s+)?không\s+biết\s+.+$',
+    re.IGNORECASE,
+)
 
 
 def detect_memory_complexity(text: str) -> str | None:
@@ -227,6 +232,10 @@ def detect_memory_complexity(text: str) -> str | None:
     if _RE_CX_INVERSE_AFFECTION.match(stripped):
         return "inverse_affection"
 
+    # P0-7K-FIX4 E: contrast skill clause ("tôi biết A nhưng không biết B") — before the
+    # multi-item skill lane since it carries a polarity switch, not a plain list.
+    if _RE_CX_CONTRAST_SKILL.match(low):
+        return "contrast_skill"
     has_list = ("," in low) or (" và " in low)
     # P0-7K-FIX2: multi-item skill ("tôi biết đọc sách và hát"), before the goal/
     # preference lanes since "biết" is skill-specific.
@@ -380,6 +389,8 @@ class RuleBasedSemanticOperationExtractor:
             ops = self._extract_inverse_affection(text)
         elif reason in ("mixed_polarity_preference", "multi_fact_preference"):
             ops = self._extract_preference_clauses(text)
+        elif reason == "contrast_skill":
+            ops = self._extract_contrast_skill(text)
         elif reason == "multi_skill":
             ops = self._extract_skill_items(text)
         elif reason == "compound_goal":
@@ -456,6 +467,33 @@ class RuleBasedSemanticOperationExtractor:
                 ))
         # A single extracted item is not a multi-fact sentence — leave it to the
         # deterministic path (person-affection routing, acks, etc.).
+        return tuple(ops) if len(ops) >= 2 else ()
+
+    _RE_CONTRAST_SKILL = re.compile(
+        r'^(?:tôi|mình)\s+biết\s+(.+?)\s+(?:nhưng|mà|còn)\s+'
+        r'(?:tôi\s+|mình\s+)?không\s+biết\s+(.+)$',
+        re.IGNORECASE,
+    )
+
+    def _extract_contrast_skill(self, text: str) -> tuple[MemoryOperation, ...]:
+        # P0-7K-FIX4 E: "tôi biết A nhưng không biết B" → ADD skill A + negative skill B.
+        m = self._RE_CONTRAST_SKILL.match(text)
+        if not m:
+            return ()
+        ops: list[MemoryOperation] = []
+        for raw, polarity in ((m.group(1), "positive"), (m.group(2), "negative")):
+            item = strip_terminal_discourse_markers(
+                strip_additive_target_marker(
+                    re.sub(r"\s+", " ", raw.strip().rstrip(".!,")).strip()
+                )
+            )
+            if _valid_item(item):
+                ops.append(MemoryOperation(
+                    op="ADD", domain="skill", subject="self", value=item,
+                    canonical_key=canonicalize_memory_value(item), polarity=polarity,
+                    source=_RULE_BASED_SOURCE, confidence=_RULE_BASED_CONFIDENCE,
+                    raw_text=text,
+                ))
         return tuple(ops) if len(ops) >= 2 else ()
 
     def _extract_skill_items(self, text: str) -> tuple[MemoryOperation, ...]:
