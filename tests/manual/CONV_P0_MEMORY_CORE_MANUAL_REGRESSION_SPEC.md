@@ -2761,6 +2761,7 @@ and snapshot contradiction hygiene.
 ```
 tôi thích ăn kẹo hơn ăn kem
 tôi có thích ăn kẹo không?   => Có
+tôi có thích ăn kem không?   => does NOT auto-answer Có merely because ăn kem is the comparative loser
 tôi thích gì?                => includes ăn kẹo
 ```
 
@@ -2772,6 +2773,8 @@ tôi biết về AI
 và ML nữa
 bạn biết tôi biết gì?    => nấu ăn, về AI, ML
 bạn nhớ tôi biết gì?     => nấu ăn, về AI, ML
+bạn nhớ tôi biết làm gì? => nấu ăn, về AI, ML; no generic fallback
+bạn có nhớ tôi biết gì không? => nấu ăn, về AI, ML; no generic fallback
 tôi biết gì?             => nấu ăn, về AI, ML
 ```
 

@@ -4613,7 +4613,10 @@ def test_p0_7k_fix4_manual_spec_contains_confirmation_clause_snapshot_cases():
     text = spec_path.read_text(encoding="utf-8").lower()
     required = [
         "p0-7k-fix4",
+        "tôi có thích ăn kem không?",
         "bạn biết tôi biết gì?",
+        "bạn nhớ tôi biết làm gì?",
+        "bạn có nhớ tôi biết gì không?",
         "bây giờ tôi biết hát và đọc sách",
         "tôi biết hát và đọc sách không?",
         "tôi biết hát nhưng không biết đọc sách",
