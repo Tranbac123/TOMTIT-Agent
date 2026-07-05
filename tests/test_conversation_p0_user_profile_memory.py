@@ -4740,3 +4740,115 @@ def test_p0_7k_fix5a_manual_spec_contains_batch_query_cases():
     ]
     missing = [tok for tok in required if tok not in text]
     assert not missing, f"Manual spec missing FIX5A tokens: {missing}"
+
+
+# ---------------------------------------------------------------------------
+# P0-7K-FIX5B tests — known-item canonicalizer + entity no-pollution
+# ---------------------------------------------------------------------------
+
+def test_p0_7k_fix5b_ai_acronym_not_pronoun_on_negative_update():
+    sr = _make_sr()
+    sr.handle_turn("tôi thích AI và ML")
+    ans_update = (sr.handle_turn("tôi bây giờ không thích AI nữa").final_answer or "").lower()
+    assert "không thích ai" not in ans_update, f"AI treated as pronoun: {ans_update}"
+    ans = (sr.handle_turn("tôi có thích AI và ML không?").final_answer or "").lower()
+    assert "ai" in ans and "không" in ans, f"AI negative missing: {ans}"
+    assert "ml" in ans and "thích" in ans, f"ML positive missing: {ans}"
+    dislikes = (sr.handle_turn("tôi không thích gì?").final_answer or "").lower()
+    assert "ai" in dislikes and "không" in dislikes, f"AI dislike missing: {dislikes}"
+
+
+def test_p0_7k_fix5b_known_typo_choi_maps_to_chuoi_without_pollution():
+    sr = _make_sr()
+    sr.handle_turn("tôi không thích ăn chuối")
+    ans = (sr.handle_turn("tôi có thích ăn chối không?").final_answer or "").lower()
+    assert "chuối" in ans and "không" in ans, f"chối did not map to chuối: {ans}"
+    summary = (sr.handle_turn("bạn nhớ gì về tôi").final_answer or "").lower()
+    assert "chối" not in summary and "chuối" in summary, summary
+
+
+def test_p0_7k_fix5b_known_typo_lem_maps_to_kem_without_pollution():
+    sr = _make_sr()
+    sr.handle_turn("tôi thích ăn kem")
+    ans = (sr.handle_turn("tôi có thích ăn lem không?").final_answer or "").lower()
+    assert "kem" in ans and ("có" in ans or "thích" in ans), f"lem did not map to kem: {ans}"
+    summary = (sr.handle_turn("bạn nhớ gì về tôi").final_answer or "").lower()
+    assert "lem" not in summary and "kem" in summary, summary
+
+
+def test_p0_7k_fix5b_known_typo_lem_comparison_safe():
+    sr = _make_sr()
+    sr.handle_turn("tôi thích ăn kem")
+    sr.handle_turn("tôi thích ăn táo")
+    ans = (sr.handle_turn("tôi thích ăn lem hay ăn táo hơn?").final_answer or "").lower()
+    assert "rule-based mvp" not in ans, f"comparison fell to fallback: {ans}"
+    assert "kem" in ans and "táo" in ans, f"comparison did not canonicalize: {ans}"
+    summary = (sr.handle_turn("bạn nhớ gì về tôi").final_answer or "").lower()
+    assert "lem" not in summary, summary
+
+
+def test_p0_7k_fix5b_does_not_fuzzy_person_name():
+    sr = _make_sr()
+    sr.handle_turn("tôi thích Quý")
+    sr.handle_turn("tôi có thích Quy không?")
+    summary = (sr.handle_turn("bạn nhớ gì về tôi").final_answer or "").lower()
+    assert "quy" not in summary, summary
+
+
+def test_p0_7k_fix5b_does_not_fuzzy_acronym():
+    sr = _make_sr()
+    sr.handle_turn("tôi thích AI")
+    ans = (sr.handle_turn("tôi có thích A1 không?").final_answer or "").lower()
+    assert "a1" in ans and "chưa" in ans, f"A1 should not map to AI: {ans}"
+    summary = (sr.handle_turn("bạn nhớ gì về tôi").final_answer or "").lower()
+    assert "a1" not in summary, summary
+
+
+def test_p0_7k_fix5b_cleanup_ca_x_toi_cung_vay_negative_preference():
+    sr = _make_sr()
+    sr.handle_turn("tôi không thích ăn cơm và ăn cá, cả ăn mỳ tôi cũng vậy")
+    ans = (sr.handle_turn("tôi không thích ăn gì?").final_answer or "").lower()
+    assert "cơm" in ans and "cá" in ans and ("mỳ" in ans or "mì" in ans), ans
+    assert "tôi cũng vậy" not in ans, ans
+    summary = (sr.handle_turn("bạn nhớ gì về tôi").final_answer or "").lower()
+    assert "tôi cũng vậy" not in summary, summary
+
+
+def test_p0_7k_fix5b_relation_adjacent_affection_no_ordinary_preference_pollution():
+    sr = _make_sr()
+    sr.handle_turn("tôi thích quý và quý cũng thích tôi")
+    self_ans = (sr.handle_turn("tôi có thích quý không?").final_answer or "").lower()
+    assert "quý" in self_ans and "rule-based mvp" not in self_ans, self_ans
+    ext_ans = (sr.handle_turn("quý có thích tôi không?").final_answer or "").lower()
+    assert not any(tok in ext_ans for tok in ["đã nhớ", "đã lưu", "đã ghi nhận"]), ext_ans
+    likes = (sr.handle_turn("tôi thích gì?").final_answer or "").lower()
+    assert "quý, tôi" not in likes and "\ntôi" not in likes, likes
+    summary = (sr.handle_turn("bạn nhớ gì về tôi").final_answer or "").lower()
+    assert "quý, tôi" not in summary and "tôi." not in summary, summary
+
+
+def test_p0_7k_fix5b_third_party_relation_still_safe_unsupported():
+    sr = _make_sr()
+    sr.handle_turn("tôi là bắc")
+    sr.handle_turn("may không thích bắc")
+    sr.handle_turn("may có thích bắc không?")
+    summary = (sr.handle_turn("bạn nhớ gì về tôi").final_answer or "").lower()
+    assert "may không thích bắc" not in summary, summary
+
+
+def test_p0_7k_fix5b_manual_spec_contains_entity_canonicalizer_cases():
+    import pathlib
+    spec_path = pathlib.Path(__file__).parent / "manual" / "CONV_P0_MEMORY_CORE_MANUAL_REGRESSION_SPEC.md"
+    text = spec_path.read_text(encoding="utf-8").lower()
+    required = [
+        "p0-7k-fix5b",
+        "entity resolver",
+        "known-item canonicalizer",
+        "tôi có thích ăn chối không?",
+        "tôi có thích ăn lem không?",
+        "tôi thích ăn lem hay ăn táo hơn?",
+        "tôi thích quý và quý cũng thích tôi",
+        "may không thích bắc",
+    ]
+    missing = [tok for tok in required if tok not in text]
+    assert not missing, f"Manual spec missing FIX5B tokens: {missing}"

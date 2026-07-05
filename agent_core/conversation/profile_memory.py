@@ -1741,6 +1741,8 @@ def answer_yes_no_memory_query(
         items = _split_preference_query_items(raw_target)
         if len(items) >= 2:
             return _answer_batch_preference_yesno(items, snap)
+        query_value = _canonicalize_preference_query_object(value, snap)
+        target = _norm_cmp(query_value)
         if raw_target == "ai":
             # P0-7G: lowercase "ai" is the person question word — route to affection state.
             if snap.affections:
@@ -1748,24 +1750,24 @@ def answer_yes_no_memory_query(
             return "Mình chưa có thông tin về người bạn thích."
         # P0-7G: person affection ("tôi có thích Quý không?") answers from affection memory.
         if target in affections:
-            return f"Có, mình đang nhớ là bạn thích {value}."
+            return f"Có, mình đang nhớ là bạn thích {query_value}."
         # P0-7G: durable dislike ("tôi có thích ăn cá không?" after "tôi không thích ăn cá").
-        if target in dislikes or any(_matches_preference_query(v, value) for v in snap.dislikes):
-            return f"Không, bạn từng nói là không thích {value}."
-        if target in prefs or any(_matches_preference_query(v, value) for v in pref_values):
-            return f"Có, mình đang nhớ bạn thích {value}."
+        if target in dislikes or any(_matches_preference_query(v, query_value) for v in snap.dislikes):
+            return f"Không, bạn từng nói là không thích {query_value}."
+        if target in prefs or any(_matches_preference_query(v, query_value) for v in pref_values):
+            return f"Có, mình đang nhớ bạn thích {query_value}."
         # P0-7K-FIX2: a comparative winner ("thích cafe hơn trà") answers the yes/no too.
         if any(_norm_cmp(w) == target for w, _l in snap.comparatives):
-            return f"Có, mình đang nhớ bạn thích {value}."
+            return f"Có, mình đang nhớ bạn thích {query_value}."
         if snap.favorite_food and _norm_cmp(snap.favorite_food) == target:
-            return f"Có, mình đang nhớ bạn thích {value}."
+            return f"Có, mình đang nhớ bạn thích {query_value}."
         if snap.favorite_general and _norm_cmp(snap.favorite_general) == target:
-            return f"Có, mình đang nhớ bạn thích {value}."
+            return f"Có, mình đang nhớ bạn thích {query_value}."
         if target in skills:
             return (
-                f'Mình đang nhớ bạn biết {value}, nhưng chưa lưu "{value}" như một sở thích.'
+                f'Mình đang nhớ bạn biết {query_value}, nhưng chưa lưu "{query_value}" như một sở thích.'
             )
-        return f"Mình chưa thấy thông tin rằng bạn thích {value}."
+        return f"Mình chưa thấy thông tin rằng bạn thích {query_value}."
 
     if category == "skill":
         negative_skills = [_norm_cmp(v) for v in snap.negative_skills]
@@ -2630,6 +2632,10 @@ def _split_skill_query_items(value: str) -> list[str]:
 
 
 _PREFERENCE_QUERY_SHARED_PREFIXES: tuple[str, ...] = ("ăn ", "uống ")
+_TECHNICAL_CONCEPT_TOKENS: frozenset[str] = frozenset({
+    "AI", "ML", "LLM", "SLM", "NLP", "Agent",
+})
+_TECHNICAL_CONCEPT_PHRASES: frozenset[str] = frozenset({"AI Agent"})
 
 
 def _strip_batch_item_marker(value: str) -> str:
@@ -2678,6 +2684,91 @@ def _join_vietnamese_items(items: list[str]) -> str:
     return ", ".join(items[:-1]) + f" và {items[-1]}"
 
 
+def _active_preference_query_candidates(snap: ProfileSnapshot) -> list[str]:
+    candidates: list[str] = []
+    for value in snap.preferences_personal + snap.preferences_professional + snap.dislikes:
+        if _norm_cmp(value) not in {_norm_cmp(v) for v in candidates}:
+            candidates.append(value)
+    return candidates
+
+
+def _looks_like_technical_concept(value: str) -> bool:
+    stripped = re.sub(r"\s+", " ", value.strip())
+    if stripped in _TECHNICAL_CONCEPT_PHRASES:
+        return True
+    tokens = stripped.split()
+    if not tokens:
+        return False
+    return any(
+        tok in _TECHNICAL_CONCEPT_TOKENS or re.fullmatch(r"[A-Z0-9]{2,}", tok)
+        for tok in tokens
+    )
+
+
+def _edit_distance_at_most_one(a: str, b: str) -> bool:
+    if a == b:
+        return True
+    if abs(len(a) - len(b)) > 1:
+        return False
+    if len(a) == len(b):
+        return sum(1 for x, y in zip(a, b) if x != y) <= 1
+    if len(a) > len(b):
+        a, b = b, a
+    i = j = edits = 0
+    while i < len(a) and j < len(b):
+        if a[i] == b[j]:
+            i += 1
+            j += 1
+            continue
+        edits += 1
+        if edits > 1:
+            return False
+        j += 1
+    return True
+
+
+def canonicalize_known_preference_query_object(
+    raw: str, active_candidates: list[str]
+) -> str | None:
+    """Return a known active preference object for a near-typo query, if unique.
+
+    P0-7K-FIX5B keeps this memory-backed and conservative: only active preference/
+    dislike objects are candidates, acronyms/concepts are excluded, and only one-edit
+    matches are accepted. No person-name or global fuzzy search is performed.
+    """
+    raw_clean = re.sub(r"\s+", " ", raw.strip()).strip()
+    raw_key = _norm_cmp(raw_clean)
+    if not raw_key or len(raw_key) < 5 or _looks_like_technical_concept(raw_clean):
+        return None
+    matches: list[str] = []
+    for candidate in active_candidates:
+        candidate_clean = re.sub(r"\s+", " ", candidate.strip()).strip()
+        candidate_key = _norm_cmp(candidate_clean)
+        if (
+            not candidate_key
+            or candidate_key == raw_key
+            or len(candidate_key) < 5
+            or _looks_like_technical_concept(candidate_clean)
+        ):
+            continue
+        if _edit_distance_at_most_one(raw_key, candidate_key):
+            matches.append(candidate_clean)
+    deduped: list[str] = []
+    for match in matches:
+        if _norm_cmp(match) not in {_norm_cmp(v) for v in deduped}:
+            deduped.append(match)
+    return deduped[0] if len(deduped) == 1 else None
+
+
+def _canonicalize_preference_query_object(value: str, snap: ProfileSnapshot) -> str:
+    return (
+        canonicalize_known_preference_query_object(
+            value, _active_preference_query_candidates(snap)
+        )
+        or value
+    )
+
+
 def _preference_item_state(item: str, snap: ProfileSnapshot) -> str:
     """Return positive / negative / unknown for one preference query object."""
     target = _norm_cmp(item)
@@ -2700,6 +2791,7 @@ def _preference_item_state(item: str, snap: ProfileSnapshot) -> str:
 
 
 def _answer_batch_preference_yesno(items: list[str], snap: ProfileSnapshot) -> str:
+    items = [_canonicalize_preference_query_object(item, snap) for item in items]
     positive: list[str] = []
     negative: list[str] = []
     unknown: list[str] = []
@@ -3151,14 +3243,16 @@ def answer_profile_query(
     # --- P0-7K-FIX2 C: self_comparative ("tôi thích A hay B hơn?") ---
     elif query.kind == "self_comparative":
         snap = collect_profile_snapshot(store)
-        a = _norm_cmp(query.value or "")
-        b = _norm_cmp(query.object_value or "")
+        a_value = _canonicalize_preference_query_object(query.value or "", snap)
+        b_value = _canonicalize_preference_query_object(query.object_value or "", snap)
+        a = _norm_cmp(a_value)
+        b = _norm_cmp(b_value)
         for winner, loser in snap.comparatives:
             w, l = _norm_cmp(winner), _norm_cmp(loser)
             if {a, b} == {w, l}:
                 return f"Bạn thích {winner} hơn {loser}."
         return (
-            f"Mình chưa đủ thông tin để so sánh {query.value} và {query.object_value}."
+            f"Mình chưa đủ thông tin để so sánh {a_value} và {b_value}."
         )
 
     # --- P0-7K-FIX2 H: self_food_preference ("tôi thích ăn gì?") ---
@@ -3227,7 +3321,7 @@ def answer_profile_query(
     elif query.kind == "self_preference":
         snap = collect_profile_snapshot(store)
         if not snap.preferences_personal and not snap.preferences_professional:
-            return "Tôi chưa có thông tin về sở thích của bạn."
+            return "Mình chưa có thông tin về sở thích của bạn."
         parts: list[str] = []
         if snap.preferences_personal:
             parts.append(

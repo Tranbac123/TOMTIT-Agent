@@ -2939,6 +2939,131 @@ bạn trả lời sai rồi
 
 ---
 
+### P0-7K-FIX5B — Entity Resolver + Known-item Canonicalizer v1
+
+FIX5B is a narrow memory-backed canonicalization and no-pollution patch. It is not a
+relation-store migration and does not add support for relations between two other people.
+
+#### A. AI acronym is not lowercase "ai"
+
+```
+tôi thích AI và ML
+tôi bây giờ không thích AI nữa
+tôi có thích AI và ML không?
+tôi thích gì?
+tôi không thích gì?
+=> AI is currently negative, ML remains positive
+=> must NOT say/store "không thích ai nữa"
+=> AI must not be treated as the person-pronoun "ai"
+```
+
+#### B. Known typo: chối -> chuối
+
+```
+tôi không thích ăn chuối
+tôi có thích ăn chối không?
+bạn nhớ gì về tôi
+=> answers/references known "ăn chuối"
+=> summary must NOT contain "ăn chối"
+```
+
+#### C. Known typo: lem -> kem
+
+```
+tôi thích ăn kem
+tôi có thích ăn lem không?
+bạn nhớ gì về tôi
+=> answers/references known "ăn kem"
+=> summary must NOT contain "ăn lem"
+```
+
+#### D. Known typo in comparative query
+
+```
+tôi thích ăn kem
+tôi thích ăn táo
+tôi thích ăn lem hay ăn táo hơn?
+=> safe comparison response using "ăn kem" and "ăn táo"
+=> must NOT save or surface "ăn lem" as known memory
+```
+
+#### E. Do not fuzzy person names
+
+```
+tôi thích Quý
+tôi có thích Quy không?
+bạn nhớ gì về tôi
+=> do not silently map Quy to Quý
+=> summary must NOT contain "Quy"
+```
+
+#### F. Do not fuzzy acronyms/concepts
+
+```
+tôi thích AI
+tôi có thích A1 không?
+bạn nhớ gì về tôi
+=> do not map A1 to AI
+=> summary must NOT contain "A1"
+```
+
+#### G. Cleanup narrow continuation phrase
+
+```
+tôi không thích ăn cơm và ăn cá, cả ăn mỳ tôi cũng vậy
+tôi không thích ăn gì?
+bạn nhớ gì về tôi
+=> negative preferences: ăn cơm, ăn cá, ăn mỳ
+=> must NOT contain "ăn mỳ tôi cũng vậy" or "tôi cũng vậy"
+```
+
+#### H. Relation-adjacent no ordinary-preference pollution
+
+```
+tôi thích quý và quý cũng thích tôi
+tôi có thích quý không?
+quý có thích tôi không?
+tôi thích gì?
+bạn nhớ gì về tôi
+=> self-affection "quý" may be saved
+=> "quý có thích tôi không?" may remain unknown until FIX5C
+=> ordinary preferences must NOT include "quý, tôi" or "tôi"
+```
+
+#### I. Third-party relation remains unsupported/safe
+
+```
+tôi là bắc
+may không thích bắc
+may có thích bắc không?
+bạn nhớ gì về tôi
+=> may remain unsupported
+=> must NOT save "may không thích bắc" into profile memory
+```
+
+#### J. Feedback no-write regression
+
+```
+bạn phải trả lời là không thích chứ không phải không biết, không thấy thông tin
+bạn nhớ gì về tôi
+=> no memory write
+=> no summary pollution
+```
+
+#### Classification rules
+
+```text
+- If uppercase AI is treated as lowercase ai/person-pronoun, classify NEEDS_FIX.
+- If known typo "chối"/"lem" is saved as a new memory fact, classify NEEDS_FIX.
+- If fuzzy matching silently maps person names, classify NEEDS_FIX.
+- If fuzzy matching maps acronyms/concepts, classify NEEDS_FIX.
+- If "ăn mỳ tôi cũng vậy" appears in negative preference summary, classify NEEDS_FIX.
+- If "tôi thích quý và quý cũng thích tôi" creates ordinary preference "quý, tôi" or "tôi", classify NEEDS_FIX.
+- If the "may không thích bắc" relation between two other people pollutes profile memory, classify NEEDS_FIX.
+```
+
+---
+
 ## 10. Merge Gate Policy
 
 Passing this file does not automatically merge.

@@ -197,6 +197,10 @@ _RE_CX_INVERSE_AFFECTION = re.compile(
     r'^(\S+(?:\s+\S+)?)\s+là\s+người\s+(?:mà\s+)?(?:tôi|mình)\s+thích\s*[.!]*\s*$',
     re.IGNORECASE,
 )
+_RE_CX_RELATION_ADJACENT_AFFECTION = re.compile(
+    r'^(?:tôi|mình)\s+thích\s+(\S+)\s+và\s+\1\s+cũng\s+thích\s+(?:tôi|mình)\s*[.!]*\s*$',
+    re.IGNORECASE,
+)
 _RE_CX_GOAL_VERB = re.compile(
     r'(?:muốn|định|sẽ)\s+(?:làm|build)|(?:muốn|định|sẽ)\s+.*\bbuild\b',
     re.IGNORECASE,
@@ -224,13 +228,15 @@ def detect_memory_complexity(text: str) -> str | None:
         return "correction_name"
     if _RE_CX_CORRECTION_REL.search(low):
         return "correction_relationship"
-    if _RE_CX_REMOVE_ALL_AFFECTION.search(low) and (
+    if _RE_CX_REMOVE_ALL_AFFECTION.search(low) and not re.search(r'\bAI\b', stripped) and (
         "nữa" in low or "không còn" in low
         or low.startswith(("bây giờ", "hiện tại", "giờ"))
     ):
         return "remove_all_affection"
     if _RE_CX_INVERSE_AFFECTION.match(stripped):
         return "inverse_affection"
+    if _RE_CX_RELATION_ADJACENT_AFFECTION.match(stripped):
+        return None
 
     # P0-7K-FIX4 E: contrast skill clause ("tôi biết A nhưng không biết B") — before the
     # multi-item skill lane since it carries a polarity switch, not a plain list.
@@ -342,6 +348,12 @@ def _split_items(raw: str) -> list[str]:
         for item in re.split(r'\s+và\s+', chunk):
             item = re.sub(r"\s+", " ", item.strip().rstrip(".!,")).strip()
             item = strip_additive_target_marker(item) if item else item
+            item = re.sub(
+                r'\s+(?:tôi|mình)\s+cũng\s+vậy\s*$',
+                "",
+                item,
+                flags=re.IGNORECASE,
+            ).strip()
             if item:
                 parts.append(item)
     if not parts:

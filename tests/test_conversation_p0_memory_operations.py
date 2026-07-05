@@ -548,3 +548,27 @@ def test_p0_7k_fix5a_splits_batch_preference_query_values():
     assert _split_preference_query_items("ăn kem, bánh mì và uống cafe") == [
         "ăn kem", "ăn bánh mì", "uống cafe",
     ]
+
+
+# ---------------------------------------------------------------------------
+# P0-7K-FIX5B unit tests
+# ---------------------------------------------------------------------------
+
+def test_p0_7k_fix5b_known_preference_canonicalizer_is_memory_backed_and_narrow():
+    from agent_core.conversation.profile_memory import canonicalize_known_preference_query_object
+
+    candidates = ["ăn chuối", "ăn kem", "AI"]
+    assert canonicalize_known_preference_query_object("ăn chối", candidates) == "ăn chuối"
+    assert canonicalize_known_preference_query_object("ăn lem", candidates) == "ăn kem"
+    assert canonicalize_known_preference_query_object("A1", candidates) is None
+    assert canonicalize_known_preference_query_object("Quy", candidates) is None
+
+
+def test_p0_7k_fix5b_parse_inline_temporal_negative_preference():
+    from agent_core.conversation.memory_operations import parse_memory_operation
+
+    op = parse_memory_operation("tôi bây giờ không thích AI nữa")
+    assert op is not None
+    assert (op.op, op.domain, op.polarity, op.value) == (
+        "UPDATE_CURRENT", "preference", "negative", "AI",
+    )

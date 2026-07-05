@@ -134,6 +134,10 @@ _RE_INLINE_TEMPORAL_MARKER = re.compile(
     r'\s+' + _TEMPORAL_MARKER_CORE + r'(?=\s)',
     re.IGNORECASE,
 )
+_RE_SUBJECT_INLINE_TEMPORAL_MARKER = re.compile(
+    r'^((?:tôi|mình)\s+)' + _TEMPORAL_MARKER_CORE + r'\s+',
+    re.IGNORECASE,
+)
 
 # Leading intent verbs stripped when building a goal conflict key, so "build LLM" and
 # "làm LLM" resolve to the same key "llm".
@@ -151,6 +155,9 @@ def strip_temporal_update_marker(text: str) -> tuple[str, bool]:
     m = _RE_TEMPORAL_MARKER.match(stripped)
     if m:
         return stripped[m.end():].strip(), True
+    m = _RE_SUBJECT_INLINE_TEMPORAL_MARKER.match(stripped)
+    if m:
+        return (m.group(1) + stripped[m.end():]).strip(), True
     return stripped, False
 
 
@@ -758,6 +765,11 @@ def apply_memory_operation(
             )
             if not save_auto_profile_fact(candidate, store, session_id):
                 return None
+            if re.fullmatch(r"[A-Z0-9]{2,}", op.value.strip()):
+                return MemoryOperationOutcome(
+                    f"Đã ghi nhận: {op.value} hiện là mục bạn không còn thích.",
+                    "conv:memop_preference_updated", saved=True,
+                )
             return MemoryOperationOutcome(
                 f"Đã ghi nhận: hiện tại bạn không thích {op.value} nữa.",
                 "conv:memop_preference_updated", saved=True,

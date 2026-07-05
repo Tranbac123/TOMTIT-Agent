@@ -322,6 +322,10 @@ _RE_AFFECTION = re.compile(
     r'(?:thích|yêu|nhớ|crush|quan\s+tâm(?:\s+(?:đến|tới))?)\s+(.+)$',
     re.IGNORECASE | re.DOTALL,
 )
+_RE_RELATION_ADJACENT_AFFECTION = re.compile(
+    r'^(?:tôi|mình)\s+thích\s+(\S+)\s+và\s+\1\s+cũng\s+thích\s+(?:tôi|mình)\s*[.!]*\s*$',
+    re.IGNORECASE,
+)
 _RE_SKILL = re.compile(
     r'^(?:tôi|mình)\s+(?:biết\s+làm|biết|có\s+thể|làm\s+được|giỏi|từng\s+học)\s+(.+)$',
     re.IGNORECASE | re.DOTALL,
@@ -780,6 +784,18 @@ def classify_profile_semantic_intent(text: str) -> SemanticProfileIntent | None:
             return SemanticProfileIntent(
                 kind="profile_write", category=f"favorite.{domain}",
                 value=value, write_policy="auto_safe",
+            )
+
+    # P0-7K-FIX5B: no-pollution guard for "tôi thích X và X cũng thích tôi".
+    # Save only the user's affection target; do not store "X, tôi" / "tôi" as ordinary
+    # preferences. Querying whether X likes the user remains a later FIX5C concern.
+    m = _RE_RELATION_ADJACENT_AFFECTION.match(stripped)
+    if m:
+        value = strip_additive_target_marker(_clean_value(m.group(1)))
+        if value and _is_person_affinity_value(value):
+            return SemanticProfileIntent(
+                kind="profile_write", category="relationship.affection_candidate",
+                value=value, sensitivity="person_affinity", write_policy="auto_safe",
             )
 
     # Preference ("tôi thích/mê/yêu thích/có sở thích X").

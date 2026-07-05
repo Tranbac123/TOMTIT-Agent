@@ -134,6 +134,29 @@ def test_p0_7k_rule_based_extractor_decomposes_compound_goal():
     assert all(op.domain == "goal" and op.op == "ADD" for op in result.operations)
 
 
+def test_p0_7k_fix5b_rule_based_extractor_cleans_toi_cung_vay_tail():
+    extractor = RuleBasedSemanticOperationExtractor()
+    result = extractor.extract(
+        SemanticExtractionRequest(
+            raw_text="tôi không thích ăn cơm và ăn cá, cả ăn mỳ tôi cũng vậy"
+        )
+    )
+    values = [(op.value, op.polarity) for op in result.operations]
+    assert values == [
+        ("ăn cơm", "negative"),
+        ("ăn cá", "negative"),
+        ("ăn mỳ", "negative"),
+    ]
+
+
+def test_p0_7k_fix5b_relation_adjacent_affection_not_extracted_as_preferences():
+    extractor = RuleBasedSemanticOperationExtractor()
+    result = extractor.extract(
+        SemanticExtractionRequest(raw_text="tôi thích quý và quý cũng thích tôi")
+    )
+    assert result.operations == ()
+
+
 # ---------------------------------------------------------------------------
 # Batch application
 # ---------------------------------------------------------------------------
