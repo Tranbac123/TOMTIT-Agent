@@ -4626,3 +4626,117 @@ def test_p0_7k_fix4_manual_spec_contains_confirmation_clause_snapshot_cases():
     ]
     missing = [tok for tok in required if tok not in text]
     assert not missing, f"Manual spec missing FIX4 tokens: {missing}"
+
+
+# ---------------------------------------------------------------------------
+# P0-7K-FIX5A tests — batch preference query aggregation + feedback no-write
+# ---------------------------------------------------------------------------
+
+def test_p0_7k_fix5a_batch_preference_yesno_all_positive():
+    sr = _make_sr()
+    sr.handle_turn("tôi thích ăn kem và chuối")
+    ans = (sr.handle_turn("tôi có thích ăn kem và chuối không?").final_answer or "").lower()
+    assert "rule-based mvp" not in ans, f"batch fell to fallback: {ans}"
+    assert "kem" in ans and "chuối" in ans, f"batch missing item: {ans}"
+    assert "có" in ans or "thích" in ans, f"batch did not answer positive: {ans}"
+    assert "chưa thấy thông tin" not in ans, f"raw joined phrase looked unknown: {ans}"
+
+
+def test_p0_7k_fix5a_batch_preference_yesno_mixed_positive_negative():
+    sr = _make_sr()
+    sr.handle_turn("tôi thích ăn kem và chuối")
+    sr.handle_turn("bây giờ tôi không thích ăn chuối nữa")
+    ans = (sr.handle_turn("tôi có thích ăn kem và chuối không?").final_answer or "").lower()
+    assert "rule-based mvp" not in ans, f"mixed batch fell to fallback: {ans}"
+    assert "kem" in ans and "thích" in ans, f"positive item missing: {ans}"
+    assert "chuối" in ans and "không" in ans, f"negative item missing: {ans}"
+    assert "chưa thấy thông tin rằng bạn thích ăn kem và chuối" not in ans, ans
+
+
+def test_p0_7k_fix5a_batch_food_cua_oc_query():
+    sr = _make_sr()
+    sr.handle_turn("tôi thích ăn cua và ốc")
+    ans = (sr.handle_turn("tôi có thích ăn cua và ốc không?").final_answer or "").lower()
+    assert "rule-based mvp" not in ans, f"food batch fell to fallback: {ans}"
+    assert "cua" in ans and "ốc" in ans, f"food batch missing item: {ans}"
+    assert "có" in ans or "thích" in ans, f"food batch not positive: {ans}"
+
+
+def test_p0_7k_fix5a_batch_concept_ai_ml_mixed():
+    sr = _make_sr()
+    sr.handle_turn("tôi thích AI và ML")
+    sr.handle_turn("tôi không thích ML")
+    ans = (sr.handle_turn("tôi có thích AI và ML không?").final_answer or "").lower()
+    assert "rule-based mvp" not in ans, f"AI/ML batch fell to fallback: {ans}"
+    assert "ai" in ans and "thích" in ans, f"AI positive missing: {ans}"
+    assert "ml" in ans and "không" in ans, f"ML negative missing: {ans}"
+    assert "chưa" not in ans and "không có thông tin" not in ans, f"AI/ML should be known: {ans}"
+    assert "không thích ai nữa" not in ans, f"AI treated as person-affection query: {ans}"
+
+
+def test_p0_7k_fix5a_batch_positive_unknown_aggregation():
+    sr = _make_sr()
+    sr.handle_turn("tôi thích ăn kem")
+    ans = (sr.handle_turn("tôi có thích ăn kem và bánh mì không?").final_answer or "").lower()
+    assert "rule-based mvp" not in ans, f"positive unknown fell to fallback: {ans}"
+    assert "kem" in ans and "bánh mì" in ans, f"positive unknown incomplete: {ans}"
+    assert "chưa" in ans or "không có thông tin" in ans, f"unknown side missing: {ans}"
+
+
+def test_p0_7k_fix5a_batch_negative_unknown_aggregation():
+    sr = _make_sr()
+    sr.handle_turn("tôi không thích ăn chuối")
+    ans = (sr.handle_turn("tôi có thích ăn chuối và bánh mì không?").final_answer or "").lower()
+    assert "rule-based mvp" not in ans, f"negative unknown fell to fallback: {ans}"
+    assert "chuối" in ans and "bánh mì" in ans, f"negative unknown incomplete: {ans}"
+    assert "không" in ans, f"negative side missing: {ans}"
+
+
+def test_p0_7k_fix5a_batch_all_negative_aggregation():
+    sr = _make_sr()
+    sr.handle_turn("tôi không thích ăn chuối và ăn cam")
+    ans = (sr.handle_turn("tôi có thích ăn chuối và ăn cam không?").final_answer or "").lower()
+    assert "rule-based mvp" not in ans, f"all negative fell to fallback: {ans}"
+    assert "chuối" in ans and "cam" in ans, f"all negative incomplete: {ans}"
+    assert "không" in ans, f"all negative missing no: {ans}"
+
+
+def test_p0_7k_fix5a_feedback_phrase_not_saved_as_preference():
+    sr = _make_sr()
+    ans = (
+        sr.handle_turn(
+            "bạn phải trả lời là không thích chứ không phải không biết, không thấy thông tin"
+        ).final_answer
+        or ""
+    ).lower()
+    assert "rule-based mvp" not in ans, f"feedback fell to fallback: {ans}"
+    assert not any(tok in ans for tok in ["đã nhớ", "đã lưu", "đã ghi nhận"]), ans
+    summary = (sr.handle_turn("bạn nhớ gì về tôi").final_answer or "").lower()
+    assert "không thích chứ không phải không biết" not in summary, summary
+    assert "không thấy thông tin" not in summary, summary
+
+
+def test_p0_7k_fix5a_wrong_answer_feedback_no_fallback_no_write():
+    sr = _make_sr()
+    ans = (sr.handle_turn("bạn trả lời sai rồi").final_answer or "").lower()
+    assert "rule-based mvp" not in ans, f"feedback fell to fallback: {ans}"
+    assert not any(tok in ans for tok in ["đã nhớ", "đã lưu", "đã ghi nhận"]), ans
+    summary = (sr.handle_turn("bạn nhớ gì về tôi").final_answer or "").lower()
+    assert "trả lời sai" not in summary, summary
+
+
+def test_p0_7k_fix5a_manual_spec_contains_batch_query_cases():
+    import pathlib
+    spec_path = pathlib.Path(__file__).parent / "manual" / "CONV_P0_MEMORY_CORE_MANUAL_REGRESSION_SPEC.md"
+    text = spec_path.read_text(encoding="utf-8").lower()
+    required = [
+        "p0-7k-fix5a",
+        "batch query planner",
+        "tôi có thích ăn kem và chuối không?",
+        "tôi có thích ai và ml không?",
+        "bạn trả lời sai rồi",
+        "a và b",
+        "polarity-aware",
+    ]
+    missing = [tok for tok in required if tok not in text]
+    assert not missing, f"Manual spec missing FIX5A tokens: {missing}"

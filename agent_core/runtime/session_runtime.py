@@ -211,6 +211,23 @@ _RE_CURRENT_STATE_SKILL = re.compile(
     re.IGNORECASE,
 )
 
+# CONV-P0 P0-7K-FIX5A: obvious meta-feedback about a prior answer. This is not a memory
+# write and not a full repair system; it simply avoids fallback/pollution.
+_RE_PROFILE_FEEDBACK_NO_WRITE = re.compile(
+    r'(?:'
+    r'bạn\s+phải\s+trả\s+lời\s+là'
+    r'|bạn\s+trả\s+lời\s+sai\s+rồi'
+    r'|trả\s+lời\s+sai\s+rồi'
+    r'|không\s+phải\s+(?:là\s+)?không\s+biết'
+    r'|phải\s+nói\s+là'
+    r')',
+    re.IGNORECASE,
+)
+_PROFILE_FEEDBACK_NO_WRITE_RESPONSE = (
+    "Mình hiểu là câu trả lời trước chưa đúng. Bạn nói rõ thông tin cần sửa để "
+    "mình cập nhật cho đúng nhé."
+)
+
 # CONV-P0 P0-6B: pending state helpers — narrow patterns, intentionally minimal.
 _PENDING_CANCEL = re.compile(
     r'^(?:hủy|bỏ\s+qua|không|thôi|cancel)\s*[.!?]*\s*$',
@@ -413,6 +430,12 @@ class SessionRuntime:
         unsupported = self._maybe_answer_unsupported_memory_domain(user_message, state)
         if unsupported is not None:
             return unsupported
+
+        # CONV-P0 P0-7K-FIX5A priority 3.95: answer-feedback/no-write guard. Runs before
+        # profile reads/writes so feedback text cannot be stored as a preference.
+        feedback = self._maybe_handle_profile_feedback_no_write(user_message, state)
+        if feedback is not None:
+            return feedback
 
         # CONV-P0 P0-7B priority 4: profile query — answer from confirmed facts before router.
         profile_answer = self._maybe_answer_profile_query(user_message, state)
@@ -1347,6 +1370,17 @@ class SessionRuntime:
         if m is None:
             return None
         return self._run_memory_write_pipeline(m.group(1).strip(), state)
+
+    def _maybe_handle_profile_feedback_no_write(
+        self, user_message: str, state: AgentState
+    ) -> AgentState | None:
+        """P0-7K-FIX5A: acknowledge obvious answer feedback without writing memory."""
+        if not _RE_PROFILE_FEEDBACK_NO_WRITE.search(user_message.strip()):
+            return None
+        self._last_memory_write_kind = None
+        return self._complete_conv(
+            state, "conv:profile_feedback_no_write", _PROFILE_FEEDBACK_NO_WRITE_RESPONSE
+        )
 
     def _maybe_handle_continuation(
         self, user_message: str, state: AgentState

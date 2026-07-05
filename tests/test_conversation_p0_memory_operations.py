@@ -533,3 +533,18 @@ def test_p0_7k_fix4_snapshot_hygiene_rejects_contrast_dirty_skill():
     assert _is_dirty_value("tôi biết đọc sách")
     assert not _is_dirty_value("hát")
     assert not _is_dirty_value("đọc sách")
+
+
+# ---------------------------------------------------------------------------
+# P0-7K-FIX5A unit tests
+# ---------------------------------------------------------------------------
+
+def test_p0_7k_fix5a_splits_batch_preference_query_values():
+    from agent_core.conversation.profile_memory import _split_preference_query_items
+
+    assert _split_preference_query_items("ăn kem và chuối") == ["ăn kem", "ăn chuối"]
+    assert _split_preference_query_items("ăn cua và ốc") == ["ăn cua", "ăn ốc"]
+    assert _split_preference_query_items("AI và ML") == ["AI", "ML"]
+    assert _split_preference_query_items("ăn kem, bánh mì và uống cafe") == [
+        "ăn kem", "ăn bánh mì", "uống cafe",
+    ]

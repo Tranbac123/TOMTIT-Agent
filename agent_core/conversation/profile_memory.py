@@ -327,8 +327,12 @@ def _is_valid_auto_value_shape(value: str) -> bool:
     blocked) — the latter gets a specific safety response instead of a generic fallback.
     """
     v = value.strip()
-    if not v or len(v) < 3 or len(v) > 80:
+    if not v or len(v) > 80:
         return False
+    # P0-7K-FIX5A: short technical acronyms are meaningful preference/topic objects
+    # ("AI", "ML"). Keep this uppercase-only so lowercase "ai" remains a question word.
+    if len(v) < 3:
+        return bool(re.fullmatch(r"[A-Z0-9]{2,5}", v))
     if v.lower() in _VAGUE_REFS:
         return False
     return True
@@ -1732,6 +1736,11 @@ def answer_yes_no_memory_query(
     dislikes = [_norm_cmp(v) for v in snap.dislikes]
 
     if category == "preference":
+        # P0-7K-FIX5A: answer visible multi-object preference queries per item; never
+        # look up the raw joined phrase ("A và B") as a single preference object.
+        items = _split_preference_query_items(raw_target)
+        if len(items) >= 2:
+            return _answer_batch_preference_yesno(items, snap)
         if raw_target == "ai":
             # P0-7G: lowercase "ai" is the person question word — route to affection state.
             if snap.affections:
@@ -2618,6 +2627,107 @@ def _split_skill_query_items(value: str) -> list[str]:
         if item:
             parts.append(item)
     return parts
+
+
+_PREFERENCE_QUERY_SHARED_PREFIXES: tuple[str, ...] = ("ăn ", "uống ")
+
+
+def _strip_batch_item_marker(value: str) -> str:
+    return re.sub(
+        r'^(?:cả|cũng|còn|thêm)\s+',
+        "",
+        re.sub(r"\s+", " ", value.strip().rstrip(".!?,?？")),
+        flags=re.IGNORECASE,
+    ).strip()
+
+
+def _split_preference_query_items(value: str) -> list[str]:
+    """Split a batch preference yes/no object without raw "A và B" lookup.
+
+    Narrow by design: visible list separators only, plus food/drink prefix carry-over
+    ("ăn kem và chuối" -> "ăn kem", "ăn chuối"). This is not a fuzzy/entity parser.
+    """
+    raw = re.sub(r"\s+", " ", value.strip()).strip()
+    if not raw:
+        return []
+    parts: list[str] = []
+    for chunk in re.split(r'\s*,\s*', raw):
+        for item in re.split(r'\s+và\s+', chunk, flags=re.IGNORECASE):
+            cleaned = _strip_batch_item_marker(item)
+            if cleaned:
+                parts.append(cleaned)
+    if not parts:
+        return parts
+    first_low = parts[0].lower()
+    for prefix in _PREFERENCE_QUERY_SHARED_PREFIXES:
+        if first_low.startswith(prefix):
+            return [
+                p if p.lower().startswith(_PREFERENCE_QUERY_SHARED_PREFIXES) else f"{prefix}{p}"
+                for p in parts
+            ]
+    return parts
+
+
+def _join_vietnamese_items(items: list[str]) -> str:
+    if not items:
+        return ""
+    if len(items) == 1:
+        return items[0]
+    if len(items) == 2:
+        return f"{items[0]} và {items[1]}"
+    return ", ".join(items[:-1]) + f" và {items[-1]}"
+
+
+def _preference_item_state(item: str, snap: ProfileSnapshot) -> str:
+    """Return positive / negative / unknown for one preference query object."""
+    target = _norm_cmp(item)
+    pref_values = snap.preferences_personal + snap.preferences_professional
+    if target in {_norm_cmp(v) for v in snap.dislikes} or any(
+        _matches_preference_query(v, item) for v in snap.dislikes
+    ):
+        return "negative"
+    if target in {_norm_cmp(v) for v in pref_values} or any(
+        _matches_preference_query(v, item) for v in pref_values
+    ):
+        return "positive"
+    if any(_matches_preference_query(winner, item) for winner, _loser in snap.comparatives):
+        return "positive"
+    if snap.favorite_food and _matches_preference_query(snap.favorite_food, item):
+        return "positive"
+    if snap.favorite_general and _matches_preference_query(snap.favorite_general, item):
+        return "positive"
+    return "unknown"
+
+
+def _answer_batch_preference_yesno(items: list[str], snap: ProfileSnapshot) -> str:
+    positive: list[str] = []
+    negative: list[str] = []
+    unknown: list[str] = []
+    for item in items:
+        state = _preference_item_state(item, snap)
+        if state == "positive":
+            positive.append(item)
+        elif state == "negative":
+            negative.append(item)
+        else:
+            unknown.append(item)
+
+    parts: list[str] = []
+    if positive:
+        if not negative and not unknown:
+            return f"Có, bạn thích {_join_vietnamese_items(positive)}."
+        parts.append(f"Bạn thích {_join_vietnamese_items(positive)}")
+    if negative:
+        if not positive and not unknown:
+            return f"Không, bạn không thích {_join_vietnamese_items(negative)}."
+        neg_text = f"không thích {_join_vietnamese_items(negative)}"
+        parts.append(("nhưng " if positive else "Bạn ") + neg_text)
+    if unknown:
+        unknown_text = f"còn {_join_vietnamese_items(unknown)} thì mình chưa có thông tin"
+        if positive or negative:
+            return ", ".join(parts) + f"; {unknown_text}."
+        return f"Mình chưa có thông tin về {_join_vietnamese_items(unknown)}."
+    return ", ".join(parts) + "."
 
 
 # P0-7K-FIX1 E: lightweight AI taxonomy — terms that count as "AI" for goal yes/no.

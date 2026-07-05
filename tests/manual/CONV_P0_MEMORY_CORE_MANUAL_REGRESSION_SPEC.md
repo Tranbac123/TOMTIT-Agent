@@ -2857,6 +2857,88 @@ bạn đã nhớ gì về tôi
 
 ---
 
+### P0-7K-FIX5A — Batch Query Planner + Polarity-aware Aggregator
+
+Batch yes/no preference queries must be planned per object, not as one raw joined value.
+
+#### A. All-positive food batch
+
+```
+tôi thích ăn kem và chuối
+tôi có thích ăn kem và chuối không?
+=> Có / confirms both ăn kem and ăn chuối
+=> must NOT answer unknown for raw "ăn kem và chuối"
+```
+
+#### B. Mixed positive / negative
+
+```
+tôi thích ăn kem và chuối
+bây giờ tôi không thích ăn chuối nữa
+tôi có thích ăn kem và chuối không?
+=> says ăn kem is liked, but ăn chuối is not liked
+=> not all-yes, not whole-phrase unknown
+```
+
+#### C. Shared food prefix
+
+```
+tôi thích ăn cua và ốc
+tôi có thích ăn cua và ốc không?
+=> confirms ăn cua and ăn ốc
+=> must NOT look up raw "ăn cua và ốc"
+```
+
+#### D. Concept/topic batch
+
+```
+tôi thích AI và ML
+tôi không thích ML
+tôi có thích AI và ML không?
+=> says AI is liked, but ML is not liked
+=> do not treat uppercase AI as the person question word "ai"
+```
+
+#### E. Unknown-aware aggregation
+
+```
+tôi thích ăn kem
+tôi có thích ăn kem và bánh mì không?
+=> says ăn kem is liked; bánh mì/ăn bánh mì is unknown
+
+tôi không thích ăn chuối
+tôi có thích ăn chuối và bánh mì không?
+=> says ăn chuối is not liked; bánh mì/ăn bánh mì is unknown
+
+tôi không thích ăn chuối và ăn cam
+tôi có thích ăn chuối và ăn cam không?
+=> says both are not liked
+```
+
+#### F. Feedback no-write guard
+
+```
+bạn phải trả lời là không thích chứ không phải không biết, không thấy thông tin
+bạn nhớ gì về tôi
+=> first response acknowledges answer/correction feedback
+=> summary must NOT contain "không thích chứ không phải không biết"
+=> summary must NOT contain "không thấy thông tin"
+
+bạn trả lời sai rồi
+=> no generic tool fallback, no memory write, asks what should be corrected
+```
+
+#### Classification rules
+
+```text
+- If a batch yes/no query looks up "A và B" as one object, classify NEEDS_FIX.
+- If mixed positive/negative returns generic unknown for the whole phrase, classify NEEDS_FIX.
+- If feedback phrase is saved into profile memory, classify CRITICAL/NEEDS_FIX.
+- If "bạn trả lời sai rồi" falls to generic tool fallback, classify NEEDS_FIX.
+```
+
+---
+
 ## 10. Merge Gate Policy
 
 Passing this file does not automatically merge.
