@@ -197,6 +197,12 @@ _RE_CONTINUATION = re.compile(
     re.IGNORECASE,
 )
 
+# CONV-P0 P0-7K-FIX3-FIX1: explicit cancel for a pending delete-all confirmation.
+_RE_DELETE_CANCEL = re.compile(
+    r'^(?:không|khong|ko|hủy|huỷ|thôi|bỏ\s+qua|cancel|no)\s*[.!?]*\s*$',
+    re.IGNORECASE,
+)
+
 # CONV-P0 P0-6B: pending state helpers — narrow patterns, intentionally minimal.
 _PENDING_CANCEL = re.compile(
     r'^(?:hủy|bỏ\s+qua|không|thôi|cancel)\s*[.!?]*\s*$',
@@ -336,6 +342,12 @@ class SessionRuntime:
         delete_req = self._maybe_handle_delete_all_request(user_message, state)
         if delete_req is not None:
             return delete_req
+
+        # CONV-P0 P0-7K-FIX3-FIX1 priority 1.55: a stray delete confirmation with no
+        # pending request must not delete or claim success.
+        stray_confirm = self._maybe_handle_stray_delete_confirmation(user_message, state)
+        if stray_confirm is not None:
+            return stray_confirm
 
         # CONV-P0 P0-7K-FIX3 priority 1.6: reminder/correction with an inner memory clause
         # → re-dispatch the inner clause; standalone repair → clarification. Prevents the
@@ -1198,13 +1210,18 @@ class SessionRuntime:
     def _handle_delete_all_pending(
         self, user_message: str, state: AgentState
     ) -> AgentState | None:
-        """P0-7K-FIX3 K: resolve a pending delete-all confirmation.
+        """P0-7K-FIX3 / P0-7K-FIX3-FIX1: resolve a pending delete-all confirmation.
 
-        Explicit confirmation clears all profile memory; anything else cancels the pending
-        (fail-safe — never delete without an explicit confirmation phrase) and falls
-        through to normal routing.
+        Priority within the pending state:
+        1. Explicit confirmation → clear all profile memory.
+        2. Explicit cancel ("không", "hủy", ...) → drop pending, keep memory.
+        3. A safe read-only memory query → answer it and KEEP the pending active (an
+           intervening summary must NOT silently cancel the delete).
+        4. Any other turn → drop the pending (fail-safe: never delete without an explicit
+           confirmation) and fall through to normal routing.
         """
-        if detect_delete_all_confirmation(user_message.strip()):
+        text = user_message.strip()
+        if detect_delete_all_confirmation(text):
             self._pending_delete_all = False
             delete_all_profile_memory(self._store)
             self._confirmed_profile_fact_count = 0
@@ -1212,7 +1229,20 @@ class SessionRuntime:
             return self._complete_conv(
                 state, "conv:memory_deleted_all", build_delete_all_done()
             )
-        # Not a confirmation → cancel pending and let the turn route normally.
+        if _RE_DELETE_CANCEL.match(text):
+            self._pending_delete_all = False
+            return self._complete_conv(
+                state, "conv:memory_delete_cancelled",
+                "Đã huỷ yêu cầu xoá ký ức. Mình vẫn giữ thông tin về bạn.",
+            )
+        # A safe read-only memory query answers normally but keeps the pending active.
+        answer = self._answer_single_memory_query(text)
+        if answer is not None:
+            return self._complete_conv(
+                state, "conv:memory_query_while_delete_pending",
+                answer + " (Nếu vẫn muốn xoá, hãy trả lời \"xác nhận xoá ký ức\".)",
+            )
+        # Other non-confirmation turn → drop the pending safely, route normally.
         self._pending_delete_all = False
         return None
 
@@ -1225,6 +1255,20 @@ class SessionRuntime:
         self._pending_delete_all = True
         return self._complete_conv(
             state, "conv:memory_delete_confirm", build_delete_all_confirmation_prompt()
+        )
+
+    def _maybe_handle_stray_delete_confirmation(
+        self, user_message: str, state: AgentState
+    ) -> AgentState | None:
+        """P0-7K-FIX3-FIX1: a delete confirmation with NO pending request never deletes
+        and never claims success — it says nothing is pending."""
+        if self._pending_delete_all:
+            return None
+        if not detect_delete_all_confirmation(user_message.strip()):
+            return None
+        return self._complete_conv(
+            state, "conv:memory_delete_no_pending",
+            "Hiện không có yêu cầu xoá ký ức nào đang chờ xác nhận.",
         )
 
     def _maybe_handle_reminder_or_repair(

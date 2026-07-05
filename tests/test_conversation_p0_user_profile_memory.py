@@ -4427,3 +4427,67 @@ def test_p0_7k_fix3_manual_spec_contains_repair_delete_cleanup_cases():
     ]
     missing = [tok for tok in required if tok not in text]
     assert not missing, f"Manual spec missing FIX3 tokens: {missing}"
+
+
+# ---------------------------------------------------------------------------
+# P0-7K-FIX3-FIX1 tests — delete pending confirmation persistence
+# ---------------------------------------------------------------------------
+
+def test_p0_7k_fix3_fix1_delete_pending_survives_summary_query():
+    sr = _make_sr()
+    sr.handle_turn("tôi tên là bee")
+    sr.handle_turn("tôi thích ăn kem")
+    confirm = (sr.handle_turn("bạn hãy xoá hết ký ức về tôi đi").final_answer or "").lower()
+    assert "xác nhận" in confirm or "chắc" in confirm, f"no confirmation: {confirm}"
+    mid = (sr.handle_turn("bạn nhớ gì về tôi?").final_answer or "").lower()
+    assert "bee" in mid or "kem" in mid, f"summary lost memory: {mid}"
+    done = (sr.handle_turn("xác nhận xoá ký ức").final_answer or "").lower()
+    assert "đã xoá" in done or "đã xóa" in done, f"delete not done after summary: {done}"
+    final = (sr.handle_turn("bạn nhớ gì về tôi?").final_answer or "").lower()
+    assert "bee" not in final and "kem" not in final, f"memory not cleared: {final}"
+
+
+def test_p0_7k_fix3_fix1_delete_pending_survives_profile_query_then_confirms():
+    sr = _make_sr()
+    sr.handle_turn("tôi tên là bee")
+    sr.handle_turn("tôi thích ăn kem")
+    sr.handle_turn("bạn hãy xoá hết ký ức về tôi đi")
+    mid = (sr.handle_turn("tôi thích gì?").final_answer or "").lower()
+    assert "kem" in mid, f"profile query lost memory: {mid}"
+    done = (sr.handle_turn("xác nhận xoá ký ức").final_answer or "").lower()
+    assert "đã xoá" in done or "đã xóa" in done, f"delete not done: {done}"
+    final = (sr.handle_turn("bạn nhớ gì về tôi?").final_answer or "").lower()
+    assert "kem" not in final, f"memory not cleared: {final}"
+
+
+def test_p0_7k_fix3_fix1_delete_pending_explicit_cancel_preserves_memory():
+    sr = _make_sr()
+    sr.handle_turn("tôi tên là bee")
+    sr.handle_turn("bạn hãy xoá hết ký ức về tôi đi")
+    cancel = (sr.handle_turn("không").final_answer or "").lower()
+    assert "rule-based mvp" not in cancel, f"cancel fell to fallback: {cancel}"
+    summary = (sr.handle_turn("bạn nhớ gì về tôi?").final_answer or "").lower()
+    assert "bee" in summary, f"cancel wrongly deleted memory: {summary}"
+
+
+def test_p0_7k_fix3_fix1_delete_confirmation_without_pending_does_not_fallback_if_possible_or_asks_clarification():
+    sr = _make_sr()
+    sr.handle_turn("tôi tên là bee")
+    ans = (sr.handle_turn("xác nhận xoá ký ức").final_answer or "").lower()
+    assert not any(t in ans for t in ["đã xoá", "đã xóa", "đã quên"]), f"claimed success without pending: {ans}"
+    summary = (sr.handle_turn("bạn nhớ gì về tôi?").final_answer or "").lower()
+    assert "bee" in summary, f"deleted without pending: {summary}"
+
+
+def test_p0_7k_fix3_fix1_manual_spec_contains_delete_pending_persistence_case():
+    import pathlib
+    spec_path = pathlib.Path(__file__).parent / "manual" / "CONV_P0_MEMORY_CORE_MANUAL_REGRESSION_SPEC.md"
+    text = spec_path.read_text(encoding="utf-8").lower()
+    required = [
+        "p0-7k-fix3-fix1",
+        "delete pending confirmation persistence",
+        "does not cancel pending",
+        "stray confirmation",
+    ]
+    missing = [tok for tok in required if tok not in text]
+    assert not missing, f"Manual spec missing FIX3-FIX1 tokens: {missing}"

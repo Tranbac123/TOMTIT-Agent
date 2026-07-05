@@ -2701,6 +2701,40 @@ bạn nhớ gì về tôi
    "đánh đàn nữa", "ăn kẹo nữa tôi đã nói" — only clean active facts
 ```
 
+#### P0-7K-FIX3-FIX1 — Delete Pending Confirmation Persistence
+
+An intervening read-only memory query must NOT cancel a pending delete-all confirmation.
+
+```
+tôi tên là bee
+tôi thích ăn kem
+bạn hãy xoá hết ký ức về tôi đi
+bạn nhớ gì về tôi?
+xác nhận xoá ký ức
+bạn nhớ gì về tôi?
+=> delete request asks explicit confirmation
+=> the intervening read-only summary answers current memory and does NOT cancel pending
+=> explicit confirmation clears all profile memory
+=> final summary has no bee and no ăn kem
+```
+
+Cancel case:
+
+```
+tôi tên là bee
+bạn hãy xoá hết ký ức về tôi đi
+không
+bạn nhớ gì về tôi?
+=> "không" cancels pending delete; memory remains
+```
+
+Stray confirmation (no pending):
+
+```
+xác nhận xoá ký ức
+=> must NOT delete and must NOT claim success; says nothing is pending
+```
+
 #### Classification rules
 
 ```text
