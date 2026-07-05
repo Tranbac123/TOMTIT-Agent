@@ -669,8 +669,9 @@ def classify_profile_semantic_intent(text: str) -> SemanticProfileIntent | None:
             )
 
     # One-sided affection phrase ("tôi thích đơn phương Quý", "tôi đơn phương Quý") —
-    # clarify, never an ordinary preference (P0-7F-FIX5 Part B). Checked before _RE_PREF so
-    # "đơn phương Quý" is not stored as a hobby value.
+    # categorized distinctly so runtime can save it as affection without making it an
+    # ordinary preference or relationship. Checked before _RE_PREF so "đơn phương Quý"
+    # is not stored as a hobby value.
     m = _RE_ONE_SIDED_AFFECTION.match(stripped)
     if m:
         value = _clean_value(m.group(1))

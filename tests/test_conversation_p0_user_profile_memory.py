@@ -1979,20 +1979,22 @@ def test_fix4_regression_guards():
 # P0-7F-FIX5 — narrow semantic regression (runtime)
 # ===========================================================================
 
-# --- Part B: one-sided ("đơn phương") affection is not an ordinary preference ---
+# --- Part B: one-sided ("đơn phương") affection is saved as affection, not preference ---
 
 @pytest.mark.parametrize("text", [
     "tôi thích đơn phương Quý",
     "mình thích đơn phương Quý",
     "tôi đơn phương Quý",
 ])
-def test_fix5_one_sided_affection_not_saved(text: str):
+def test_fix5_one_sided_affection_saved_as_affection(text: str):
     sr = _make_sr()
     answer = sr.handle_turn(text).final_answer or ""
     low = answer.lower()
-    assert "đã nhớ là bạn thích" not in low
+    assert "đã nhớ" in low or "đã lưu" in low or "đã ghi nhận" in low
+    assert "quý" in low
     assert "rule-based MVP" not in answer
-    assert "đơn phương" in low or "tình cảm" in low or "không lưu" in low
+    yes = (sr.handle_turn("tôi có thích Quý không?").final_answer or "").lower()
+    assert "quý" in yes and ("có" in yes or "thích" in yes)
 
 
 def test_fix5_one_sided_affection_not_in_preference_summary():
@@ -2000,6 +2002,7 @@ def test_fix5_one_sided_affection_not_in_preference_summary():
     sr.handle_turn("tôi thích đơn phương Quý")
     summary = sr.handle_turn("tôi thích gì?").final_answer or ""
     assert "đơn phương" not in summary.lower()
+    assert "quý" not in summary.lower()
 
 
 def test_fix5_build_one_sided_affection_response():
@@ -4852,3 +4855,58 @@ def test_p0_7k_fix5b_manual_spec_contains_entity_canonicalizer_cases():
     ]
     missing = [tok for tok in required if tok not in text]
     assert not missing, f"Manual spec missing FIX5B tokens: {missing}"
+
+
+# ---------------------------------------------------------------------------
+# P0-7K-FIX5B-FIX1 tests — unrequited affection save
+# ---------------------------------------------------------------------------
+
+def test_p0_7k_fix5b_fix1_unrequited_affection_saved_as_affection():
+    sr = _make_sr()
+    ack = (sr.handle_turn("tôi thích đơn phương Quý").final_answer or "").lower()
+    assert any(tok in ack for tok in ["đã nhớ", "đã lưu", "đã ghi nhận"]), ack
+    assert "quý" in ack, ack
+    yes = (sr.handle_turn("tôi có thích Quý không?").final_answer or "").lower()
+    assert "quý" in yes and ("có" in yes or "thích" in yes or "đang nhớ" in yes), yes
+    who = (sr.handle_turn("tôi thích ai?").final_answer or "").lower()
+    assert "quý" in who, who
+    summary = (sr.handle_turn("bạn nhớ gì về tôi").final_answer or "").lower()
+    assert "quý" in summary and "tình cảm" in summary, summary
+
+
+def test_p0_7k_fix5b_fix1_unrequited_affection_not_ordinary_preference():
+    sr = _make_sr()
+    sr.handle_turn("tôi thích đơn phương Quý")
+    likes = (sr.handle_turn("tôi thích gì?").final_answer or "").lower()
+    assert "đơn phương" not in likes, likes
+    assert "quý" not in likes, likes
+    summary = (sr.handle_turn("bạn nhớ gì về tôi").final_answer or "").lower()
+    assert "đơn phương quý" not in summary, summary
+
+
+def test_p0_7k_fix5b_fix1_unrequited_affection_not_relationship():
+    sr = _make_sr()
+    sr.handle_turn("tôi thích đơn phương Quý")
+    rel = (sr.handle_turn("người yêu của tôi là ai?").final_answer or "").lower()
+    assert not ("quý" in rel and "chưa" not in rel and "không" not in rel), rel
+    yesno = (sr.handle_turn("Quý có phải là người yêu của tôi không?").final_answer or "").lower()
+    assert not ("quý" in yesno and ("có" in yesno or "đúng" in yesno) and "không" not in yesno), yesno
+
+
+def test_p0_7k_fix5b_fix1_unrequited_affection_no_reverse_inference():
+    sr = _make_sr()
+    sr.handle_turn("tôi là Bắc")
+    sr.handle_turn("tôi thích đơn phương Quý")
+    ans = (sr.handle_turn("Quý có thích Bắc không?").final_answer or "").lower()
+    assert not any(tok in ans for tok in ["đã nhớ", "đã lưu", "đã ghi nhận"]), ans
+    assert "chưa" in ans or "không biết" in ans or "không có thông tin" in ans, ans
+
+
+def test_p0_7k_fix5b_fix1_relation_adjacent_guard_still_no_pollution():
+    sr = _make_sr()
+    sr.handle_turn("tôi thích quý và quý cũng thích tôi")
+    likes = (sr.handle_turn("tôi thích gì?").final_answer or "").lower()
+    assert "tôi" not in likes, likes
+    assert "quý, tôi" not in likes, likes
+    summary = (sr.handle_turn("bạn nhớ gì về tôi").final_answer or "").lower()
+    assert "quý, tôi" not in summary, summary

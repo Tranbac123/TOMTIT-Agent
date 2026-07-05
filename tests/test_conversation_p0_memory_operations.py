@@ -94,6 +94,16 @@ def test_parse_affection_removal_strips_nua():
     assert "nữa" not in op.value
 
 
+def test_parse_one_sided_affection_adds_affection_not_relationship():
+    op = parse_memory_operation("tôi thích đơn phương Quý")
+    assert op is not None
+    assert (op.op, op.domain) == ("ADD", "affection")
+    assert op.subject == "self"
+    assert op.value == "Quý"
+    assert op.relation is None
+    assert op.source == "one_sided_affection"
+
+
 def test_parse_relationship_current_update():
     op = parse_memory_operation("bây giờ người yêu của tôi là quý")
     assert op is not None

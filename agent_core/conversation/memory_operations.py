@@ -232,6 +232,15 @@ _RE_OP_AFFECTION_REMOVE = re.compile(
     r'(.+?)(?:\s+nữa)?\s*[.!]*\s*$',
     re.IGNORECASE | re.DOTALL,
 )
+# One-sided affection save: "tôi thích đơn phương Quý", "tôi đơn phương Quý".
+# This is self affection, not ordinary preference, not relationship, and not reverse
+# affection. Kept here so older semantic classifier tests can continue to mark the
+# phrase as a clarify lane while runtime saves it through the earlier Memory Kernel.
+_RE_OP_ONE_SIDED_AFFECTION = re.compile(
+    r'^(?:tôi|mình)\s+(?:(?:đang\s+)?thích\s+)?đơn\s+phương\s+'
+    r'(.+?)\s*[.!]*\s*$',
+    re.IGNORECASE | re.DOTALL,
+)
 # Relationship assertion (checked only AFTER a temporal marker was stripped).
 _RE_OP_REL_ASSERT = re.compile(
     r'^(bạn\s+gái|bạn\s+trai|người\s+yêu|vợ|chồng|partner)\s+'
@@ -396,6 +405,18 @@ def parse_memory_operation(text: str) -> MemoryOperation | None:
                 op="REMOVE", domain="affection", subject="self", value=value,
                 canonical_key=canonicalize_memory_value(value), polarity="negative",
                 raw_text=stripped,
+            )
+
+    # 4b. One-sided self affection ("tôi thích đơn phương X") — save as affection
+    #     target, never as ordinary preference or relationship.
+    m = _RE_OP_ONE_SIDED_AFFECTION.match(stripped)
+    if m:
+        value = _clean_op_value(m.group(1))
+        if value and not _looks_interrogative(value):
+            return MemoryOperation(
+                op="ADD", domain="affection", subject="self", value=value,
+                canonical_key=canonicalize_memory_value(value), polarity="positive",
+                source="one_sided_affection", raw_text=stripped,
             )
 
     # 5. Relationship current-update: leading marker ("bây giờ người yêu của tôi là X")
@@ -720,6 +741,27 @@ def apply_memory_operation(
             return None
         return MemoryOperationOutcome(
             build_affection_removed_ack(removed), "conv:memop_affection_removed"
+        )
+
+    if op.op == "ADD" and op.domain == "affection":
+        snap = collect_profile_snapshot(store)
+        if any(_norm_cmp(a) == op.canonical_key for a in snap.affections):
+            return MemoryOperationOutcome(
+                f"Đã nhớ là bạn có tình cảm/thích {op.value}.",
+                "conv:memop_affection_saved", saved=False,
+            )
+        if not save_affection_fact(
+            op.value, store, session_id, original_text=op.raw_text
+        ):
+            return None
+        if op.source == "one_sided_affection":
+            return MemoryOperationOutcome(
+                f"Đã nhớ là bạn có tình cảm đơn phương với {op.value}.",
+                "conv:memop_affection_saved", saved=True,
+            )
+        return MemoryOperationOutcome(
+            f"Đã nhớ là bạn có tình cảm/thích {op.value}.",
+            "conv:memop_affection_saved", saved=True,
         )
 
     if op.op == "UPDATE_CURRENT" and op.domain == "relationship":
