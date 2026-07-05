@@ -45,6 +45,7 @@ from agent_core.conversation.profile_memory import (
 from agent_core.conversation.profile_semantics import (
     _is_person_affinity_value,
     strip_additive_target_marker,
+    strip_terminal_discourse_markers,
 )
 
 # ---------------------------------------------------------------------------
@@ -310,6 +311,11 @@ _RE_COMPOUND_GOAL = re.compile(
     re.IGNORECASE,
 )
 _RE_MOI_DUNG_TAIL = re.compile(r'\s+mới\s+đúng\s*[.!]*\s*$', re.IGNORECASE)
+# P0-7K-FIX3: skill clause predicate ("tôi biết ", "tôi không biết ", "mình biết làm ").
+_RE_SKILL_CLAUSE_PREFIX = re.compile(
+    r'^(?:tôi|mình)\s+(không\s+)?biết\s+(?:làm\s+)?',
+    re.IGNORECASE,
+)
 
 
 _FOOD_VERB_PREFIXES: tuple[str, ...] = ("ăn ", "uống ")
@@ -453,23 +459,43 @@ class RuleBasedSemanticOperationExtractor:
         return tuple(ops) if len(ops) >= 2 else ()
 
     def _extract_skill_items(self, text: str) -> tuple[MemoryOperation, ...]:
-        m = re.match(
-            r'^(?:tôi|mình)\s+(không\s+)?biết\s+(?:làm\s+)?(.+)$', text, re.IGNORECASE
-        )
-        if not m:
+        # P0-7K-FIX3: multi-clause skill list with repeated predicates
+        # ("tôi biết nấu ăn, tôi biết đọc sách và hát",
+        #  "tôi không biết đọc sách và tôi không biết hát"). Each item's predicate is
+        # stripped so only the clean skill value is stored.
+        if not _RE_SKILL_CLAUSE_PREFIX.match(text):
             return ()
-        polarity = "negative" if m.group(1) else "positive"
-        items = _split_items(m.group(2).strip())
-        ops = []
-        for item in items:
-            if not _valid_item(item):
+        ops: list[MemoryOperation] = []
+        last_polarity = "positive"
+        # Split into clauses on comma AND on "và <predicate>" boundaries.
+        raw_parts = re.split(
+            r'\s*,\s*|\s+và\s+(?=(?:tôi|mình)\s+(?:không\s+)?biết\b)',
+            text, flags=re.IGNORECASE,
+        )
+        for part in raw_parts:
+            part = part.strip()
+            if not part:
                 continue
-            ops.append(MemoryOperation(
-                op="ADD", domain="skill", subject="self", value=item,
-                canonical_key=canonicalize_memory_value(item), polarity=polarity,
-                source=_RULE_BASED_SOURCE, confidence=_RULE_BASED_CONFIDENCE,
-                raw_text=text,
-            ))
+            pm = _RE_SKILL_CLAUSE_PREFIX.match(part)
+            if pm:
+                last_polarity = "negative" if pm.group(1) else "positive"
+                rest = part[pm.end():].strip()
+            else:
+                rest = part
+            for item in re.split(r'\s+và\s+', rest):
+                item = strip_terminal_discourse_markers(
+                    strip_additive_target_marker(
+                        re.sub(r"\s+", " ", item.strip().rstrip(".!,")).strip()
+                    )
+                )
+                if _valid_item(item):
+                    ops.append(MemoryOperation(
+                        op="ADD", domain="skill", subject="self", value=item,
+                        canonical_key=canonicalize_memory_value(item),
+                        polarity=last_polarity,
+                        source=_RULE_BASED_SOURCE, confidence=_RULE_BASED_CONFIDENCE,
+                        raw_text=text,
+                    ))
         return tuple(ops) if len(ops) >= 2 else ()
 
     def _extract_compound_goal(self, text: str) -> tuple[MemoryOperation, ...]:

@@ -4284,3 +4284,146 @@ def test_p0_7k_fix2_manual_spec_contains_preference_skill_goal_consistency_cases
     ]
     missing = [tok for tok in required if tok not in text]
     assert not missing, f"Manual spec missing FIX2 tokens: {missing}"
+
+
+# ---------------------------------------------------------------------------
+# P0-7K-FIX3 tests — repair/reminder + delete + skill cleanup
+# ---------------------------------------------------------------------------
+
+def test_p0_7k_fix3_reminder_inner_comparative_not_raw_saved():
+    sr = _make_sr()
+    sr.handle_turn("tôi thích ăn kẹo hơn ăn kem")
+    sr.handle_turn("tôi thích ăn kẹo nữa tôi đã nói: tôi thích ăn kẹo hơn ăn kem")
+    summary = (sr.handle_turn("bạn nhớ gì về tôi").final_answer or "").lower()
+    assert "nữa tôi đã nói" not in summary, f"raw reminder saved: {summary}"
+    assert "kẹo" in summary and "kem" in summary, f"comparative lost: {summary}"
+
+
+def test_p0_7k_fix3_bao_thich_chuoi_nhat_reminder_parses_inner_clause():
+    sr = _make_sr()
+    ack = (sr.handle_turn("tôi bảo tôi thích ăn chuối nhất rồi mà").final_answer or "").lower()
+    assert "rule-based mvp" not in ack, f"reminder fell to fallback: {ack}"
+    ans = (sr.handle_turn("tôi thích ăn gì nhất?").final_answer or "").lower()
+    assert "chuối" in ans, f"favorite not parsed from reminder: {ans}"
+
+
+def test_p0_7k_fix3_sai_roi_asks_repair_clarification_no_write():
+    sr = _make_sr()
+    ans = (sr.handle_turn("sai rồi").final_answer or "").lower()
+    assert "rule-based mvp" not in ans, f"repair fell to fallback: {ans}"
+    assert "sửa" in ans or "phần nào" in ans, f"no repair clarification: {ans}"
+    summary = (sr.handle_turn("bạn nhớ gì về tôi").final_answer or "").lower()
+    assert "sai rồi" not in summary, f"repair phrase saved: {summary}"
+
+
+def test_p0_7k_fix3_skill_multiclause_strips_repeated_predicates():
+    sr = _make_sr()
+    sr.handle_turn("tôi biết nấu ăn, tôi biết đọc sách và hát")
+    hat = (sr.handle_turn("tôi có biết hát không?").final_answer or "").lower()
+    assert "có" in hat or "đúng" in hat, f"hát not known: {hat}"
+    summary = (sr.handle_turn("bạn nhớ gì về tôi").final_answer or "").lower()
+    assert "tôi biết đọc sách" not in summary, f"dirty predicate stored: {summary}"
+    assert "đọc sách" in summary and "hát" in summary, f"skills lost: {summary}"
+
+
+def test_p0_7k_fix3_negative_skill_multiclause_conflict_clean():
+    sr = _make_sr()
+    sr.handle_turn("tôi biết nấu ăn, tôi biết đọc sách và hát")
+    sr.handle_turn("tôi không biết đọc sách và tôi không biết hát")
+    known = (sr.handle_turn("tôi biết gì?").final_answer or "").lower()
+    assert "nấu ăn" in known and "đọc sách" not in known and "hát" not in known, f"conflict wrong: {known}"
+    neg = (sr.handle_turn("tôi không biết gì?").final_answer or "").lower()
+    assert "đọc sách" in neg and "hát" in neg, f"negatives incomplete: {neg}"
+    assert "tôi không biết hát" not in neg, f"dirty negative predicate: {neg}"
+
+
+def test_p0_7k_fix3_discourse_marker_nua_stripped_from_negative_skill():
+    sr = _make_sr()
+    sr.handle_turn("tôi không biết đánh đàn nữa")
+    neg = (sr.handle_turn("tôi không biết gì?").final_answer or "").lower()
+    assert "đánh đàn" in neg, f"đánh đàn missing: {neg}"
+    assert "đánh đàn nữa" not in neg, f"discourse marker retained: {neg}"
+
+
+def test_p0_7k_fix3_reminder_negative_skill_parses_inner_clause():
+    sr = _make_sr()
+    ack = (sr.handle_turn("tôi đã nói tôi không biết đánh đàn nữa rồi mà").final_answer or "").lower()
+    assert "rule-based mvp" not in ack, f"reminder fell to fallback: {ack}"
+    neg = (sr.handle_turn("tôi không biết gì?").final_answer or "").lower()
+    assert "đánh đàn" in neg and "đánh đàn nữa" not in neg, f"reminder negative skill wrong: {neg}"
+
+
+def test_p0_7k_fix3_followup_continuation_adds_ml():
+    sr = _make_sr()
+    sr.handle_turn("tôi biết về AI")
+    ack = (sr.handle_turn("và ML nữa").final_answer or "").lower()
+    assert "rule-based mvp" not in ack, f"continuation fell to fallback: {ack}"
+    known = (sr.handle_turn("tôi biết gì?").final_answer or "").lower()
+    assert "ai" in known and "ml" in known, f"continuation did not add ML: {known}"
+
+
+def test_p0_7k_fix3_followup_without_context_asks_clarification_no_write():
+    sr = _make_sr()
+    ans = (sr.handle_turn("và ML nữa").final_answer or "").lower()
+    assert "rule-based mvp" not in ans, f"bare continuation fell to fallback: {ans}"
+    summary = (sr.handle_turn("bạn nhớ gì về tôi").final_answer or "").lower()
+    assert "ml" not in summary, f"continuation without context wrote ML: {summary}"
+
+
+def test_p0_7k_fix3_multi_query_two_skill_yesno_questions():
+    sr = _make_sr()
+    sr.handle_turn("tôi biết đọc sách và hát")
+    ans = (sr.handle_turn("tôi có biết hát không?\ntôi có biết đọc sách không?").final_answer or "").lower()
+    assert "rule-based mvp" not in ans, f"multi-query fell to fallback: {ans}"
+    assert "hát" in ans and "đọc sách" in ans, f"multi-query did not answer both: {ans}"
+
+
+def test_p0_7k_fix3_negative_current_state_preference_idempotent():
+    sr = _make_sr()
+    sr.handle_turn("tôi không thích bơi")
+    ack = (sr.handle_turn("bây giờ tôi không thích bơi nữa").final_answer or "").lower()
+    assert "rule-based mvp" not in ack, f"negative current-state fell to fallback: {ack}"
+    yn = (sr.handle_turn("tôi có thích bơi không?").final_answer or "").lower()
+    assert "không" in yn, f"bơi not negative: {yn}"
+    neg = (sr.handle_turn("tôi không thích gì?").final_answer or "").lower()
+    assert neg.count("bơi") == 1, f"duplicate dirty value: {neg}"
+
+
+def test_p0_7k_fix3_delete_all_profile_memory_confirmation_flow():
+    sr = _make_sr()
+    sr.handle_turn("tôi tên là bee")
+    sr.handle_turn("tôi thích ăn kem")
+    confirm = (sr.handle_turn("bạn hãy xoá hết ký ức về tôi đi").final_answer or "").lower()
+    assert "xác nhận" in confirm or "chắc" in confirm, f"no delete confirmation: {confirm}"
+    done = (sr.handle_turn("xác nhận xoá ký ức").final_answer or "").lower()
+    assert "đã xoá" in done or "đã xóa" in done, f"delete not done: {done}"
+    summary = (sr.handle_turn("bạn nhớ gì về tôi?").final_answer or "").lower()
+    assert "bee" not in summary and "kem" not in summary, f"memory not cleared: {summary}"
+
+
+def test_p0_7k_fix3_summary_hygiene_filters_dirty_values():
+    sr = _make_sr()
+    sr.handle_turn("tôi biết nấu ăn, tôi biết đọc sách và hát")
+    sr.handle_turn("tôi không biết đánh đàn nữa")
+    summary = (sr.handle_turn("bạn đã nhớ gì về tôi").final_answer or "").lower()
+    for bad in ["tôi biết", "tôi không biết", "đã nói:", "nữa tôi", "đánh đàn nữa"]:
+        assert bad not in summary, f"dirty value '{bad}' in summary: {summary}"
+
+
+def test_p0_7k_fix3_manual_spec_contains_repair_delete_cleanup_cases():
+    import pathlib
+    spec_path = pathlib.Path(__file__).parent / "manual" / "CONV_P0_MEMORY_CORE_MANUAL_REGRESSION_SPEC.md"
+    text = spec_path.read_text(encoding="utf-8").lower()
+    required = [
+        "p0-7k-fix3",
+        "tôi đã nói: tôi thích ăn kẹo hơn ăn kem",
+        "sai rồi",
+        "tôi biết nấu ăn, tôi biết đọc sách và hát",
+        "tôi không biết đánh đàn nữa",
+        "và ml nữa",
+        "bạn hãy xoá hết ký ức về tôi đi",
+        "xác nhận xoá ký ức",
+        "needs_fix",
+    ]
+    missing = [tok for tok in required if tok not in text]
+    assert not missing, f"Manual spec missing FIX3 tokens: {missing}"

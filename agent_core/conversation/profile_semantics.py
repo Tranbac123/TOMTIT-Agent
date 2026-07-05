@@ -122,6 +122,28 @@ def _strip_discourse_marker(value: str) -> str:
     return " ".join(tokens).strip()
 
 
+# P0-7K-FIX3: terminal discourse markers to strip from any saved profile value
+# ("đánh đàn nữa" → "đánh đàn"). Single-token markers plus the 2-token "mới đúng".
+_TERMINAL_DISCOURSE_TOKENS: frozenset[str] = frozenset({
+    "nữa", "rồi", "mà", "đó", "đấy", "nhé", "nha", "chứ",
+})
+
+
+def strip_terminal_discourse_markers(value: str) -> str:
+    """Strip trailing discourse markers from a memory value; never empties it.
+
+    "đánh đàn nữa" → "đánh đàn"; "ăn kẹo nữa" → "ăn kẹo"; "tên là Bắc mới đúng" →
+    "tên là Bắc". Only terminal tokens are removed — internal tokens stay intact.
+    """
+    v = re.sub(r"\s+", " ", value.strip())
+    # 2-token "mới đúng" first.
+    v = re.sub(r"\s+mới\s+đúng\s*$", "", v, flags=re.IGNORECASE).strip()
+    tokens = v.split()
+    while len(tokens) >= 2 and tokens[-1].lower() in _TERMINAL_DISCOURSE_TOKENS:
+        tokens = tokens[:-1]
+    return " ".join(tokens).strip()
+
+
 # P0-7K-FIX1 A/J: bare question words that must never be written as a memory value.
 # P0-7K-FIX2: a value CONTAINING any of these tokens ("ăn gì nhất" → has "gì") is a
 # misclassified query and must not be saved. NOTE: "nhất" is NOT here — "thích X nhất"
@@ -540,7 +562,8 @@ def classify_profile_semantic_intent(text: str) -> SemanticProfileIntent | None:
     # Checked before negative-desire so "không biết X" is not mistaken for a desire.
     m = _RE_NEGATIVE_SKILL.match(stripped)
     if m:
-        value = _clean_value(m.group(1))
+        # P0-7K-FIX3: strip terminal discourse markers ("đánh đàn nữa" → "đánh đàn").
+        value = strip_terminal_discourse_markers(_clean_value(m.group(1)))
         if (
             value
             and not _is_interrogative_value(value)

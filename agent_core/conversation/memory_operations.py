@@ -255,6 +255,11 @@ _RE_OP_PREF_POSITIVE = re.compile(
     r'^(?:tôi|mình)\s+(?:lại\s+)?thích\s+(.+?)(?:\s+rồi)?\s*[.!]*\s*$',
     re.IGNORECASE | re.DOTALL,
 )
+# P0-7K-FIX3 J: current-state NEGATIVE preference — "(bây giờ) tôi không thích X (nữa)".
+_RE_OP_PREF_NEGATIVE = re.compile(
+    r'^(?:tôi|mình)\s+không\s+(?:còn\s+)?thích\s+(.+?)(?:\s+nữa)?(?:\s+rồi)?\s*[.!]*\s*$',
+    re.IGNORECASE | re.DOTALL,
+)
 # P0-7K-FIX1 D: goal focus — "mục tiêu chính của tôi là X" (keeps other active goals).
 _RE_OP_GOAL_FOCUS = re.compile(
     r'^mục\s+tiêu\s+chính\s+(?:build\s+)?(?:của\s+)?(?:tôi|mình)\s+(?:là|:)\s+(.+?)\s*[.!]*\s*$',
@@ -395,6 +400,18 @@ def parse_memory_operation(text: str) -> MemoryOperation | None:
                     op="UPDATE_CURRENT", domain="relationship", subject="relation",
                     value=name, canonical_key=canonicalize_memory_value(name),
                     relation=label, raw_text=stripped,
+                )
+        # P0-7K-FIX3 J: current-state NEGATIVE preference ("bây giờ tôi không thích bơi
+        # nữa") — checked before the positive form. Supersedes an active positive and
+        # (re)asserts the negative; idempotent when already negative.
+        m = _RE_OP_PREF_NEGATIVE.match(remainder)
+        if m:
+            value = _clean_op_value(m.group(1))
+            if value and not _looks_interrogative(value):
+                return MemoryOperation(
+                    op="UPDATE_CURRENT", domain="preference", subject="self", value=value,
+                    canonical_key=canonicalize_memory_value(value), polarity="negative",
+                    raw_text=stripped,
                 )
         # P0-7K-FIX1 B: current-state preference ("bây giờ tôi thích bơi rồi") — assert a
         # positive preference and supersede an active negative one. Person targets fall
@@ -692,9 +709,28 @@ def apply_memory_operation(
 
     # P0-7K-FIX1 B: current-state preference ("bây giờ tôi thích bơi rồi").
     if op.op == "UPDATE_CURRENT" and op.domain == "preference":
+        snap = collect_profile_snapshot(store)
+        # P0-7K-FIX3 J: negative current-state ("bây giờ tôi không thích bơi nữa") —
+        # supersede an active positive and (re)assert the negative; idempotent when
+        # already negative (no duplicate record).
+        if op.polarity == "negative":
+            if any(_norm_cmp(d) == op.canonical_key for d in snap.dislikes):
+                return MemoryOperationOutcome(
+                    f"Đã ghi nhận: bạn vẫn không thích {op.value}.",
+                    "conv:memop_preference_updated", saved=False,
+                )
+            resolve_preference_conflicts(op.value, "negative_preference", store)
+            candidate = AutoProfileCandidate(
+                relation="negative_preference", value=op.value, original_text=op.raw_text,
+            )
+            if not save_auto_profile_fact(candidate, store, session_id):
+                return None
+            return MemoryOperationOutcome(
+                f"Đã ghi nhận: hiện tại bạn không thích {op.value} nữa.",
+                "conv:memop_preference_updated", saved=True,
+            )
         # The bare "tôi thích X rồi" form (no leading marker) only counts as a state
         # change when an active negative preference for X exists; otherwise fall through.
-        snap = collect_profile_snapshot(store)
         has_active_negative = any(
             _norm_cmp(d) == op.canonical_key for d in snap.dislikes
         )

@@ -2576,6 +2576,145 @@ bạn nhớ gì về tôi
 
 ---
 
+### P0-7K-FIX3 — Repair/Reminder Semantics + Memory Delete + Skill Cleanup
+
+Memory-core hardening after pre-merge manual Web rerun found reminder/correction
+pollution, missing repair intent, dirty skill values, retained discourse markers,
+missing continuation/multi-query, missing negative current-state preference, and
+missing delete-all memory.
+
+#### A. Reminder/correction normalizer
+
+```
+tôi thích ăn kẹo hơn ăn kem
+tôi thích ăn kẹo nữa tôi đã nói: tôi thích ăn kẹo hơn ăn kem
+bạn nhớ gì về tôi
+=> must NOT save "ăn kẹo nữa tôi đã nói: ..."; preserve comparative ăn kẹo > ăn kem
+```
+
+#### B. Reminder phrase with inner clause
+
+```
+tôi bảo tôi thích ăn chuối nhất rồi mà
+=> parse inner "tôi thích ăn chuối nhất"; favorite ăn chuối; no fallback; no raw "tôi bảo..."
+
+tôi đã nói rồi mà tôi biết nấu ăn, tôi biết đọc sách và hát
+=> parse inner clauses; save clean skills nấu ăn, đọc sách, hát
+```
+
+#### C. Generic repair intent
+
+```
+sai rồi
+=> no fallback; no write; ask clarification "... Bạn muốn sửa phần nào ..."
+```
+
+Markers: sai rồi, không đúng, nhầm rồi, tôi nói rồi mà, tôi đã nói rồi mà, tôi bảo rồi mà.
+
+#### D. Skill multi-clause extraction
+
+```
+tôi biết nấu ăn, tôi biết đọc sách và hát
+=> ADD skill nấu ăn, đọc sách, hát
+tôi có biết hát không?      => Có
+tôi có biết đọc sách không? => Có
+=> must NOT store raw "tôi biết đọc sách" or "đọc sách và hát"
+```
+
+#### E. Negative skill multi-clause conflict
+
+```
+tôi biết nấu ăn, tôi biết đọc sách và hát
+tôi không biết đọc sách và tôi không biết hát
+tôi biết gì?          => nấu ăn only
+tôi không biết gì?    => đọc sách, hát (no raw "tôi không biết hát")
+```
+
+#### F. Discourse marker stripping
+
+```
+tôi không biết đánh đàn nữa
+tôi không biết gì?
+=> contains đánh đàn; does NOT contain "đánh đàn nữa"
+```
+
+Terminal markers stripped where safe: nữa, rồi, mà, đó, đấy, nhé, chứ, mới đúng.
+
+#### G. Reminder correction for negative skill
+
+```
+tôi đã nói tôi không biết đánh đàn nữa rồi mà
+=> parse inner "tôi không biết đánh đàn nữa"; negative_skill đánh đàn; no fallback
+```
+
+#### H. Follow-up continuation
+
+```
+tôi biết về AI
+và ML nữa
+tôi biết gì?
+=> known include AI, ML; no fallback on "và ML nữa"
+
+và ML nữa   (no prior context)
+=> ask clarification, do not write memory
+```
+
+#### I. Multi-query message
+
+```
+tôi có biết hát không?
+tôi có biết đọc sách không?
+=> answer both separately; no fallback
+```
+
+#### J. Negative current-state preference
+
+```
+tôi không thích bơi
+bây giờ tôi không thích bơi nữa
+tôi có thích bơi không?
+=> still negative; no fallback; no duplicate dirty value
+```
+
+#### K. Delete all profile memory
+
+```
+tôi tên là bee
+tôi thích ăn kem
+bạn hãy xoá hết ký ức về tôi đi
+=> ask confirmation "... xác nhận xoá ký ức ..."
+xác nhận xoá ký ức
+=> all profile memory cleared
+bạn nhớ gì về tôi?
+=> no profile facts remain
+```
+
+Delete phrases: xoá/xóa hết ký ức về tôi, xoá/xóa toàn bộ thông tin về tôi, quên hết về
+tôi, đừng nhớ gì về tôi nữa, xoá/xóa memory của tôi, clear memory, forget me.
+Confirm phrases: xác nhận xoá/xóa ký ức, đồng ý xoá/xóa, yes delete, confirm delete.
+
+#### L. Summary hygiene
+
+```
+bạn nhớ gì về tôi
+=> summary must NOT contain: "tôi biết", "tôi không biết", "đã nói:", "nữa tôi",
+   "đánh đàn nữa", "ăn kẹo nữa tôi đã nói" — only clean active facts
+```
+
+#### Classification rules
+
+```text
+- If a reminder/correction sentence is saved as a raw memory value, classify NEEDS_FIX.
+- If a standalone repair phrase ("sai rồi") writes memory or falls back, classify NEEDS_FIX.
+- If a multi-clause skill value keeps a repeated "tôi biết" predicate, classify NEEDS_FIX.
+- If a terminal discourse marker ("nữa") is stored in a value, classify NEEDS_FIX.
+- If a supported continuation/multi-query/negative-current-state phrase falls back, classify NEEDS_FIX.
+- If a delete-all memory request is not recognized, classify NEEDS_FIX.
+- If the summary renders any dirty object value, classify NEEDS_FIX.
+```
+
+---
+
 ## 10. Merge Gate Policy
 
 Passing this file does not automatically merge.

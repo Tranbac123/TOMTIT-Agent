@@ -369,3 +369,96 @@ def test_p0_7k_fix2_food_preference_filter():
     assert _split_items("ăn kem, me và dâu tây") == ["ăn kem", "ăn me", "ăn dâu tây"]
     # No food context → items stay bare.
     assert _split_items("bơi, hát và code") == ["bơi", "hát", "code"]
+
+
+# ---------------------------------------------------------------------------
+# P0-7K-FIX3 unit tests
+# ---------------------------------------------------------------------------
+
+def test_p0_7k_fix3_extracts_inner_clause_from_da_noi_colon():
+    from agent_core.conversation.profile_memory import detect_reminder_inner_clause
+    inner = detect_reminder_inner_clause(
+        "tôi thích ăn kẹo nữa tôi đã nói: tôi thích ăn kẹo hơn ăn kem"
+    )
+    assert inner == "tôi thích ăn kẹo hơn ăn kem"
+
+
+def test_p0_7k_fix3_extracts_inner_clause_from_bao_roi_ma():
+    from agent_core.conversation.profile_memory import detect_reminder_inner_clause
+    assert detect_reminder_inner_clause("tôi bảo tôi thích ăn chuối nhất rồi mà") == "tôi thích ăn chuối nhất"
+    assert detect_reminder_inner_clause(
+        "tôi đã nói tôi không biết đánh đàn nữa rồi mà"
+    ) == "tôi không biết đánh đàn nữa"
+    # No inner memory clause → None (routes to repair).
+    assert detect_reminder_inner_clause("tôi đã nói rồi mà") is None
+
+
+def test_p0_7k_fix3_detects_standalone_repair_intent():
+    from agent_core.conversation.profile_memory import detect_repair_intent
+    for text in ["sai rồi", "không đúng", "nhầm rồi", "tôi đã nói rồi mà"]:
+        assert detect_repair_intent(text), text
+    assert not detect_repair_intent("tôi thích ăn kem")
+
+
+def test_p0_7k_fix3_splits_skill_multiclause():
+    from agent_core.conversation.semantic_extractor import (
+        RuleBasedSemanticOperationExtractor, SemanticExtractionRequest,
+    )
+    ex = RuleBasedSemanticOperationExtractor()
+    r = ex.extract(SemanticExtractionRequest(raw_text="tôi biết nấu ăn, tôi biết đọc sách và hát"))
+    values = [(op.value, op.polarity) for op in r.operations]
+    assert values == [("nấu ăn", "positive"), ("đọc sách", "positive"), ("hát", "positive")]
+    rn = ex.extract(SemanticExtractionRequest(raw_text="tôi không biết đọc sách và tôi không biết hát"))
+    assert [(op.value, op.polarity) for op in rn.operations] == [
+        ("đọc sách", "negative"), ("hát", "negative"),
+    ]
+
+
+def test_p0_7k_fix3_strips_terminal_discourse_markers():
+    from agent_core.conversation.profile_semantics import strip_terminal_discourse_markers
+    assert strip_terminal_discourse_markers("đánh đàn nữa") == "đánh đàn"
+    assert strip_terminal_discourse_markers("ăn kẹo nữa") == "ăn kẹo"
+    assert strip_terminal_discourse_markers("tên là Bắc mới đúng") == "tên là Bắc"
+    assert strip_terminal_discourse_markers("đọc sách") == "đọc sách"
+    # Never emptied.
+    assert strip_terminal_discourse_markers("nữa") == "nữa"
+
+
+def test_p0_7k_fix3_detects_followup_continuation():
+    from agent_core.runtime.session_runtime import _RE_CONTINUATION
+    m = _RE_CONTINUATION.match("và ML nữa")
+    assert m is not None and m.group(1).strip() == "ML"
+    for text in ["cả ML nữa", "thêm ML nữa", "còn ML nữa"]:
+        assert _RE_CONTINUATION.match(text) is not None, text
+    assert _RE_CONTINUATION.match("tôi biết ML") is None
+
+
+def test_p0_7k_fix3_detects_delete_all_profile_memory_intent():
+    from agent_core.conversation.profile_memory import detect_delete_all_memory_request
+    for text in [
+        "bạn hãy xoá hết ký ức về tôi đi",
+        "xóa toàn bộ thông tin về tôi",
+        "quên hết về tôi",
+        "đừng nhớ gì về tôi nữa",
+        "xoá memory của tôi",
+        "clear memory",
+        "forget me",
+    ]:
+        assert detect_delete_all_memory_request(text), text
+    # Deleting a single note must NOT trigger a full wipe.
+    assert not detect_delete_all_memory_request("xoá ghi chú của tôi")
+
+
+def test_p0_7k_fix3_detects_delete_confirmation():
+    from agent_core.conversation.profile_memory import detect_delete_all_confirmation
+    for text in ["xác nhận xoá ký ức", "xác nhận xóa ký ức", "đồng ý xoá", "yes delete", "confirm delete"]:
+        assert detect_delete_all_confirmation(text), text
+    assert not detect_delete_all_confirmation("có")
+
+
+def test_p0_7k_fix3_dirty_memory_value_filter():
+    from agent_core.conversation.profile_memory import _is_dirty_value
+    for bad in ["tôi biết đọc sách", "tôi không biết hát", "đánh đàn nữa", "ăn kẹo nữa tôi đã nói: x"]:
+        assert _is_dirty_value(bad), bad
+    for good in ["đọc sách", "nấu ăn", "ăn kẹo", "code", "ăn chuối"]:
+        assert not _is_dirty_value(good), good

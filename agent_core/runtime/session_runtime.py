@@ -39,10 +39,13 @@ from agent_core.conversation.profile_memory import (
     build_occupation_removal_ack,
     build_one_sided_affection_response,
     build_person_affinity_response,
+    build_delete_all_confirmation_prompt,
+    build_delete_all_done,
     build_profile_conflict_message,
     build_profile_fact_ack,
     build_relation_removal_ack,
     build_relationship_typo_clarification,
+    build_repair_clarification,
     build_relation_removal_not_found,
     build_relation_update_ack,
     build_unrelated_external_affection_response,
@@ -56,6 +59,11 @@ from agent_core.conversation.profile_memory import (
     detect_occupation_removal,
     detect_profile_fact_candidate,
     detect_profile_query,
+    delete_all_profile_memory,
+    detect_delete_all_confirmation,
+    detect_delete_all_memory_request,
+    detect_reminder_inner_clause,
+    detect_repair_intent,
     detect_relation_alias_query,
     detect_relation_removal_cmd,
     detect_relation_update_cmd,
@@ -183,6 +191,12 @@ _UNSUPPORTED_OPEN_QA_RESPONSE = (
     "Tôi chưa gọi LLM hay tra cứu dữ liệu nào cho câu này."
 )
 
+# CONV-P0 P0-7K-FIX3: bounded continuation ("và ML nữa", "cả X nữa", "thêm X nữa").
+_RE_CONTINUATION = re.compile(
+    r'^(?:và|cả|thêm|còn)\s+(.+?)\s+nữa\s*[.!]*\s*$',
+    re.IGNORECASE,
+)
+
 # CONV-P0 P0-6B: pending state helpers — narrow patterns, intentionally minimal.
 _PENDING_CANCEL = re.compile(
     r'^(?:hủy|bỏ\s+qua|không|thôi|cancel)\s*[.!?]*\s*$',
@@ -271,6 +285,10 @@ class SessionRuntime:
         # CONV-P0 P0-7K-FIX1: kind of the last answered profile query, for the bounded
         # goal follow-up ("và gì nữa?"). Session-local only, never persisted.
         self._last_profile_query_kind: str | None = None
+        # CONV-P0 P0-7K-FIX3: bounded continuation context ("và ML nữa") + delete-all
+        # pending confirmation. Session-local only, never persisted.
+        self._last_memory_write_kind: str | None = None
+        self._pending_delete_all: bool = False
         if session is not None:
             self._session = session
         else:
@@ -292,6 +310,17 @@ class SessionRuntime:
             session_id=self._session.session_id,
         )
 
+        # CONV-P0 P0-7K-FIX3 priority 0.5: delete-all memory pending confirmation.
+        if self._pending_delete_all:
+            delete_result = self._handle_delete_all_pending(user_message, state)
+            if delete_result is not None:
+                return delete_result
+            state = AgentState(
+                goal=user_message,
+                memory=self._store,
+                session_id=self._session.session_id,
+            )
+
         # CONV-P0 P0-7B priority 1: profile fact confirmation pending.
         if self._pending_profile_confirmation is not None:
             result = self._try_handle_profile_confirmation(user_message, state)
@@ -302,6 +331,29 @@ class SessionRuntime:
                 memory=self._store,
                 session_id=self._session.session_id,
             )
+
+        # CONV-P0 P0-7K-FIX3 priority 1.5: delete-all memory request → set pending, confirm.
+        delete_req = self._maybe_handle_delete_all_request(user_message, state)
+        if delete_req is not None:
+            return delete_req
+
+        # CONV-P0 P0-7K-FIX3 priority 1.6: reminder/correction with an inner memory clause
+        # → re-dispatch the inner clause; standalone repair → clarification. Prevents the
+        # raw reminder sentence from being saved as memory.
+        reminder = self._maybe_handle_reminder_or_repair(user_message, state)
+        if reminder is not None:
+            return reminder
+
+        # CONV-P0 P0-7K-FIX3 priority 1.7: multi-query memory message ("Q1?\nQ2?").
+        multi = self._maybe_handle_multi_query(user_message, state)
+        if multi is not None:
+            return multi
+
+        # CONV-P0 P0-7K-FIX3 priority 1.8: bounded continuation ("và ML nữa") using the
+        # last successful memory-write context.
+        continuation = self._maybe_handle_continuation(user_message, state)
+        if continuation is not None:
+            return continuation
 
         # CONV-P0 P0-6B priority 2: pending note slot continuation.
         if self._pending_conversation_state is not None:
@@ -1119,6 +1171,143 @@ class SessionRuntime:
         domain, response = detected
         return self._complete_conv(state, f"conv:unsupported_{domain}", response)
 
+    # ------------------------------------------------------------------
+    # CONV-P0 P0-7K-FIX3 — reminder/repair, delete-all, multi-query, continuation
+    # ------------------------------------------------------------------
+
+    _MEMORY_WRITE_HANDLER_NAMES = (
+        "_maybe_handle_semantic_extraction",
+        "_maybe_handle_memory_operation",
+        "_maybe_handle_occupation_removal",
+        "_maybe_handle_occupation_correction",
+        "_maybe_handle_semantic_profile",
+        "_maybe_auto_save_name_relation",
+        "_maybe_auto_save_profile_fact",
+    )
+
+    def _run_memory_write_pipeline(
+        self, text: str, state: AgentState
+    ) -> AgentState | None:
+        """Run the ordered memory-write handlers on ``text``; first hit wins, else None."""
+        for name in self._MEMORY_WRITE_HANDLER_NAMES:
+            result = getattr(self, name)(text, state)
+            if result is not None:
+                return result
+        return None
+
+    def _handle_delete_all_pending(
+        self, user_message: str, state: AgentState
+    ) -> AgentState | None:
+        """P0-7K-FIX3 K: resolve a pending delete-all confirmation.
+
+        Explicit confirmation clears all profile memory; anything else cancels the pending
+        (fail-safe — never delete without an explicit confirmation phrase) and falls
+        through to normal routing.
+        """
+        if detect_delete_all_confirmation(user_message.strip()):
+            self._pending_delete_all = False
+            delete_all_profile_memory(self._store)
+            self._confirmed_profile_fact_count = 0
+            self._last_memory_write_kind = None
+            return self._complete_conv(
+                state, "conv:memory_deleted_all", build_delete_all_done()
+            )
+        # Not a confirmation → cancel pending and let the turn route normally.
+        self._pending_delete_all = False
+        return None
+
+    def _maybe_handle_delete_all_request(
+        self, user_message: str, state: AgentState
+    ) -> AgentState | None:
+        """P0-7K-FIX3 K: a delete-all request sets a pending confirmation and asks."""
+        if not detect_delete_all_memory_request(user_message.strip()):
+            return None
+        self._pending_delete_all = True
+        return self._complete_conv(
+            state, "conv:memory_delete_confirm", build_delete_all_confirmation_prompt()
+        )
+
+    def _maybe_handle_reminder_or_repair(
+        self, user_message: str, state: AgentState
+    ) -> AgentState | None:
+        """P0-7K-FIX3 A/B/C/G: reminder with an inner memory clause → re-dispatch the
+        inner clause; a standalone repair (or reminder with no clause) → clarification.
+        Never saves the raw reminder sentence.
+        """
+        inner = detect_reminder_inner_clause(user_message.strip())
+        if inner is not None:
+            result = self._run_memory_write_pipeline(inner, state)
+            if result is not None:
+                return result
+        if detect_repair_intent(user_message.strip()):
+            return self._complete_conv(
+                state, "conv:repair_clarify", build_repair_clarification()
+            )
+        return None
+
+    def _answer_single_memory_query(self, part: str) -> str | None:
+        """Answer one memory query (profile query or yes/no), else None."""
+        query = detect_profile_query(part)
+        if query is not None:
+            return answer_profile_query(query, self._store)
+        intent = classify_profile_semantic_intent(part)
+        if intent is not None and intent.kind == "yes_no_memory_query":
+            return answer_yes_no_memory_query(
+                intent.category or "", intent.value or "", self._store
+            )
+        return None
+
+    def _maybe_handle_multi_query(
+        self, user_message: str, state: AgentState
+    ) -> AgentState | None:
+        """P0-7K-FIX3 I: answer a batch of simple memory queries in one message.
+
+        Fires only when the message splits into 2+ parts that are ALL supported memory
+        queries; otherwise falls through (no broad multi-intent planner).
+        """
+        parts = [p.strip() for p in re.split(r'[\n;?]+', user_message.strip()) if p.strip()]
+        if len(parts) < 2:
+            return None
+        answers: list[str] = []
+        for part in parts:
+            ans = self._answer_single_memory_query(part)
+            if ans is None:
+                return None
+            answers.append(f"- {ans}")
+        self._last_profile_query_kind = None
+        return self._complete_conv(
+            state, "conv:multi_query_answered", "\n".join(answers)
+        )
+
+    def _maybe_handle_continuation(
+        self, user_message: str, state: AgentState
+    ) -> AgentState | None:
+        """P0-7K-FIX3 H: bounded continuation ("và ML nữa") reusing the last write kind.
+
+        Only fires when the previous turn wrote memory with a clear kind; otherwise the
+        bare continuation asks for clarification and writes nothing.
+        """
+        m = _RE_CONTINUATION.match(user_message.strip())
+        if m is None:
+            return None
+        value = re.sub(r"\s+", " ", m.group(1).strip()).strip()
+        if not value:
+            return None
+        templates = {
+            "skill": f"tôi biết {value}",
+            "preference": f"tôi thích {value}",
+            "negative_preference": f"tôi không thích {value}",
+            "goal": f"tôi sẽ làm {value}",
+        }
+        template = templates.get(self._last_memory_write_kind or "")
+        if template is None:
+            return self._complete_conv(
+                state, "conv:continuation_no_context",
+                "Bạn muốn mình nhớ thêm thông tin gì? Hãy nói rõ hơn, "
+                'ví dụ: "tôi biết ML" hoặc "tôi thích ML".',
+            )
+        return self._run_memory_write_pipeline(template, state)
+
     def _maybe_clarify_relationship_typo(
         self, user_message: str, state: AgentState
     ) -> AgentState | None:
@@ -1406,6 +1595,12 @@ class SessionRuntime:
         if not ok:
             return None
         self._confirmed_profile_fact_count += 1
+        # P0-7K-FIX3: record the write kind for a bounded continuation ("và ML nữa").
+        _CONTINUATION_KINDS = {
+            "skill": "skill", "preference": "preference", "goal": "goal",
+        }
+        if candidate.relation in _CONTINUATION_KINDS:
+            self._last_memory_write_kind = _CONTINUATION_KINDS[candidate.relation]
         if candidate.relation == "negative_skill":
             return self._complete_conv(
                 state, "conv:negative_skill_saved",

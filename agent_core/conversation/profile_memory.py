@@ -2276,6 +2276,155 @@ def build_relationship_typo_clarification(corrected_label: str, name: str) -> st
 
 
 # ---------------------------------------------------------------------------
+# P0-7K-FIX3: reminder/repair, delete-all, dirty-value filter
+# ---------------------------------------------------------------------------
+
+# Inner memory clause must start with a supported memory pattern.
+_RE_MEMORY_CLAUSE_START = re.compile(
+    r'^(?:'
+    r'(?:tôi|mình)\s+(?:không\s+thích|thích|không\s+biết|biết|làm|là|tên|sẽ|muốn|định|có)'
+    r'|(?:bạn\s+gái|bạn\s+trai|người\s+yêu|vợ|chồng|partner)\b'
+    r')',
+    re.IGNORECASE,
+)
+# "... đã nói: <inner>" — the inner clause is everything after the colon.
+_RE_REMINDER_COLON = re.compile(
+    r'(?:tôi\s+)?(?:đã\s+)?(?:nói|bảo)\s*:\s*(.+)$', re.IGNORECASE,
+)
+# Leading reminder markers ("tôi đã nói rồi mà ...", "tôi bảo ...", "tôi đã nói ...").
+_RE_REMINDER_LEADING = re.compile(
+    r'^(?:tôi\s+)?(?:đã\s+)?(?:nói|bảo)(?:\s+là)?(?:\s+rồi)?(?:\s+mà)?\s*',
+    re.IGNORECASE,
+)
+# Trailing reminder tails to drop from an inner clause ("... rồi mà").
+_RE_REMINDER_TRAILING = re.compile(
+    r'\s+(?:rồi\s+mà|rồi|mà)\s*[.!]*\s*$', re.IGNORECASE,
+)
+# Standalone generic repair phrases.
+_RE_REPAIR_STANDALONE = re.compile(
+    r'^(?:sai\s+rồi|sai|không\s+đúng|nhầm\s+rồi|nhầm)\s*[.!]*\s*$', re.IGNORECASE,
+)
+# Any reminder/correction marker (used to route to repair when no inner clause parses).
+_RE_REMINDER_MARKER = re.compile(
+    r'(?:tôi\s+(?:đã\s+)?(?:nói|bảo)(?:\s+rồi)?\s+mà|(?:đã\s+)?nói\s*:|rồi\s+mà)',
+    re.IGNORECASE,
+)
+
+
+def detect_reminder_inner_clause(text: str) -> str | None:
+    """Return the inner memory clause of a reminder/correction sentence, else None.
+
+    "... tôi đã nói: tôi thích ăn kẹo hơn ăn kem" → "tôi thích ăn kẹo hơn ăn kem".
+    "tôi bảo tôi thích ăn chuối nhất rồi mà" → "tôi thích ăn chuối nhất".
+    Only returns a clause that starts with a supported memory pattern; otherwise None
+    (the caller routes to repair clarification instead of writing the raw sentence).
+    """
+    stripped = re.sub(r"\s+", " ", text.strip())
+    m = _RE_REMINDER_COLON.search(stripped)
+    if m:
+        inner = _RE_REMINDER_TRAILING.sub("", m.group(1).strip()).strip()
+        return inner if inner and _RE_MEMORY_CLAUSE_START.match(inner) else None
+    lead = _RE_REMINDER_LEADING.match(stripped)
+    if lead and lead.end() > 0:
+        inner = _RE_REMINDER_TRAILING.sub("", stripped[lead.end():].strip()).strip()
+        if inner and _RE_MEMORY_CLAUSE_START.match(inner):
+            return inner
+    return None
+
+
+def detect_repair_intent(text: str) -> bool:
+    """True if text is a standalone repair phrase or a reminder marker with no clause."""
+    stripped = text.strip()
+    if _RE_REPAIR_STANDALONE.match(stripped):
+        return True
+    return bool(_RE_REMINDER_MARKER.search(stripped))
+
+
+def build_repair_clarification() -> str:
+    return (
+        "Mình hiểu là câu trả lời trước có lỗi. Bạn muốn sửa phần nào: sở thích, "
+        "kỹ năng, mục tiêu, tên, hay quan hệ?"
+    )
+
+
+# Delete-all profile memory request phrases. Requires EITHER a "hết/toàn bộ/sạch"
+# quantifier OR an explicit memory noun (ký ức/thông tin/memory), so deleting a single
+# note ("xoá ghi chú của tôi") never triggers a full memory wipe.
+# "xóa" (ó on o) and "xoá" (á on a) are both valid spellings — match both.
+_XOA = r'x[oó][áa]'
+_RE_DELETE_ALL_MEMORY = re.compile(
+    r'(?:' + _XOA + r'|quên)\s+'
+    r'(?:(?:hết|toàn\s+bộ|sạch)\s*(?:ký\s+ức|thông\s+tin|memory|mọi\s+thứ)?'
+    r'|(?:ký\s+ức|thông\s+tin|memory))'
+    r'.*?(?:về|của)\s+(?:tôi|mình)'
+    r'|đừng\s+nhớ\s+gì\s+(?:về\s+)?(?:tôi|mình)\s+nữa'
+    r'|clear\s+memory|forget\s+me',
+    re.IGNORECASE,
+)
+_RE_DELETE_CONFIRM = re.compile(
+    r'^(?:xác\s+nhận\s+' + _XOA + r'(?:\s+ký\s+ức)?|đồng\s+ý\s+' + _XOA
+    + r'|yes\s+delete|confirm\s+delete)\s*[.!]*\s*$',
+    re.IGNORECASE,
+)
+
+
+def detect_delete_all_memory_request(text: str) -> bool:
+    return bool(_RE_DELETE_ALL_MEMORY.search(text.strip()))
+
+
+def detect_delete_all_confirmation(text: str) -> bool:
+    return bool(_RE_DELETE_CONFIRM.match(text.strip()))
+
+
+def delete_all_profile_memory(store: "MemoryStoreProtocol") -> int:
+    """Delete every confirmed user-profile record. Returns the count removed."""
+    records = list(store.search(MemoryQuery(
+        text="", types=[MemoryType.FACT], tags=["user_profile"], limit=500,
+    ))) + list(store.search(MemoryQuery(
+        text="", types=[MemoryType.PREFERENCE], tags=["user_profile"], limit=500,
+    )))
+    removed = 0
+    seen: set[str] = set()
+    for rec in records:
+        if rec.id in seen:
+            continue
+        seen.add(rec.id)
+        md = rec.metadata
+        if md.get("profile_schema") in ("user_profile_fact_v1", "user_profile_fact_v2"):
+            store.delete(rec.id, reason="user_delete_all_memory")
+            removed += 1
+    return removed
+
+
+def build_delete_all_confirmation_prompt() -> str:
+    return (
+        "Bạn chắc muốn xoá toàn bộ thông tin mình đang nhớ về bạn không? "
+        'Hãy trả lời "xác nhận xoá ký ức" để mình xoá.'
+    )
+
+
+def build_delete_all_done() -> str:
+    return "Đã xoá toàn bộ thông tin mình nhớ về bạn."
+
+
+# P0-7K-FIX3 L: dirty object-value markers — a stored value containing any of these is
+# leftover reminder/predicate pollution and must be filtered from summary/queries.
+_DIRTY_VALUE_MARKERS: tuple[str, ...] = (
+    "tôi biết", "tôi không biết", "mình biết", "mình không biết",
+    "tôi đã nói", "tôi bảo", "đã nói:", "nữa tôi", ":",
+)
+_DIRTY_VALUE_TERMINAL: tuple[str, ...] = (" nữa", " rồi", " mà", " đấy", " đó")
+
+
+def _is_dirty_value(value: str) -> bool:
+    """True if value is polluted with reminder/predicate/terminal-marker fragments."""
+    v = re.sub(r"\s+", " ", value.strip().lower())
+    if any(marker in v for marker in _DIRTY_VALUE_MARKERS):
+        return True
+    return any(v.endswith(t) for t in _DIRTY_VALUE_TERMINAL)
+
+
+# ---------------------------------------------------------------------------
 # P0-7I: preference conflict resolution (positive vs negative)
 # ---------------------------------------------------------------------------
 
@@ -2540,6 +2689,10 @@ def collect_profile_snapshot(store: "MemoryStoreProtocol") -> ProfileSnapshot:
         rel = md.get("relation", "")
         val = md.get("value", "")
         if not val:
+            continue
+        # P0-7K-FIX3 L: never surface a dirty object value (leftover reminder/predicate
+        # pollution) in the snapshot, so summary and queries stay clean.
+        if rel not in ("comparative",) and _is_dirty_value(val):
             continue
         if subject == "self" and rel == "name":
             # P0-7G: latest name wins (records are sorted ascending by created_at), so a
