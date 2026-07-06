@@ -3127,6 +3127,92 @@ quý có thích tôi không?
 - If reverse affection from Quý to the user is inferred without an explicit write, classify NEEDS_FIX.
 ```
 
+### P0-7K-FIX5B-FIX3-FIX2 Addendum — Preserve Existing Behavior + Manual Web Regressions
+
+This section pins the manual Web regressions found after FIX5B-FIX3-FIX1. Run each
+block in a fresh session unless the block explicitly says otherwise.
+
+#### A. Slang greeting aliases are direct/no-write
+
+```text
+ê
+ê ê
+lô
+ê lô
+alo
+hello
+hi
+xin chào
+=> direct greeting-style answer
+=> must NOT fall back to generic rule-based MVP wording
+=> must NOT write profile memory
+=> memory summary remains empty/clean
+```
+
+#### B. Multi-goal positive plus negative keeps active positives only
+
+```text
+tôi muốn làm AI và ML nhưng không muốn làm Agentic
+tôi muốn làm gì?
+tôi có muốn làm AI không?
+tôi có muốn làm ML không?
+tôi có muốn làm Agentic không?
+=> active goals include làm AI and làm ML
+=> Agentic is not active
+=> no ordinary preference/person-affection pollution
+```
+
+#### C. Exact goal removal preserves ML
+
+```text
+tôi muốn làm AI và ML
+tôi không muốn làm AI nữa
+tôi muốn làm gì?
+=> làm AI is inactive
+=> làm ML remains active
+```
+
+#### D. Reminder/challenge dirty-tail stripping
+
+```text
+tôi vẫn muốn làm ML bạn không nhớ à
+tôi muốn làm gì?
+=> active goal is làm ML
+=> saved/rendered value must NOT include "bạn không nhớ à"
+
+tôi đã nói là tôi muốn làm AI và ML rồi mà
+tôi muốn làm gì?
+=> active goals include làm AI and làm ML
+=> saved/rendered values must NOT include "rồi mà"
+```
+
+#### E. Multi-person affection classification
+
+```text
+tôi thích may, thích cả quý
+tôi có thích may không?
+tôi có thích quý không?
+tôi thích gì?
+quý có thích tôi không?
+=> May and Quý are self-affection/person targets
+=> ordinary preference query must NOT list May or Quý
+=> reverse affection must remain unknown unless explicitly provided
+
+tôi đã nói tôi thích may, thích cả quý
+=> same behavior as above
+```
+
+#### Preserved invariants
+
+```text
+- Technical explanation turns such as "giải thích Planner là gì" must not write memory.
+- Explicit "tôi thích Planner" remains a concept/work preference, not affection/person memory.
+- "ăn chối" still canonicalizes to "ăn chuối"; dirty and canonical aliases must not coexist.
+- "tôi thích ăn chối" followed by "tôi không thích ăn chuối" must answer the alias query as negative for canonical "ăn chuối".
+- AI/ML preference updates must not become person-affection and must not render "không thích ai nữa".
+- Quý one-sided affection remains queryable from the user side only; reverse affection is not inferred.
+```
+
 ---
 
 ## 10. Merge Gate Policy

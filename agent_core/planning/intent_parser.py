@@ -29,7 +29,7 @@ _ARITH_ONLY = re.compile(r'^[0-9(][0-9\s.()+\-*/%=xX×?]*$')
 # B.8 / CONV-P0 P0-2: greeting — full-string hi/hello/chào, optionally with a
 # time-of-day or addressee tail ("Chào buổi sáng", "Chào bạn").
 _GREETING_WORDS = re.compile(
-    r'^(?:hi|hello|hey|xin\s+chào|chào|alo|helo|ê\s*lo|hê\s*lo)'
+    r'^(?:hi|hello|hey|xin\s+chào|chào|alo|ê\s*lô|lô|ê(?:\s+ê)?|helo|ê\s*lo|hê\s*lo)'
     r'(?:\s+(?:bạn|mọi\s+người|anh|chị|em|buổi\s+(?:sáng|trưa|chiều|tối)))?'
     r'\s*[!?.]*\s*$',
     re.IGNORECASE,

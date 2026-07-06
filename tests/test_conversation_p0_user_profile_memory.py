@@ -5243,3 +5243,108 @@ def test_p0_7k_fix5b_fix3_manual_mixed_session_regression_reproduction():
     assert "tình cảm với planner" not in low, final_summary
     assert "đơn phương planner" not in low, final_summary
     assert "người tôi thích" not in low or "planner" not in low, final_summary
+
+
+# ---------------------------------------------------------------------------
+# P0-7K-FIX5B-FIX3-FIX2 tests — manual Web regression repair
+# ---------------------------------------------------------------------------
+
+def test_p0_7k_fix5b_fix3_fix2_multi_goal_positive_negative_preserves_ml():
+    sr = _make_sr()
+    sr.handle_turn("tôi muốn làm AI và ML nhưng không muốn làm Agentic")
+
+    goals = (sr.handle_turn("tôi muốn làm gì?").final_answer or "").lower()
+    assert "ai" in goals and "ml" in goals, goals
+    assert "agentic" not in goals, goals
+
+    ai = (sr.handle_turn("tôi có muốn làm AI không?").final_answer or "").lower()
+    ml = (sr.handle_turn("tôi có muốn làm ML không?").final_answer or "").lower()
+    agentic = (sr.handle_turn("tôi có muốn làm Agentic không?").final_answer or "").lower()
+    assert "có" in ai, ai
+    assert "có" in ml, ml
+    assert "không" in agentic or "chưa" in agentic or "không thấy" in agentic, agentic
+
+
+def test_p0_7k_fix5b_fix3_fix2_goal_negative_removes_exact_target_only():
+    sr = _make_sr()
+    sr.handle_turn("tôi muốn làm AI và ML")
+    sr.handle_turn("tôi không muốn làm AI nữa")
+
+    goals = (sr.handle_turn("tôi muốn làm gì?").final_answer or "").lower()
+    assert "ml" in goals, goals
+    assert "ai" not in goals.replace("ml", ""), goals
+
+    ai = (sr.handle_turn("tôi có muốn làm AI không?").final_answer or "").lower()
+    ml = (sr.handle_turn("tôi có muốn làm ML không?").final_answer or "").lower()
+    assert "không" in ai or "chưa" in ai, ai
+    assert "có" in ml, ml
+
+
+def test_p0_7k_fix5b_fix3_fix2_goal_reminder_challenge_strips_dirty_tail():
+    sr = _make_sr()
+    sr.handle_turn("tôi vẫn muốn làm ML bạn không nhớ à")
+    goals = (sr.handle_turn("tôi muốn làm gì?").final_answer or "").lower()
+    assert "ml" in goals, goals
+    assert "không nhớ" not in goals, goals
+
+    sr = _make_sr()
+    sr.handle_turn("tôi đã nói là tôi muốn làm AI và ML rồi mà")
+    goals = (sr.handle_turn("tôi muốn làm gì?").final_answer or "").lower()
+    assert "ai" in goals and "ml" in goals, goals
+    assert "rồi mà" not in goals, goals
+
+
+def test_p0_7k_fix5b_fix3_fix2_multi_person_affection_not_ordinary_preference():
+    sr = _make_sr()
+    sr.handle_turn("tôi thích may, thích cả quý")
+
+    may = (sr.handle_turn("tôi có thích may không?").final_answer or "").lower()
+    quy = (sr.handle_turn("tôi có thích quý không?").final_answer or "").lower()
+    likes = (sr.handle_turn("tôi thích gì?").final_answer or "").lower()
+    reverse = (sr.handle_turn("quý có thích tôi không?").final_answer or "").lower()
+
+    assert "có" in may, may
+    assert "có" in quy, quy
+    assert "may" not in likes and "quý" not in likes, likes
+    assert "không biết" in reverse or "chưa" in reverse or "không thấy" in reverse, reverse
+
+
+def test_p0_7k_fix5b_fix3_fix2_affection_reminder_multi_target():
+    sr = _make_sr()
+    sr.handle_turn("tôi đã nói tôi thích may, thích cả quý")
+
+    may = (sr.handle_turn("tôi có thích may không?").final_answer or "").lower()
+    quy = (sr.handle_turn("tôi có thích quý không?").final_answer or "").lower()
+    likes = (sr.handle_turn("tôi thích gì?").final_answer or "").lower()
+
+    assert "có" in may, may
+    assert "có" in quy, quy
+    assert "may" not in likes and "quý" not in likes, likes
+
+
+def test_p0_7k_fix5b_fix3_fix2_preserve_planner_concept_not_affection():
+    sr = _make_sr()
+    answer = sr.handle_turn("giải thích Planner là gì").final_answer or ""
+    _assert_no_write_wording(answer)
+    summary = (sr.handle_turn("bạn nhớ gì về tôi").final_answer or "").lower()
+    assert "planner" not in summary, summary
+
+    sr.handle_turn("tôi thích Planner")
+    recall = (sr.handle_turn("tôi có thích Planner không?").final_answer or "").lower()
+    who = (sr.handle_turn("tôi thích ai?").final_answer or "").lower()
+    assert "planner" in recall and ("có" in recall or "thích" in recall), recall
+    assert "planner" not in who, who
+
+
+def test_p0_7k_fix5b_fix3_fix2_preserve_chosi_chuoi_canonical_conflict():
+    sr = _make_sr()
+    sr.handle_turn("tôi thích ăn chối")
+    sr.handle_turn("tôi không thích ăn chuối")
+
+    answer = (sr.handle_turn("tôi có thích ăn chối không?").final_answer or "").lower()
+    summary = (sr.handle_turn("bạn nhớ gì về tôi").final_answer or "").lower()
+
+    assert "chuối" in answer and "không" in answer, answer
+    assert "chối" not in answer, answer
+    assert "chuối" in summary, summary
+    assert "chối" not in summary, summary

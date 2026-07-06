@@ -169,6 +169,12 @@ def strip_terminal_discourse_marker(value: str) -> str:
     return value
 
 
+_RE_GOAL_DIRTY_REMINDER_TAIL = re.compile(
+    r'\s+(?:bạn\s+)?không\s+nhớ\s+(?:à|a)\s*$',
+    re.IGNORECASE,
+)
+
+
 def _goal_conflict_key(value: str) -> str:
     """Conflict key for goal values: canonical form minus leading intent verbs."""
     key = canonicalize_memory_value(value)
@@ -318,6 +324,7 @@ def _looks_interrogative(value: str) -> bool:
 
 def _clean_op_value(raw: str) -> str:
     value = re.sub(r"\s+", " ", raw.strip().rstrip(".!?？,")).strip()
+    value = _RE_GOAL_DIRTY_REMINDER_TAIL.sub("", value).strip()
     return strip_terminal_discourse_marker(value)
 
 
@@ -567,9 +574,6 @@ def delete_goal_facts(conflict_key: str, store: "MemoryStoreProtocol") -> str | 
     Returns the matched display value, or None. "llm" matches the stored goal
     "làm AI LLM" so a partial negation still resolves the fuller goal (P0-7J-FIX1).
     """
-    # P0-7K-FIX2: removing the GENERAL term "AI" removes ALL AI-related goals (LLM,
-    # Agent AI, ...) so the goal list and the AI yes/no query stay consistent. A SPECIFIC
-    # term ("LLM") only removes its own goal via token-containment — never siblings.
     ai_removal = conflict_key == "ai"
     matched: str | None = None
     for rec in _confirmed_profile_facts(store):
@@ -580,7 +584,12 @@ def delete_goal_facts(conflict_key: str, store: "MemoryStoreProtocol") -> str | 
         if not stored:
             continue
         hit = _goal_keys_match(_goal_conflict_key(stored), conflict_key)
-        if not hit and ai_removal and _value_relates_to_ai(stored):
+        if (
+            not hit
+            and ai_removal
+            and _goal_conflict_key(stored) != "ml"
+            and _value_relates_to_ai(stored)
+        ):
             hit = True
         if hit:
             store.delete(rec.id, reason="goal_superseded")
@@ -1066,7 +1075,12 @@ def apply_memory_operations(
                 applied += 1
                 ack_parts.append(build_goal_removed_ack(op.value))
             else:
-                failed += 1
+                # A mixed-polarity utterance can assert a negative goal that was not
+                # previously active ("muốn AI và ML nhưng không muốn Agentic").
+                # Preserve the negative acknowledgement without creating a durable
+                # positive goal or requiring a stale record to delete.
+                applied += 1
+                ack_parts.append(f"Đã ghi nhận: bạn không muốn làm {op.value}.")
             continue
 
         failed += 1

@@ -313,3 +313,15 @@ def test_route_literals_still_minimal_after_p0_4b():
 def test_p0_4a_regression_still_passes(text, expected_route):
     result = ConversationRouter().route(AgentState(goal=text))
     assert result.route == expected_route, (text, result.route)
+
+
+# ---------------------------------------------------------------------------
+# §14 — P0-7K-FIX5B-FIX3-FIX2 slang greeting aliases
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("text", ["ê", "ê ê", "lô", "ê lô", "alo", "hello", "hi", "xin chào"])
+def test_p0_7k_fix5b_fix3_fix2_slang_greetings_no_fallback_no_write(text):
+    state = _assert_conv_zero_side_effects(text, ConversationRoute.DIRECT_RESPONSE)
+    answer = state.final_answer.lower()
+    assert "rule-based mvp" not in answer, answer
+    assert "đã nhớ" not in answer and "đã lưu" not in answer and "đã ghi nhận" not in answer, answer

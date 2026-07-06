@@ -205,6 +205,12 @@ _RE_CX_GOAL_VERB = re.compile(
     r'(?:muốn|định|sẽ)\s+(?:làm|build)|(?:muốn|định|sẽ)\s+.*\bbuild\b',
     re.IGNORECASE,
 )
+_RE_CX_MIXED_GOAL_POLARITY = re.compile(
+    r'^(?:tôi|mình)\s+(?:đang\s+)?(?:còn\s+|cũng\s+|vẫn\s+)?'
+    r'(?:muốn|định)\s+(?:làm|build)\s+.+\s+'
+    r'(?:nhưng|mà)\s+không\s+(?:còn\s+)?muốn\s+(?:làm|build)\s+.+$',
+    re.IGNORECASE,
+)
 # P0-7K-FIX4 E: contrast skill clause — "tôi biết A nhưng/mà/còn (tôi) không biết B".
 _RE_CX_CONTRAST_SKILL = re.compile(
     r'^(?:tôi|mình)\s+biết\s+.+\s+(?:nhưng|mà|còn)\s+(?:tôi\s+|mình\s+)?không\s+biết\s+.+$',
@@ -284,6 +290,8 @@ def detect_memory_complexity(text: str) -> str | None:
             return "mixed_polarity_preference"
         if has_list:
             return "multi_fact_preference"
+    if _RE_CX_MIXED_GOAL_POLARITY.match(low):
+        return "mixed_polarity_goal"
     if has_list and _RE_CX_GOAL_VERB.search(low):
         return "compound_goal"
     return None
@@ -436,6 +444,8 @@ class RuleBasedSemanticOperationExtractor:
             ops = self._extract_contrast_skill(text)
         elif reason == "multi_skill":
             ops = self._extract_skill_items(text)
+        elif reason == "mixed_polarity_goal":
+            ops = self._extract_mixed_polarity_goal(text)
         elif reason == "compound_goal":
             ops = self._extract_compound_goal(text)
         else:
@@ -501,6 +511,14 @@ class RuleBasedSemanticOperationExtractor:
             polarity = "negative" if m.group(1) else "positive"
             for item in _split_items(segment):
                 if not _valid_item(item):
+                    continue
+                if _is_person_affinity_value(item):
+                    ops.append(MemoryOperation(
+                        op="ADD", domain="affection", subject="self", value=item,
+                        canonical_key=canonicalize_memory_value(item), polarity="positive",
+                        source=_RULE_BASED_SOURCE, confidence=_RULE_BASED_CONFIDENCE,
+                        raw_text=text,
+                    ))
                     continue
                 ops.append(MemoryOperation(
                     op="ADD", domain="preference", subject="self", value=item,
@@ -600,6 +618,42 @@ class RuleBasedSemanticOperationExtractor:
                 raw_text=text,
             ))
         return tuple(ops)
+
+    _RE_MIXED_GOAL = re.compile(
+        r'^(?:tôi|mình)\s+(?:đang\s+)?(?:còn\s+|cũng\s+|vẫn\s+)?'
+        r'(?:muốn|định)\s+(làm|build)\s+(.+?)\s+'
+        r'(?:nhưng|mà)\s+không\s+(?:còn\s+)?muốn\s+(?:làm|build)\s+(.+?)\s*[.!]*\s*$',
+        re.IGNORECASE,
+    )
+
+    def _extract_mixed_polarity_goal(self, text: str) -> tuple[MemoryOperation, ...]:
+        m = self._RE_MIXED_GOAL.match(text)
+        if not m:
+            return ()
+        verb = m.group(1).lower()
+        positive_items = _split_items(m.group(2))
+        negative = strip_terminal_discourse_markers(
+            re.sub(r"\s+", " ", m.group(3).strip().rstrip(".!,")).strip()
+        )
+        ops: list[MemoryOperation] = []
+        for item in positive_items:
+            if not _valid_item(item):
+                continue
+            value = f"{verb} {item}"
+            ops.append(MemoryOperation(
+                op="ADD", domain="goal", subject="self", value=value,
+                canonical_key=_goal_conflict_key(value), polarity="positive",
+                source=_RULE_BASED_SOURCE, confidence=_RULE_BASED_CONFIDENCE,
+                raw_text=text,
+            ))
+        if _valid_item(negative):
+            ops.append(MemoryOperation(
+                op="REMOVE", domain="goal", subject="self", value=negative,
+                canonical_key=_goal_conflict_key(negative), polarity="negative",
+                source=_RULE_BASED_SOURCE, confidence=_RULE_BASED_CONFIDENCE,
+                raw_text=text,
+            ))
+        return tuple(ops) if len(ops) >= 2 else ()
 
 
 # ---------------------------------------------------------------------------

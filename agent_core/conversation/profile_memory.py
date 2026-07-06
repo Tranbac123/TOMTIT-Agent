@@ -2904,6 +2904,17 @@ def _value_relates_to_ai(value: str) -> bool:
     return any(term in v for term in _AI_TAXONOMY_TERMS if " " in term)
 
 
+def _value_answers_explicit_ai_yesno(value: str) -> bool:
+    """AI yes/no query match that keeps plain ML as its own goal."""
+    v = _norm_cmp(value)
+    if not v:
+        return False
+    tokens = set(v.split())
+    if "ai" in tokens or "llm" in tokens or "slm" in tokens:
+        return True
+    return any(term in v for term in ("agent ai", "ai agent", "ai agent coder", "deep learning", "học sâu"))
+
+
 _GOAL_STOPWORDS: frozenset[str] = frozenset({
     "làm", "build", "dự", "án", "và", "cả", "xây", "dựng", "muốn", "sẽ", "định",
 })
@@ -3343,8 +3354,8 @@ def answer_profile_query(
     # --- P0-7K-FIX1 E: self_ai_yesno ("tôi có làm AI không?") — via AI taxonomy ---
     elif query.kind == "self_ai_yesno":
         snap = collect_profile_snapshot(store)
-        ai_goals = [g for g in snap.goals if _value_relates_to_ai(g)]
-        ai_occ = [o for o in snap.occupation if _value_relates_to_ai(o)]
+        ai_goals = [g for g in snap.goals if _value_answers_explicit_ai_yesno(g)]
+        ai_occ = [o for o in snap.occupation if _value_answers_explicit_ai_yesno(o)]
         related = ai_goals + ai_occ
         if related:
             return (

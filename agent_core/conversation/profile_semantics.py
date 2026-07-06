@@ -496,7 +496,14 @@ _RELATION_LABEL_NORM = {
 
 
 def _clean_value(raw: str) -> str:
-    return re.sub(r"\s+", " ", raw.strip().rstrip(".!?？ ")).strip()
+    value = re.sub(r"\s+", " ", raw.strip().rstrip(".!?？ ")).strip()
+    value = re.sub(
+        r'\s+(?:bạn\s+)?không\s+nhớ\s+(?:à|a)\s*$',
+        "",
+        value,
+        flags=re.IGNORECASE,
+    ).strip()
+    return value
 
 
 def classify_profile_semantic_intent(text: str) -> SemanticProfileIntent | None:
