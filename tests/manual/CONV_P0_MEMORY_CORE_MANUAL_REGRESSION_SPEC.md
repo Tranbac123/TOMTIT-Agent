@@ -3062,7 +3062,7 @@ bạn nhớ gì về tôi
 - If the "may không thích bắc" relation between two other people pollutes profile memory, classify NEEDS_FIX.
 ```
 
-### PART K — Manual Mixed-Session Regression Invariants
+### P0-7K-FIX5B-FIX3 Addendum — Manual Mixed-Session Regression Invariants
 
 This section pins the manual mixed-session regression that exposed the FIX5B-FIX2
 gaps. Run it as one continuous session, not as isolated fresh sessions.
