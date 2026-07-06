@@ -4910,3 +4910,99 @@ def test_p0_7k_fix5b_fix1_relation_adjacent_guard_still_no_pollution():
     assert "quý, tôi" not in likes, likes
     summary = (sr.handle_turn("bạn nhớ gì về tôi").final_answer or "").lower()
     assert "quý, tôi" not in summary, summary
+
+
+# ---------------------------------------------------------------------------
+# P0-7K-FIX5B-FIX2 tests — technical explanation no-write guard
+# ---------------------------------------------------------------------------
+
+def _assert_no_memory_write_answer(answer: str) -> None:
+    low = answer.lower()
+    assert "đã nhớ" not in low, answer
+    assert "đã lưu" not in low, answer
+    assert "đã ghi nhận" not in low, answer
+
+
+def _assert_no_technical_preference_pollution(summary: str) -> None:
+    low = summary.lower()
+    for token in ("planner", "runtime", "tool", "memory"):
+        assert token not in low, summary
+
+
+def test_p0_7k_fix5b_fix2_technical_explanation_no_preference_write():
+    sr = _make_sr()
+    answer = sr.handle_turn(
+        "Giải thích Planner, Runtime, Tool, Memory khác nhau thế nào"
+    ).final_answer or ""
+    _assert_no_memory_write_answer(answer)
+    summary = sr.handle_turn("bạn nhớ gì về tôi").final_answer or ""
+    _assert_no_technical_preference_pollution(summary)
+
+
+def test_p0_7k_fix5b_fix2_giai_thich_planner_runtime_tool_memory_no_pollution():
+    sr = _make_sr()
+    sr.handle_turn("Giải thích Planner, Runtime, Tool, Memory khác nhau thế nào")
+    likes = sr.handle_turn("tôi thích gì?").final_answer or ""
+    _assert_no_technical_preference_pollution(likes)
+    summary = sr.handle_turn("bạn nhớ gì về tôi").final_answer or ""
+    _assert_no_technical_preference_pollution(summary)
+
+
+def test_p0_7k_fix5b_fix2_phan_biet_x_y_no_preference_write():
+    sr = _make_sr()
+    answer = sr.handle_turn("phân biệt Planner và Runtime").final_answer or ""
+    _assert_no_memory_write_answer(answer)
+    summary = sr.handle_turn("bạn nhớ gì về tôi").final_answer or ""
+    _assert_no_technical_preference_pollution(summary)
+
+
+def test_p0_7k_fix5b_fix2_so_sanh_x_y_no_preference_write():
+    sr = _make_sr()
+    answer = sr.handle_turn("so sánh Tool và Memory").final_answer or ""
+    _assert_no_memory_write_answer(answer)
+    summary = sr.handle_turn("bạn nhớ gì về tôi").final_answer or ""
+    _assert_no_technical_preference_pollution(summary)
+
+
+def test_p0_7k_fix5b_fix2_explicit_preference_still_saves_technical_term():
+    sr = _make_sr()
+    answer = (sr.handle_turn("tôi thích Planner").final_answer or "").lower()
+    assert "planner" in answer and any(
+        token in answer for token in ("đã nhớ", "đã lưu", "đã ghi nhận")
+    ), answer
+    recall = (sr.handle_turn("tôi có thích Planner không?").final_answer or "").lower()
+    assert "planner" in recall and ("có" in recall or "thích" in recall), recall
+
+
+def test_p0_7k_fix5b_fix2_preserves_fix5b_canonicalizer_smoke():
+    sr = _make_sr()
+    sr.handle_turn("tôi không thích ăn chuối")
+    ans = (sr.handle_turn("tôi có thích ăn chối không?").final_answer or "").lower()
+    assert "chuối" in ans and "không" in ans, ans
+    summary = (sr.handle_turn("bạn nhớ gì về tôi").final_answer or "").lower()
+    assert "chối" not in summary, summary
+
+    sr = _make_sr()
+    sr.handle_turn("tôi thích ăn kem")
+    ans = (sr.handle_turn("tôi có thích ăn lem không?").final_answer or "").lower()
+    assert "kem" in ans and ("có" in ans or "thích" in ans), ans
+    summary = (sr.handle_turn("bạn nhớ gì về tôi").final_answer or "").lower()
+    assert "lem" not in summary, summary
+
+    sr = _make_sr()
+    sr.handle_turn("tôi thích AI và ML")
+    sr.handle_turn("tôi bây giờ không thích AI nữa")
+    ans = (sr.handle_turn("tôi có thích AI và ML không?").final_answer or "").lower()
+    assert "ai" in ans and "ml" in ans and "không" in ans, ans
+    summary = (sr.handle_turn("bạn nhớ gì về tôi").final_answer or "").lower()
+    assert "không thích ai nữa" not in summary, summary
+
+
+def test_p0_7k_fix5b_fix2_preserves_one_sided_affection_smoke():
+    sr = _make_sr()
+    answer = (sr.handle_turn("tôi thích đơn phương Quý").final_answer or "").lower()
+    assert "quý" in answer and ("đã nhớ" in answer or "đã lưu" in answer), answer
+    recall = (sr.handle_turn("tôi có thích Quý không?").final_answer or "").lower()
+    assert "quý" in recall and ("có" in recall or "thích" in recall), recall
+    likes = (sr.handle_turn("tôi thích gì?").final_answer or "").lower()
+    assert "quý" not in likes and "đơn phương" not in likes, likes

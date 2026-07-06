@@ -735,12 +735,7 @@ class SessionRuntime:
     def _maybe_answer_profile_query(
         self, user_message: str, state: AgentState
     ) -> AgentState | None:
-        """Return a completed AgentState if the message is a profile query with a known answer.
-
-        For profile_summary queries: skip store read entirely when no facts have been
-        confirmed this session. This preserves the zero-side-effect contract for sessions
-        with no profile data (the router's CLARIFICATION response handles those turns).
-        """
+        """Return a completed AgentState if the message is a profile query."""
         # P0-7H-FIX1 Part B: alias relation query ("bạn gái của Bắc là ai?" where Bắc = saved name)
         alias_q = detect_relation_alias_query(user_message.strip())
         if alias_q is not None:
@@ -760,10 +755,10 @@ class SessionRuntime:
         query = detect_profile_query(user_message.strip())
         if query is None:
             return None
-        # P0-7C: profile_summary reads store; gate it on session-local fact count to avoid
-        # store reads when no facts were ever saved in this session.
-        if query.kind == "profile_summary" and self._confirmed_profile_fact_count == 0:
-            return None
+        # P0-7K-FIX5B-FIX2: even with zero saved facts, profile_summary must answer
+        # from the profile layer's clean empty-state response. Falling through to the
+        # generic runtime fallback mentions runtime/memory/tool and can look like
+        # technical-topic pollution after a no-write explanation request.
         # P0-7K-FIX1 H: the goal follow-up ("và gì nữa?") only fires immediately after a
         # goal query — otherwise the bare "và gì nữa?" is ambiguous and falls through.
         if query.kind == "goal_followup":

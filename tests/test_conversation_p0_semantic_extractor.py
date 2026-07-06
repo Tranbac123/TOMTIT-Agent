@@ -17,6 +17,7 @@ from agent_core.conversation.semantic_extractor import (
     SemanticExtractionRequest,
     detect_memory_complexity,
     detect_unsupported_memory_domain,
+    is_technical_explanation_request,
     parse_semantic_operations_json,
 )
 from agent_core.memory.in_memory_store import InMemoryStore
@@ -56,6 +57,25 @@ def test_p0_7k_complexity_detector_detects_compound_goal():
     assert detect_memory_complexity("tôi muốn build cả LLM và SLM") == "compound_goal"
     # A single goal stays deterministic.
     assert detect_memory_complexity("tôi muốn build LLM") is None
+
+
+def test_p0_7k_fix5b_fix2_technical_explanation_patterns_do_not_trigger_extraction():
+    examples = [
+        "Giải thích Planner, Runtime, Tool, Memory khác nhau thế nào",
+        "giải thích Planner là gì",
+        "Planner và Runtime khác nhau thế nào",
+        "phân biệt Planner và Runtime",
+        "so sánh Tool và Memory",
+        "Planner, Runtime, Tool, Memory khác nhau thế nào",
+    ]
+    for text in examples:
+        assert is_technical_explanation_request(text), text
+        assert detect_memory_complexity(text) is None
+
+
+def test_p0_7k_fix5b_fix2_explicit_preference_not_technical_explanation_request():
+    assert not is_technical_explanation_request("tôi thích Planner")
+    assert not is_technical_explanation_request("tôi thích Tool")
 
 
 # ---------------------------------------------------------------------------

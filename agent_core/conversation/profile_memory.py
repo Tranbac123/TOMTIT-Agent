@@ -3199,7 +3199,7 @@ def answer_profile_query(
         for label, name in snap.relations:
             lines.append(f"- {label.capitalize()} của bạn tên là {name}.")
         if not lines:
-            return "Tôi chưa có thông tin hồ sơ nào đã được xác nhận về bạn."
+            return "Tôi chưa nhớ thông tin hồ sơ nào đã được xác nhận về bạn."
         return "Tôi đang nhớ những thông tin sau về bạn:\n" + "\n".join(lines)
 
     # --- P0-7D: self_occupation — aggregate all confirmed occupation records (P0-7H-FIX3) ---

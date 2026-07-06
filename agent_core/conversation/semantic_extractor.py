@@ -210,6 +210,35 @@ _RE_CX_CONTRAST_SKILL = re.compile(
     r'^(?:tôi|mình)\s+biết\s+.+\s+(?:nhưng|mà|còn)\s+(?:tôi\s+|mình\s+)?không\s+biết\s+.+$',
     re.IGNORECASE,
 )
+_RE_TECHNICAL_EXPLANATION_LEAD = re.compile(
+    r'^(?:hãy\s+|vui\s+lòng\s+|giúp\s+(?:tôi|mình)\s+)?(?:giải|giai)\s+thích\b',
+    re.IGNORECASE,
+)
+_RE_TECHNICAL_COMPARISON = re.compile(
+    r'\b(?:khác\s+nhau\s+(?:thế\s+nào|như\s+thế\s+nào|ra\s+sao)|'
+    r'khác\s+gì\s+nhau|khác\s+.+?\s+(?:thế\s+nào|như\s+thế\s+nào)|'
+    r'phân\s+biệt|so\s+sánh|là\s+gì)\b',
+    re.IGNORECASE,
+)
+
+
+def is_technical_explanation_request(text: str) -> bool:
+    """True for explanation/comparison questions that must never write memory.
+
+    This is intentionally not a broad Q&A implementation. It only guards
+    explanation/comparison-shaped turns before the memory extractor can mistake
+    technical nouns for a preference list. Explicit preference writes such as
+    "tôi thích Planner" remain outside this detector.
+    """
+    stripped = re.sub(r"\s+", " ", text.strip())
+    if not stripped:
+        return False
+    low = stripped.lower()
+    if re.match(r'^(?:tôi|mình)\s+(?:không\s+)?thích\b', low):
+        return False
+    if _RE_TECHNICAL_EXPLANATION_LEAD.match(stripped):
+        return True
+    return bool(_RE_TECHNICAL_COMPARISON.search(stripped))
 
 
 def detect_memory_complexity(text: str) -> str | None:
@@ -221,6 +250,8 @@ def detect_memory_complexity(text: str) -> str | None:
     if not stripped or "?" in stripped or "？" in stripped:
         return None
     low = stripped.lower()
+    if is_technical_explanation_request(stripped):
+        return None
     if any(guard in low for guard in _EXPLANATION_GUARDS):
         return None
 
