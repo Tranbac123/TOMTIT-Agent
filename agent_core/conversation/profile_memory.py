@@ -1471,6 +1471,7 @@ def build_confirmation_prompt(candidate: ProfileFactCandidate) -> str:
 def _preference_ack(value: str) -> str:
     """Natural preference ack with a light, non-overclaiming contextual note for a few
     common safe interests; generic otherwise. Rule-based, no advice engine."""
+    value = canonicalize_known_preference_value(value)
     v = value.lower()
     base = f"Đã nhớ là bạn thích {value}."
     if "cafe" in v or "cà phê" in v:
@@ -1658,6 +1659,7 @@ def build_one_sided_affection_response(value: str) -> str:
 
 def build_negative_preference_ack(value: str) -> str:
     """Ack after saving a durable negative preference ("tôi không thích ăn cá")."""
+    value = canonicalize_known_preference_value(value)
     return (
         f"Đã nhớ là bạn không thích {value}. Mình sẽ tính đến điều này khi gợi ý "
         "những việc liên quan."
@@ -1872,6 +1874,14 @@ def save_auto_profile_fact(
     """Write an AUTO_SAFE profile fact without explicit user confirmation. Returns True on success."""
     from agent_core.memory.memory_agent import MemoryAgent
 
+    value = (
+        canonicalize_known_preference_value(candidate.value)
+        if candidate.relation in ("preference", "negative_preference")
+        else candidate.value
+    )
+    if candidate.relation in ("preference", "negative_preference"):
+        _delete_canonical_alias_preference_records(value, candidate.relation, store)
+
     tags = ["user_profile", "self", candidate.relation]
     if candidate.relation == "preference":
         tags.append("interest")
@@ -1880,7 +1890,7 @@ def save_auto_profile_fact(
         "profile_schema": "user_profile_fact_v2",
         "subject": "self",
         "relation": candidate.relation,
-        "value": candidate.value,
+        "value": value,
         "confirmed": True,
         "confirmation_source": "auto_safe",
         "write_policy": "auto_safe",
@@ -1894,18 +1904,18 @@ def save_auto_profile_fact(
         metadata["preference_kind"] = candidate.preference_kind
 
     _content_map = {
-        "occupation": f"bạn là {candidate.value}",
-        "preference": f"bạn thích {candidate.value}",
-        "goal": f"mục tiêu của bạn là {candidate.value}",
-        "learning_focus": f"bạn đang học {candidate.value}",
-        "habit": f"bạn hay {candidate.value}",
-        "skill": f"bạn biết {candidate.value}",
-        "household_pet": f"nhà bạn có nuôi {candidate.value}",
-        "negative_preference": f"bạn không thích {candidate.value}",
-        "negative_skill": f"bạn không biết {candidate.value}",
-        "goal_focus": f"mục tiêu chính của bạn là {candidate.value}",
+        "occupation": f"bạn là {value}",
+        "preference": f"bạn thích {value}",
+        "goal": f"mục tiêu của bạn là {value}",
+        "learning_focus": f"bạn đang học {value}",
+        "habit": f"bạn hay {value}",
+        "skill": f"bạn biết {value}",
+        "household_pet": f"nhà bạn có nuôi {value}",
+        "negative_preference": f"bạn không thích {value}",
+        "negative_skill": f"bạn không biết {value}",
+        "goal_focus": f"mục tiêu chính của bạn là {value}",
     }
-    content = _content_map.get(candidate.relation, f"{candidate.relation}: {candidate.value}")
+    content = _content_map.get(candidate.relation, f"{candidate.relation}: {value}")
 
     try:
         mem_agent = MemoryAgent(store, user_id=None, session_id=session_id)
@@ -2460,6 +2470,26 @@ _DIRTY_VALUE_MARKERS: tuple[str, ...] = (
     "nhưng không", "mà không biết", "còn không biết",
 )
 _DIRTY_VALUE_TERMINAL: tuple[str, ...] = (" nữa", " rồi", " mà", " đấy", " đó")
+_KNOWN_PREFERENCE_TOKEN_CANONICALS: dict[str, str] = {
+    "chối": "chuối",
+    "lem": "kem",
+}
+
+
+def canonicalize_known_preference_value(value: str) -> str:
+    """Canonicalize a tiny allowlist of known food typos in preference values.
+
+    This is intentionally not broad fuzzy matching: it only rewrites exact tokens
+    already covered by the memory-core regression surface.
+    """
+    cleaned = re.sub(r"\s+", " ", value.strip()).strip()
+    if not cleaned:
+        return value
+    mapped = [
+        _KNOWN_PREFERENCE_TOKEN_CANONICALS.get(part.lower(), part)
+        for part in cleaned.split()
+    ]
+    return " ".join(mapped)
 
 
 def _is_dirty_value(value: str) -> bool:
@@ -2480,6 +2510,8 @@ def _preference_conflicts(a: str, b: str) -> bool:
     Exact normalized match, or a shared alias term via ``_positive_preference_terms``
     (e.g. "ăn kem" and "kem"). Deliberately conservative: never fuzzy-matches typos.
     """
+    a = canonicalize_known_preference_value(a)
+    b = canonicalize_known_preference_value(b)
     if _norm_cmp(a) == _norm_cmp(b):
         return True
     return bool(_positive_preference_terms(a) & _positive_preference_terms(b))
@@ -2522,6 +2554,21 @@ def resolve_preference_conflicts(
     for rec in _find_conflicting_preference_records(value, store):
         if rec.metadata.get("relation") == opposite:
             store.delete(rec.id, reason="preference_conflict_resolved")
+
+
+def _delete_canonical_alias_preference_records(
+    value: str, relation: str, store: "MemoryStoreProtocol"
+) -> None:
+    """Deactivate same-polarity dirty aliases for a canonical preference object."""
+    canonical = _norm_cmp(canonicalize_known_preference_value(value))
+    for rec in _find_conflicting_preference_records(value, store):
+        if rec.metadata.get("relation") != relation:
+            continue
+        stored = rec.metadata.get("value", "")
+        if _norm_cmp(stored) == canonical:
+            continue
+        if _norm_cmp(canonicalize_known_preference_value(stored)) == canonical:
+            store.delete(rec.id, reason="preference_alias_canonicalized")
 
 
 def resolve_skill_conflicts(
@@ -2736,10 +2783,25 @@ def canonicalize_known_preference_query_object(
     dislike objects are candidates, acronyms/concepts are excluded, and only one-edit
     matches are accepted. No person-name or global fuzzy search is performed.
     """
-    raw_clean = re.sub(r"\s+", " ", raw.strip()).strip()
+    raw_clean = canonicalize_known_preference_value(
+        re.sub(r"\s+", " ", raw.strip()).strip()
+    )
     raw_key = _norm_cmp(raw_clean)
     if not raw_key or len(raw_key) < 5 or _looks_like_technical_concept(raw_clean):
         return None
+    exact_matches: list[str] = []
+    for candidate in active_candidates:
+        candidate_clean = re.sub(r"\s+", " ", candidate.strip()).strip()
+        if _norm_cmp(candidate_clean) == raw_key:
+            exact_matches.append(candidate_clean)
+    exact_deduped: list[str] = []
+    for match in exact_matches:
+        if _norm_cmp(match) not in {_norm_cmp(v) for v in exact_deduped}:
+            exact_deduped.append(match)
+    if len(exact_deduped) == 1:
+        return exact_deduped[0]
+    if len(exact_deduped) > 1:
+        return raw_clean
     matches: list[str] = []
     for candidate in active_candidates:
         candidate_clean = re.sub(r"\s+", " ", candidate.strip()).strip()
@@ -2761,6 +2823,7 @@ def canonicalize_known_preference_query_object(
 
 
 def _canonicalize_preference_query_object(value: str, snap: ProfileSnapshot) -> str:
+    value = canonicalize_known_preference_value(value)
     return (
         canonicalize_known_preference_query_object(
             value, _active_preference_query_candidates(snap)
@@ -3188,9 +3251,10 @@ def answer_profile_query(
             lines.append(f"- Bạn thích {winner} hơn {loser}.")
         # P0-7G: dislikes shown separately from positive likes.
         if snap.dislikes:
-            lines.append(f"- Bạn không thích {', '.join(snap.dislikes)}.")
+            for item in snap.dislikes:
+                lines.append(f"- Bạn không thích {item}.")
         if snap.affections:
-            lines.append(f"- Bạn có tình cảm/quan tâm đến {', '.join(snap.affections)}.")
+            lines.append(f"- Bạn thích/quan tâm đến {', '.join(snap.affections)}.")
         if snap.external_affections:
             lines.append(
                 f"- Theo thông tin bạn cung cấp, {', '.join(snap.external_affections)} "

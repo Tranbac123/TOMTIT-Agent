@@ -3062,6 +3062,71 @@ bạn nhớ gì về tôi
 - If the "may không thích bắc" relation between two other people pollutes profile memory, classify NEEDS_FIX.
 ```
 
+### PART K — Manual Mixed-Session Regression Invariants
+
+This section pins the manual mixed-session regression that exposed the FIX5B-FIX2
+gaps. Run it as one continuous session, not as isolated fresh sessions.
+
+#### Manual sequence
+
+```text
+Giải thích Planner, Runtime, Tool, Memory khác nhau thế nào
+Bạn có thích Planner, Runtime, Tool không?
+giải thích Planner là gì
+phân biệt Planner và Runtime
+so sánh Tool và Memory
+Planner và Runtime khác nhau thế nào
+tôi thích Planner
+tôi thích ăn chối
+bạn nhớ gì về tôi
+tôi có thích planner không?
+tôi không thích planner
+tôi có thích planner không?
+Planner và Runtime khác nhau thế nào
+bạn biết gì về tôi
+tôi không thích ăn chuối
+bạn biết gì về tôi
+tôi thích Planner
+tôi có thích planner không?
+bạn nhớ gì về tôi
+tôi có thích ăn chối không?
+tôi thích ăn chuối
+tôi có thích ăn chuối không?
+tôi thích AI và ML
+tôi không thích AI nữa
+tôi có thích ML và AI không?
+tôi thích đơn phương Quý
+tôi có thích quý không?
+quý có thích tôi không?
+```
+
+#### Required invariants
+
+```text
+- Technical explanation/comparison/request turns must not write memory.
+- Technical concepts Planner, Runtime, Tool, Memory, AI, ML, Agent, API, LLM, RAG, MCP, A2A, Python, Docker, Git are concept/work preferences when explicitly liked, not person affection.
+- "tôi thích Planner" may save a preference, but summaries must not say "tình cảm với Planner", "đơn phương Planner", or put Planner in "người tôi thích".
+- "ăn chối" must canonicalize to "ăn chuối" at write time.
+- Dirty alias "ăn chối" and canonical "ăn chuối" must not coexist as active memory objects.
+- Positive/negative updates for "ăn chuối" must be last-write/current-state consistent.
+- Queries using "ăn chối" must answer with canonical "ăn chuối" and must not render "ăn chối".
+- AI/ML preference updates must not become affection and must not render "không thích ai nữa".
+- "tôi thích đơn phương Quý" remains person-affection memory.
+- "quý có thích tôi không?" must remain unknown unless a reverse relation is explicitly supported in a later phase.
+```
+
+#### Classification rules
+
+```text
+- If any explanation/comparison/request turn writes memory, classify NEEDS_FIX.
+- If any technical concept is rendered with affection/person wording, classify NEEDS_FIX.
+- If "ăn chối" appears in summary or as an active answer object, classify NEEDS_FIX.
+- If both "thích ăn chối" and "không thích ăn chuối" are active at once, classify NEEDS_FIX.
+- If AI/ML becomes person-affection or lowercase-pronoun "ai", classify NEEDS_FIX.
+- If Quý one-sided affection stops working, classify NEEDS_FIX.
+- If reverse affection from Quý to the user is inferred without an explicit write, classify NEEDS_FIX.
+```
+
 ---
 
 ## 10. Merge Gate Policy

@@ -75,6 +75,8 @@ _PROFESSIONAL_TOKENS: frozenset[str] = frozenset({
     "backend", "frontend", "fullstack", "devops", "agent", "startup", "web",
     "data", "research", "model", "app", "software", "engineer", "engineering",
     "python", "java", "golang", "rust", "react", "sql", "cloud", "api",
+    # P0-7K-FIX5B-FIX3: technical concepts are work/topic preferences, not people.
+    "planner", "runtime", "tool", "memory", "rag", "mcp", "a2a", "docker", "git",
     "blogger", "bloger",  # P0-7H: occupation variants
     "founder",
     # P0-7J: short role terms — "tôi làm IT" / "tôi là DEV/developer/developper".
@@ -102,6 +104,11 @@ _COMMON_OBJECT_TOKENS: frozenset[str] = frozenset({
     # P0-7I: common weather/condition adjective — otherwise misread as a lowercase
     # person name by the bounded person-affinity heuristic ("tôi không thích lạnh").
     "lạnh", "lanh",
+})
+
+_KNOWN_NON_PERSON_CONCEPTS: frozenset[str] = frozenset({
+    "planner", "runtime", "tool", "memory", "ai", "ml", "llm", "agent",
+    "api", "rag", "mcp", "a2a", "python", "docker", "git",
 })
 
 # P0-7I: trailing Vietnamese discourse particles that can follow an affection/person
@@ -257,6 +264,8 @@ def _is_person_affinity_value(value: str) -> bool:
     if len(v) > 15:
         return False
     low = v.lower()
+    if low in _KNOWN_NON_PERSON_CONCEPTS:
+        return False
     if low in _PROFESSIONAL_TOKENS or low in _PERSONAL_TOKENS:
         return False
     # P0-7F-FIX4 Part B: common object/food token → ordinary preference, not a person.

@@ -3853,12 +3853,14 @@ def test_p0_7k_multifact_preference_extraction_splits_positive_and_negative():
     ack = (sr.handle_turn(_P0_7K_MULTIFACT_SENTENCE).final_answer or "").lower()
     assert "rule-based mvp" not in ack, f"multi-fact sentence fell to fallback: {ack}"
     likes = (sr.handle_turn("tôi thích gì?").final_answer or "").lower()
-    assert "ăn chối" in likes and "ăn cam" in likes, f"positives missing: {likes}"
+    assert "ăn chuối" in likes and "ăn cam" in likes, f"positives missing: {likes}"
+    assert "ăn chối" not in likes, f"known typo leaked: {likes}"
     assert "ăn cay" not in likes and "ăn ổi" not in likes, f"negatives leaked: {likes}"
     dislikes = (sr.handle_turn("tôi không thích gì?").final_answer or "").lower()
     for item in ["ăn cay", "bơi", "tắm biển", "thể dục", "ăn ổi"]:
         assert item in dislikes, f"dislike {item!r} missing: {dislikes}"
-    assert "ăn chối" not in dislikes and "ăn cam" not in dislikes, f"positives leaked: {dislikes}"
+    assert "ăn chuối" not in dislikes and "ăn cam" not in dislikes, f"positives leaked: {dislikes}"
+    assert "ăn chối" not in dislikes, f"known typo leaked: {dislikes}"
 
 
 def test_p0_7k_multifact_preference_does_not_store_raw_long_sentence():
@@ -4871,7 +4873,7 @@ def test_p0_7k_fix5b_fix1_unrequited_affection_saved_as_affection():
     who = (sr.handle_turn("tôi thích ai?").final_answer or "").lower()
     assert "quý" in who, who
     summary = (sr.handle_turn("bạn nhớ gì về tôi").final_answer or "").lower()
-    assert "quý" in summary and "tình cảm" in summary, summary
+    assert "quý" in summary and ("thích" in summary or "quan tâm" in summary), summary
 
 
 def test_p0_7k_fix5b_fix1_unrequited_affection_not_ordinary_preference():
@@ -5006,3 +5008,238 @@ def test_p0_7k_fix5b_fix2_preserves_one_sided_affection_smoke():
     assert "quý" in recall and ("có" in recall or "thích" in recall), recall
     likes = (sr.handle_turn("tôi thích gì?").final_answer or "").lower()
     assert "quý" not in likes and "đơn phương" not in likes, likes
+
+
+# ---------------------------------------------------------------------------
+# P0-7K-FIX5B-FIX3 tests — concept preference and canonical alias repair
+# ---------------------------------------------------------------------------
+
+def _assert_no_affection_wording(answer: str) -> None:
+    low = answer.lower()
+    assert "tình cảm" not in low, answer
+    assert "đơn phương" not in low, answer
+
+
+def _assert_no_write_wording(answer: str) -> None:
+    low = answer.lower()
+    assert "đã nhớ" not in low, answer
+    assert "đã lưu" not in low, answer
+    assert "đã ghi nhận" not in low, answer
+
+
+def test_p0_7k_fix5b_fix3_planner_preference_not_affection():
+    sr = _make_sr()
+    ack = sr.handle_turn("tôi thích Planner").final_answer or ""
+    assert "đã nhớ" in ack.lower() and "planner" in ack.lower(), ack
+    _assert_no_affection_wording(ack)
+
+    recall = (sr.handle_turn("tôi có thích Planner không?").final_answer or "").lower()
+    assert "planner" in recall and ("có" in recall or "thích" in recall), recall
+
+    likes = (sr.handle_turn("tôi thích gì?").final_answer or "").lower()
+    assert "planner" in likes, likes
+
+    who = (sr.handle_turn("tôi thích ai?").final_answer or "").lower()
+    assert "planner" not in who, who
+
+    summary = sr.handle_turn("bạn nhớ gì về tôi").final_answer or ""
+    assert "planner" in summary.lower(), summary
+    _assert_no_affection_wording(summary)
+
+
+def test_p0_7k_fix5b_fix3_technical_concepts_not_person_affection():
+    sr = _make_sr()
+    for text in [
+        "tôi thích Planner",
+        "tôi thích Runtime",
+        "tôi thích Tool",
+        "tôi thích Memory",
+        "tôi thích AI",
+        "tôi thích ML",
+    ]:
+        ack = sr.handle_turn(text).final_answer or ""
+        assert "đã nhớ" in ack.lower(), ack
+        _assert_no_affection_wording(ack)
+
+    summary = sr.handle_turn("bạn nhớ gì về tôi").final_answer or ""
+    low = summary.lower()
+    for token in ("planner", "runtime", "tool", "memory", "ai", "ml"):
+        assert token in low, summary
+    _assert_no_affection_wording(summary)
+
+    who = (sr.handle_turn("tôi thích ai?").final_answer or "").lower()
+    for token in ("planner", "runtime", "tool", "memory", "ai", "ml"):
+        assert token not in who, who
+
+
+def test_p0_7k_fix5b_fix3_person_affection_still_works():
+    sr = _make_sr()
+    ack = (sr.handle_turn("tôi thích đơn phương Quý").final_answer or "").lower()
+    assert "đã nhớ" in ack and "quý" in ack and "đơn phương" in ack, ack
+    recall = (sr.handle_turn("tôi có thích Quý không?").final_answer or "").lower()
+    assert "quý" in recall and ("có" in recall or "thích" in recall), recall
+    who = (sr.handle_turn("tôi thích ai?").final_answer or "").lower()
+    assert "quý" in who, who
+    likes = (sr.handle_turn("tôi thích gì?").final_answer or "").lower()
+    assert "quý" not in likes and "đơn phương" not in likes, likes
+
+
+def test_p0_7k_fix5b_fix3_write_time_chosi_canonicalizes_to_chuoi():
+    sr = _make_sr()
+    ack = (sr.handle_turn("tôi thích ăn chối").final_answer or "").lower()
+    assert "ăn chuối" in ack and "ăn chối" not in ack, ack
+
+    summary = (sr.handle_turn("bạn nhớ gì về tôi").final_answer or "").lower()
+    assert "ăn chuối" in summary, summary
+    assert "ăn chối" not in summary, summary
+
+    ans = (sr.handle_turn("tôi có thích ăn chuối không?").final_answer or "").lower()
+    assert "ăn chuối" in ans and ("có" in ans or "thích" in ans), ans
+    assert "ăn chối" not in ans, ans
+
+    ans = (sr.handle_turn("tôi có thích ăn chối không?").final_answer or "").lower()
+    assert "ăn chuối" in ans and ("có" in ans or "thích" in ans), ans
+    assert "ăn chối" not in ans, ans
+
+
+def test_p0_7k_fix5b_fix3_alias_canonical_negative_conflict_repair():
+    sr = _make_sr()
+    sr.handle_turn("tôi thích ăn chối")
+    sr.handle_turn("tôi không thích ăn chuối")
+    summary = (sr.handle_turn("bạn nhớ gì về tôi").final_answer or "").lower()
+    assert "không thích ăn chuối" in summary, summary
+    assert "thích ăn chối" not in summary, summary
+    assert "ăn chối" not in summary, summary
+
+
+def test_p0_7k_fix5b_fix3_alias_canonical_positive_update_uses_canonical_answer():
+    sr = _make_sr()
+    sr.handle_turn("tôi thích ăn chối")
+    sr.handle_turn("tôi không thích ăn chuối")
+    sr.handle_turn("tôi thích ăn chuối")
+
+    ans = (sr.handle_turn("tôi có thích ăn chuối không?").final_answer or "").lower()
+    assert "ăn chuối" in ans and ("có" in ans or "thích" in ans), ans
+    assert "ăn chối" not in ans, ans
+
+    summary = (sr.handle_turn("bạn nhớ gì về tôi").final_answer or "").lower()
+    assert "thích ăn chuối" in summary, summary
+    assert "không thích ăn chuối" not in summary, summary
+    assert "ăn chối" not in summary, summary
+
+
+def test_p0_7k_fix5b_fix3_query_alias_uses_canonical_answer():
+    sr = _make_sr()
+    sr.handle_turn("tôi không thích ăn chuối")
+    ans = (sr.handle_turn("tôi có thích ăn chối không?").final_answer or "").lower()
+    assert "ăn chuối" in ans and "không" in ans, ans
+    assert "ăn chối" not in ans, ans
+    summary = (sr.handle_turn("bạn nhớ gì về tôi").final_answer or "").lower()
+    assert "ăn chối" not in summary, summary
+
+
+def test_p0_7k_fix5b_fix3_ai_ml_not_affection():
+    sr = _make_sr()
+    sr.handle_turn("tôi thích AI và ML")
+    sr.handle_turn("tôi không thích AI nữa")
+    ans = (sr.handle_turn("tôi có thích ML và AI không?").final_answer or "").lower()
+    assert "ml" in ans and "ai" in ans and "không" in ans, ans
+    summary = sr.handle_turn("bạn nhớ gì về tôi").final_answer or ""
+    low = summary.lower()
+    assert "ml" in low and "ai" in low, summary
+    assert "không thích ai nữa" not in low, summary
+    _assert_no_affection_wording(summary)
+
+
+def test_p0_7k_fix5b_fix3_manual_mixed_session_regression_reproduction():
+    sr = _make_sr()
+
+    for text in [
+        "Giải thích Planner, Runtime, Tool, Memory khác nhau thế nào",
+        "Bạn có thích Planner, Runtime, Tool không?",
+        "giải thích Planner là gì",
+        "phân biệt Planner và Runtime",
+        "so sánh Tool và Memory",
+        "Planner và Runtime khác nhau thế nào",
+    ]:
+        answer = sr.handle_turn(text).final_answer or ""
+        _assert_no_write_wording(answer)
+
+    sr.handle_turn("tôi thích Planner")
+    sr.handle_turn("tôi thích ăn chối")
+    summary = sr.handle_turn("bạn nhớ gì về tôi").final_answer or ""
+    low = summary.lower()
+    assert "planner" in low, summary
+    assert "ăn chuối" in low, summary
+    assert "ăn chối" not in low, summary
+    _assert_no_affection_wording(summary)
+
+    answer = (sr.handle_turn("tôi có thích planner không?").final_answer or "").lower()
+    assert "planner" in answer and ("có" in answer or "thích" in answer), answer
+
+    sr.handle_turn("tôi không thích planner")
+    answer = (sr.handle_turn("tôi có thích planner không?").final_answer or "").lower()
+    assert "planner" in answer and "không" in answer, answer
+    _assert_no_affection_wording(answer)
+
+    answer = sr.handle_turn("Planner và Runtime khác nhau thế nào").final_answer or ""
+    _assert_no_write_wording(answer)
+
+    summary = sr.handle_turn("bạn biết gì về tôi").final_answer or ""
+    low = summary.lower()
+    assert "planner" in low, summary
+    assert "ăn chuối" in low, summary
+    assert "ăn chối" not in low, summary
+    _assert_no_affection_wording(summary)
+
+    sr.handle_turn("tôi không thích ăn chuối")
+    summary = sr.handle_turn("bạn biết gì về tôi").final_answer or ""
+    low = summary.lower()
+    assert "không thích" in low and "ăn chuối" in low, summary
+    assert "ăn chối" not in low, summary
+
+    sr.handle_turn("tôi thích Planner")
+    answer = (sr.handle_turn("tôi có thích planner không?").final_answer or "").lower()
+    assert "planner" in answer and ("có" in answer or "thích" in answer), answer
+    _assert_no_affection_wording(answer)
+
+    summary = sr.handle_turn("bạn nhớ gì về tôi").final_answer or ""
+    low = summary.lower()
+    assert "planner" in low, summary
+    assert "không thích" in low and "ăn chuối" in low, summary
+    assert "ăn chối" not in low, summary
+    _assert_no_affection_wording(summary)
+
+    answer = (sr.handle_turn("tôi có thích ăn chối không?").final_answer or "").lower()
+    assert "ăn chuối" in answer, answer
+    assert "ăn chối" not in answer, answer
+    assert "không" in answer, answer
+
+    sr.handle_turn("tôi thích ăn chuối")
+    answer = (sr.handle_turn("tôi có thích ăn chuối không?").final_answer or "").lower()
+    assert "ăn chuối" in answer and ("có" in answer or "thích" in answer), answer
+    assert "ăn chối" not in answer, answer
+
+    sr.handle_turn("tôi thích AI và ML")
+    sr.handle_turn("tôi không thích AI nữa")
+    answer = (sr.handle_turn("tôi có thích ML và AI không?").final_answer or "").lower()
+    assert "ml" in answer and "ai" in answer and "không" in answer, answer
+    assert "không thích ai nữa" not in answer, answer
+    _assert_no_affection_wording(answer)
+
+    sr.handle_turn("tôi thích đơn phương Quý")
+    answer = (sr.handle_turn("tôi có thích quý không?").final_answer or "").lower()
+    assert "quý" in answer and ("có" in answer or "thích" in answer), answer
+
+    answer = (sr.handle_turn("quý có thích tôi không?").final_answer or "").lower()
+    assert "không biết" in answer or "chưa" in answer or "không có" in answer, answer
+
+    final_summary = sr.handle_turn("bạn nhớ gì về tôi").final_answer or ""
+    low = final_summary.lower()
+    assert "planner" in low, final_summary
+    assert "ăn chuối" in low, final_summary
+    assert "ăn chối" not in low, final_summary
+    assert "quý" in low, final_summary
+    assert "tình cảm với planner" not in low, final_summary
+    assert "đơn phương planner" not in low, final_summary
+    assert "người tôi thích" not in low or "planner" not in low, final_summary
