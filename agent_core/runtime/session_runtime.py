@@ -218,6 +218,15 @@ _RE_CURRENT_STATE_SKILL = re.compile(
     re.IGNORECASE,
 )
 
+# CONV-P0 P0-7K-FIX6-LITE G: coordinated external affection ("may và quý đều thích tôi").
+# The "đều" marker signals multiple person→USER edges; subjects (group1) split on "và"/",".
+_RE_COORDINATED_EXTERNAL_AFFECTION = re.compile(
+    r'^(.+?(?:\s*,\s*|\s+và\s+).+?)\s+(?:đều\s+)?(?:cũng\s+|vẫn\s+|đang\s+)?'
+    r'(?:thích|yêu|thương|quý\s+mến|quan\s+tâm(?:\s+(?:đến|tới))?)\s+'
+    r'(\S+)\s*[.!]*\s*$',
+    re.IGNORECASE,
+)
+
 # CONV-P0 P0-7K-FIX5C-LITE G: affection statement whose subject is an old/current self
 # alias ("bây giờ bắc thích quý"). Optional temporal marker; group1=subject, group2=verb,
 # group3=object. When the subject resolves to the user, the sentence is rewritten to
@@ -509,6 +518,12 @@ class SessionRuntime:
         rel_cmd = self._maybe_handle_relation_cmd(user_message, state)
         if rel_cmd is not None:
             return rel_cmd
+
+        # CONV-P0 P0-7K-FIX6-LITE priority 4.44: coordinated external affection
+        # ("may và quý đều thích tôi") → one person→USER edge per subject.
+        coord_aff = self._maybe_handle_coordinated_external_affection(user_message, state)
+        if coord_aff is not None:
+            return coord_aff
 
         # CONV-P0 P0-7K-FIX5C-LITE priority 4.45: an affection statement whose subject is an
         # old/current self alias ("bây giờ bắc thích quý") → rewrite to first person and
@@ -1737,6 +1752,45 @@ class SessionRuntime:
                 negated=(intent.category == "external_affection_negative"),
             )
 
+        # P0-7K-FIX6-LITE B: "tôi muốn cưới <người>" — a marry intention stored distinctly
+        # (never surfaced by the general "muốn làm gì?" goal query).
+        if intent.category == "wants_to_marry":
+            person = intent.value or ""
+            candidate = AutoProfileCandidate(
+                relation="wants_to_marry", value=person,
+                original_text=user_message.strip(),
+            )
+            if not save_auto_profile_fact(candidate, self._store, state.session_id):
+                return None
+            self._confirmed_profile_fact_count += 1
+            return self._complete_conv(
+                state, "conv:wants_to_marry_saved",
+                f"Đã nhớ là bạn muốn cưới {person}.",
+            )
+
+        # P0-7K-FIX6-LITE C: "tôi muốn học <chủ đề>" — an intention to learn, stored as an
+        # action goal ("học <topic>") so it appears in "muốn làm gì?", but acknowledged as
+        # an intention (never "đang học", which is a current-activity fact).
+        if intent.category == "wants_to_learn":
+            topic = intent.value or ""
+            goal_value = f"học {topic}"
+            if goal_already_active(goal_value, self._store):
+                return self._complete_conv(
+                    state, "conv:wants_to_learn_saved",
+                    f"Đã nhớ là bạn muốn học {topic}.",
+                )
+            candidate = AutoProfileCandidate(
+                relation="goal", value=goal_value, original_text=user_message.strip(),
+            )
+            if not save_auto_profile_fact(candidate, self._store, state.session_id):
+                return None
+            self._confirmed_profile_fact_count += 1
+            self._last_memory_write_kind = "goal"
+            return self._complete_conv(
+                state, "conv:wants_to_learn_saved",
+                f"Đã nhớ là bạn muốn học {topic}.",
+            )
+
         # P0-7G: durable negative preference ("tôi không thích ăn cá").
         if intent.category == "negative_preference":
             value = intent.value or ""
@@ -1818,6 +1872,47 @@ class SessionRuntime:
         self._confirmed_profile_fact_count += 1
         return self._complete_conv(
             state, "conv:external_affection_saved", build_external_affection_ack(admirer)
+        )
+
+    def _maybe_handle_coordinated_external_affection(
+        self, user_message: str, state: AgentState
+    ) -> AgentState | None:
+        """P0-7K-FIX6-LITE G: "may và quý (đều) thích tôi" → save one person→USER affection
+        edge per subject. Fires only for ≥2 subjects whose object resolves to the user."""
+        m = _RE_COORDINATED_EXTERNAL_AFFECTION.match(user_message.strip())
+        if m is None:
+            return None
+        obj = m.group(2).strip()
+        snap = collect_profile_snapshot(self._store)
+        obj_is_user = (
+            obj.lower() in _EXTERNAL_AFFECTION_SELF_WORDS
+            or (snap.name is not None and self._norm(obj) == self._norm(snap.name))
+            or any(self._norm(obj) == self._norm(n) for n in snap.previous_names)
+        )
+        if not obj_is_user:
+            return None
+        subjects = [
+            s.strip() for s in re.split(r'\s*,\s*|\s+và\s+', m.group(1).strip()) if s.strip()
+        ]
+        # Any admirer that is itself a self word is not a real third-party subject.
+        subjects = [s for s in subjects if s.lower() not in _EXTERNAL_AFFECTION_SELF_WORDS]
+        if len(subjects) < 2:
+            return None
+        saved: list[str] = []
+        for subj in subjects:
+            if save_external_affection_fact(
+                subj, self._store, state.session_id, original_text=user_message.strip()
+            ):
+                saved.append(subj)
+        if not saved:
+            return None
+        self._confirmed_profile_fact_count += len(saved)
+        joined = " và ".join(saved) if len(saved) <= 2 else (
+            ", ".join(saved[:-1]) + " và " + saved[-1]
+        )
+        return self._complete_conv(
+            state, "conv:coordinated_external_affection_saved",
+            f"Đã nhớ theo thông tin bạn cung cấp: {joined} thích bạn.",
         )
 
     def _maybe_handle_alias_affection_statement(

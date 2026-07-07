@@ -128,6 +128,8 @@ class ProfileQuery:
         "self_food_dislike", "self_negative_skill",
         # P0-7K-FIX5C-LITE — person relation query core
         "incoming_affection_set", "batch_incoming_affection", "person_affection_target",
+        # P0-7K-FIX6-LITE — predicate/action fact core
+        "wants_to_marry_query", "wants_to_learn_query", "wants_to_build_query",
     ]
     value: str | None = None          # for inverse_value: the name to look up
     relation_label: str | None = None  # for relation_name / relation_existence
@@ -626,6 +628,23 @@ _RE_SELF_OCC_YESNO_Q = re.compile(
 _RE_CURRENT_GOAL_Q = re.compile(
     r'^(?:tôi|mình|toi|minh)\s+(?:đang\s+|dang\s+)?(?:muốn|muon|định|dinh|sẽ|se)\s+'
     r'(?:làm|lam|build)\s+g[ìi]\s*[?？]?\s*$',
+    re.IGNORECASE,
+)
+# P0-7K-FIX6-LITE: action-specific "muốn <action> <pronoun>" queries. "cưới ai" is a query
+# (with or without a "?"), so the write path never stores it. Checked before the general
+# "muốn làm/build gì?" goal query so build/marry/learn keep distinct answers.
+_RE_WANTS_MARRY_Q = re.compile(
+    r'^(?:tôi|mình)\s+(?:đang\s+)?muốn\s+cưới\s+(?:ai|gì|gi)\s*[?？]?\s*$',
+    re.IGNORECASE,
+)
+# "ai" is intentionally excluded here: "tôi muốn học AI" is a WRITE (learn AI), only "gì"
+# is the learn query pronoun.
+_RE_WANTS_LEARN_Q = re.compile(
+    r'^(?:tôi|mình)\s+(?:đang\s+)?muốn\s+học\s+(?:gì|gi)\s*[?？]?\s*$',
+    re.IGNORECASE,
+)
+_RE_WANTS_BUILD_Q = re.compile(
+    r'^(?:tôi|mình)\s+(?:đang\s+)?muốn\s+build\s+(?:gì|gi)\s*[?？]?\s*$',
     re.IGNORECASE,
 )
 
@@ -1386,6 +1405,16 @@ def detect_profile_query(text: str) -> ProfileQuery | None:
     if _RE_LEARNING_Q.match(stripped):
         return ProfileQuery(kind="self_learning_focus")
 
+    # 8b. P0-7K-FIX6-LITE: action-specific "muốn <action> <pronoun>" queries. Before the
+    #     general "muốn làm/build gì?" so marry/learn/build stay distinct (marry is not a
+    #     general work goal; build filters build goals; learn filters learn goals).
+    if _RE_WANTS_MARRY_Q.match(stripped):
+        return ProfileQuery(kind="wants_to_marry_query")
+    if _RE_WANTS_LEARN_Q.match(stripped):
+        return ProfileQuery(kind="wants_to_learn_query")
+    if _RE_WANTS_BUILD_Q.match(stripped):
+        return ProfileQuery(kind="wants_to_build_query")
+
     # 8c. P0-7J: current goal/intention query ("tôi đang muốn làm gì?") — before the
     #     legacy goal query; answers with the LATEST goal (current-state semantics).
     if _RE_CURRENT_GOAL_Q.match(stripped):
@@ -2003,6 +2032,7 @@ def save_auto_profile_fact(
         "occupation": f"bạn là {value}",
         "preference": f"bạn thích {value}",
         "goal": f"mục tiêu của bạn là {value}",
+        "wants_to_marry": f"bạn muốn cưới {value}",
         "learning_focus": f"bạn đang học {value}",
         "habit": f"bạn hay {value}",
         "skill": f"bạn biết {value}",
@@ -2687,6 +2717,11 @@ _DIRTY_VALUE_MARKERS: tuple[str, ...] = (
     "nhưng không", "mà không biết", "còn không biết",
 )
 _DIRTY_VALUE_TERMINAL: tuple[str, ...] = (" nữa", " rồi", " mà", " đấy", " đó")
+# P0-7K-FIX6-LITE: question pronouns that must never appear as a stored object value.
+# "ai" is checked case-sensitively (see _is_dirty_value) so "AI" the tech token survives.
+_DIRTY_VALUE_QUESTION_TAILS: tuple[str, ...] = (
+    "gì", "gi", "nào", "đâu", "dau", "bao giờ", "khi nào",
+)
 _KNOWN_PREFERENCE_TOKEN_CANONICALS: dict[str, str] = {
     "chối": "chuối",
     "lem": "kem",
@@ -2713,6 +2748,14 @@ def _is_dirty_value(value: str) -> bool:
     """True if value is polluted with reminder/predicate/terminal-marker fragments."""
     v = re.sub(r"\s+", " ", value.strip().lower())
     if any(marker in v for marker in _DIRTY_VALUE_MARKERS):
+        return True
+    # P0-7K-FIX6-LITE: a stored object that is (or ends with) a question pronoun
+    # ("cưới ai") is dirty query pollution — never surface it in summary/recall.
+    if any(v == p or v.endswith(" " + p) for p in _DIRTY_VALUE_QUESTION_TAILS):
+        return True
+    # Lowercase "ai" is the question word; uppercase "AI" (tech token) must survive.
+    raw_tokens = value.strip().split()
+    if raw_tokens and raw_tokens[-1] == "ai":
         return True
     return any(v.endswith(t) for t in _DIRTY_VALUE_TERMINAL)
 
@@ -2859,6 +2902,7 @@ class ProfileSnapshot:
     skills: list[str] = field(default_factory=list)
     learning: list[str] = field(default_factory=list)
     goals: list[str] = field(default_factory=list)
+    marry_targets: list[str] = field(default_factory=list)  # P0-7K-FIX6-LITE wants_to_marry
     preferences_personal: list[str] = field(default_factory=list)
     preferences_professional: list[str] = field(default_factory=list)
     habits: list[str] = field(default_factory=list)
@@ -2949,6 +2993,20 @@ def _join_vietnamese_items(items: list[str]) -> str:
     if len(items) == 2:
         return f"{items[0]} và {items[1]}"
     return ", ".join(items[:-1]) + f" và {items[-1]}"
+
+
+def _goal_has_verb(goal: str, verb: str) -> bool:
+    """True if goal starts with an action verb ("build Agent" → verb "build")."""
+    return _norm_cmp(goal).startswith(verb.lower() + " ")
+
+
+def _strip_goal_verb(goal: str, verb: str) -> str:
+    """Drop a leading action verb from a goal ("build Agent" → "Agent")."""
+    stripped = goal.strip()
+    prefix = verb + " "
+    if stripped.lower().startswith(prefix.lower()):
+        return stripped[len(prefix):].strip()
+    return stripped
 
 
 def _active_preference_query_candidates(snap: ProfileSnapshot) -> list[str]:
@@ -3268,6 +3326,8 @@ def collect_profile_snapshot(store: "MemoryStoreProtocol") -> ProfileSnapshot:
             _add(snap.learning, val)
         elif subject == "self" and rel == "goal":
             _add(snap.goals, val)
+        elif subject == "self" and rel == "wants_to_marry":
+            _add(snap.marry_targets, val)
         elif subject == "self" and rel == "goal_focus":
             # P0-7K-FIX1: latest focus wins; also recorded as an active goal.
             snap.current_focus = val
@@ -3708,6 +3768,29 @@ def answer_profile_query(
                 reply += " Bạn cũng đang muốn làm " + ", ".join(others) + "."
             return reply
         return "Mình đang nhớ bạn đang muốn " + ", ".join(snap.goals) + "."
+
+    # --- P0-7K-FIX6-LITE: wants_to_marry_query ("tôi muốn cưới ai?") ---
+    elif query.kind == "wants_to_marry_query":
+        snap = collect_profile_snapshot(store)
+        if snap.marry_targets:
+            return "Bạn từng nói muốn cưới " + _join_vietnamese_items(snap.marry_targets) + "."
+        return "Mình chưa thấy bạn nói rõ muốn cưới ai."
+
+    # --- P0-7K-FIX6-LITE: wants_to_learn_query ("tôi muốn học gì?") ---
+    elif query.kind == "wants_to_learn_query":
+        snap = collect_profile_snapshot(store)
+        topics = [_strip_goal_verb(g, "học") for g in snap.goals if _goal_has_verb(g, "học")]
+        if topics:
+            return "Bạn muốn học " + _join_vietnamese_items(topics) + "."
+        return "Mình chưa thấy bạn nói rõ muốn học gì."
+
+    # --- P0-7K-FIX6-LITE: wants_to_build_query ("tôi muốn build gì?") ---
+    elif query.kind == "wants_to_build_query":
+        snap = collect_profile_snapshot(store)
+        targets = [_strip_goal_verb(g, "build") for g in snap.goals if _goal_has_verb(g, "build")]
+        if targets:
+            return "Bạn muốn build " + _join_vietnamese_items(targets) + "."
+        return "Mình chưa thấy bạn nói rõ muốn build gì."
 
     # --- P0-7J-FIX1: self_do_yesno ("tôi có làm LLM nữa không?") ---
     elif query.kind == "self_do_yesno":

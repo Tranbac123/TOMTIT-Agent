@@ -499,3 +499,146 @@ def test_p0_7k_fix5c_lite_web_manual_relation_sequence():
         assert "quý" in batch and "may" in batch and "có" in batch
         who = chat(sid, "may thích ai?").lower()
         assert "may" in who and ("bạn" in who or "bắc" in who)
+
+
+# ===========================================================================
+# CONV-P0 P0-7K-FIX6-LITE — minimal predicate/action fact core
+# ===========================================================================
+#
+# "muốn <action> <object>" splits into distinct predicates. A trailing question
+# pronoun ("cưới ai", "học gì") is a QUERY and must never be written. wants_to_marry
+# is kept out of the general "muốn làm gì?" goal set; wants_to_learn/build are in it.
+
+
+def test_p0_7k_fix6_lite_question_pronoun_not_written_wants_to_marry_ai():
+    for text in ("tôi muốn cưới ai", "tôi muốn cưới ai?"):
+        s = _make_session()
+        ans = _reply(s, text)
+        assert not _is_generic(ans) and not _is_write(ans), text
+        summary = _reply(s, "bạn nhớ gì về tôi").lower()
+        assert "cưới ai" not in summary
+
+
+def test_p0_7k_fix6_lite_question_pronoun_not_written_wants_to_learn_gi():
+    s = _make_session()
+    ans = _reply(s, "tôi muốn học gì?")
+    assert not _is_generic(ans) and not _is_write(ans)
+    assert "học gì" not in _reply(s, "bạn nhớ gì về tôi").lower()
+
+
+def test_p0_7k_fix6_lite_question_pronoun_not_written_wants_to_build_gi():
+    s = _make_session()
+    ans = _reply(s, "tôi muốn build gì?")
+    assert not _is_generic(ans) and not _is_write(ans)
+    assert "build gì" not in _reply(s, "bạn nhớ gì về tôi").lower()
+
+
+def test_p0_7k_fix6_lite_wants_to_marry_store_and_query():
+    s = _make_session()
+    ans = _reply(s, "tôi muốn cưới quý")
+    assert _is_write(ans) and "quý" in ans.lower() and "cưới" in ans.lower()
+    recall = _reply(s, "tôi muốn cưới ai?").lower()
+    assert "quý" in recall and not _is_unknown(recall)
+
+
+def test_p0_7k_fix6_lite_wants_to_marry_excluded_from_general_do_query():
+    s = _make_session()
+    _reply(s, "tôi muốn cưới quý")
+    do = _reply(s, "tôi muốn làm gì?").lower()
+    assert "cưới" not in do and "quý" not in do
+
+
+def test_p0_7k_fix6_lite_wants_to_learn_store_and_query():
+    s = _make_session()
+    ans = _reply(s, "tôi muốn học AI")
+    assert _is_write(ans) and "ai" in ans.lower()
+    learn = _reply(s, "tôi muốn học gì?").lower()
+    assert "ai" in learn and not _is_unknown(learn)
+    do = _reply(s, "tôi muốn làm gì?").lower()
+    assert "ai" in do
+
+
+def test_p0_7k_fix6_lite_wants_to_learn_not_current_learning():
+    s = _make_session()
+    ans = _reply(s, "tôi muốn học AI").lower()
+    assert "muốn học" in ans and "đang học" not in ans
+
+
+def test_p0_7k_fix6_lite_mixed_wants_to_actions_query():
+    s = _make_session()
+    _reply(s, "tôi muốn cưới quý")
+    _reply(s, "tôi muốn học AI")
+    _reply(s, "tôi muốn build Agent")
+    assert "quý" in _reply(s, "tôi muốn cưới ai?").lower()
+    assert "ai" in _reply(s, "tôi muốn học gì?").lower()
+    assert "agent" in _reply(s, "tôi muốn build gì?").lower()
+    do = _reply(s, "tôi muốn làm gì?").lower()
+    assert "ai" in do and "agent" in do and "cưới" not in do and "quý" not in do
+
+
+def test_p0_7k_fix6_lite_dirty_query_not_in_summary():
+    s = _make_session()
+    _reply(s, "tôi muốn cưới ai")
+    _reply(s, "tôi muốn học AI")
+    do = _reply(s, "tôi muốn làm gì?").lower()
+    assert "cưới ai" not in do and "ai" in do
+    assert "cưới ai" not in _reply(s, "bạn nhớ gì về tôi").lower()
+
+
+def test_p0_7k_fix6_lite_coordinated_incoming_affection_write():
+    s = _make_session()
+    _reply(s, "tôi là bắc")
+    ans = _reply(s, "may và quý đều thích tôi")
+    assert not _is_generic(ans) and _is_write(ans)
+    assert "may" in ans.lower() and "quý" in ans.lower()
+    incoming = _reply(s, "ai đang thích tôi?").lower()
+    assert "may" in incoming and "quý" in incoming
+    # 3-way coordination
+    s2 = _make_session()
+    _reply(s2, "tôi là bắc")
+    _reply(s2, "may, quý và linh đều thích tôi")
+    inc = _reply(s2, "ai đang thích tôi?").lower()
+    assert all(n in inc for n in ("may", "quý", "linh"))
+
+
+def test_p0_7k_fix6_lite_preserve_no_inverse_affection():
+    s = _make_session()
+    _reply(s, "may thích tôi")
+    assert _is_unknown(_reply(s, "tôi có thích may không?"))
+    s2 = _make_session()
+    _reply(s2, "tôi thích may")
+    assert _is_unknown(_reply(s2, "may có thích tôi không?"))
+
+
+def test_p0_7k_fix6_lite_web_manual_predicate_sequence():
+    from fastapi.testclient import TestClient
+
+    from agent_core.web_api.app import create_app
+
+    with TestClient(create_app()) as client:
+        def new_session() -> str:
+            r = client.post("/api/sessions", json={"user_id": "u1"})
+            r.raise_for_status()
+            return r.json()["session_id"]
+
+        def chat(sid: str, text: str) -> str:
+            r = client.post(
+                "/api/chat",
+                json={"session_id": sid, "message": text, "user_id": "u1"},
+            )
+            r.raise_for_status()
+            am = r.json().get("assistant_message") or {}
+            return am.get("content", "") if isinstance(am, dict) else str(am)
+
+        sid = new_session()
+        chat(sid, "tôi là bắc")
+        marry_ai = chat(sid, "tôi muốn cưới ai")
+        assert not _is_write(marry_ai)
+        assert "cưới ai" not in chat(sid, "bạn nhớ gì về tôi").lower()
+        assert _is_write(chat(sid, "tôi muốn cưới quý"))
+        assert "quý" in chat(sid, "tôi muốn cưới ai?").lower()
+        learn = chat(sid, "tôi muốn học AI")
+        assert _is_write(learn) and "đang học" not in learn.lower()
+        assert "ai" in chat(sid, "tôi muốn học gì?").lower()
+        do = chat(sid, "tôi muốn làm gì?").lower()
+        assert "ai" in do and "cưới ai" not in do
