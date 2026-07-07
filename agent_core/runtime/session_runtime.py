@@ -218,6 +218,18 @@ _RE_CURRENT_STATE_SKILL = re.compile(
     re.IGNORECASE,
 )
 
+# CONV-P0 P0-7K-FIX5C-LITE G: affection statement whose subject is an old/current self
+# alias ("bây giờ bắc thích quý"). Optional temporal marker; group1=subject, group2=verb,
+# group3=object. When the subject resolves to the user, the sentence is rewritten to
+# first person and re-dispatched, so person-vs-preference disambiguation is reused.
+_RE_ALIAS_AFFECTION_STMT = re.compile(
+    r'^(?:(?:bây\s+giờ|hiện\s+tại|giờ|từ\s+nay)\s*,?\s+)?'
+    r'(\S+(?:\s+\S+)?)\s+(?:cũng\s+|vẫn\s+|đang\s+)?'
+    r'(thích|yêu|thương|quý\s+mến|quan\s+tâm(?:\s+(?:đến|tới))?)\s+'
+    r'(\S+(?:\s+\S+)?)\s*[.!]*\s*$',
+    re.IGNORECASE,
+)
+
 # CONV-P0 P0-7K-FIX5A: obvious meta-feedback about a prior answer. This is not a memory
 # write and not a full repair system; it simply avoids fallback/pollution.
 _RE_PROFILE_FEEDBACK_NO_WRITE = re.compile(
@@ -497,6 +509,14 @@ class SessionRuntime:
         rel_cmd = self._maybe_handle_relation_cmd(user_message, state)
         if rel_cmd is not None:
             return rel_cmd
+
+        # CONV-P0 P0-7K-FIX5C-LITE priority 4.45: an affection statement whose subject is an
+        # old/current self alias ("bây giờ bắc thích quý") → rewrite to first person and
+        # re-dispatch as a self-affection write. Before the semantic layer, which would
+        # otherwise read the name-subject as an (unrelated) external affection.
+        alias_aff = self._maybe_handle_alias_affection_statement(user_message, state)
+        if alias_aff is not None:
+            return alias_aff
 
         # CONV-P0 P0-7F priority 4.5: semantic profile layer — skill/occupation/preference
         # split/person-affinity/muốn desires/relationship variants + yes-no + "gì nữa" follow-up.
@@ -1799,6 +1819,38 @@ class SessionRuntime:
         return self._complete_conv(
             state, "conv:external_affection_saved", build_external_affection_ack(admirer)
         )
+
+    def _maybe_handle_alias_affection_statement(
+        self, user_message: str, state: AgentState
+    ) -> AgentState | None:
+        """P0-7K-FIX5C-LITE G: "bây giờ bắc thích quý" where "bắc" is an old/current self
+        alias → rewrite to "tôi thích quý" and re-dispatch so it becomes a self-affection
+        write (reusing the person-vs-preference disambiguation). Bare self-word subjects
+        ("tôi thích quý") already flow through the normal pipeline, so they are left alone."""
+        m = _RE_ALIAS_AFFECTION_STMT.match(user_message.strip())
+        if m is None:
+            return None
+        subject = m.group(1).strip()
+        verb = m.group(2).strip()
+        obj = m.group(3).strip()
+        if subject.lower() in _EXTERNAL_AFFECTION_SELF_WORDS or obj.lower() in ("ai",):
+            return None
+        snap = collect_profile_snapshot(self._store)
+        subject_is_user = (
+            (snap.name is not None and self._norm(subject) == self._norm(snap.name))
+            or any(self._norm(subject) == self._norm(n) for n in snap.previous_names)
+        )
+        if not subject_is_user:
+            return None
+        # The object must not itself be the user ("bắc thích BB" is not a self-affection).
+        obj_is_user = (
+            obj.lower() in _EXTERNAL_AFFECTION_SELF_WORDS
+            or (snap.name is not None and self._norm(obj) == self._norm(snap.name))
+            or any(self._norm(obj) == self._norm(n) for n in snap.previous_names)
+        )
+        if obj_is_user:
+            return None
+        return self._run_memory_write_pipeline(f"tôi {verb} {obj}", state)
 
     def _handle_external_affection(
         self, intent: SemanticProfileIntent, user_message: str, state: AgentState,

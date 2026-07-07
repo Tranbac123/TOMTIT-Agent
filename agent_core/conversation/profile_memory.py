@@ -126,6 +126,8 @@ class ProfileQuery:
         # P0-7K-FIX2
         "self_food_favorite", "self_comparative", "self_food_preference",
         "self_food_dislike", "self_negative_skill",
+        # P0-7K-FIX5C-LITE — person relation query core
+        "incoming_affection_set", "batch_incoming_affection", "person_affection_target",
     ]
     value: str | None = None          # for inverse_value: the name to look up
     relation_label: str | None = None  # for relation_name / relation_existence
@@ -841,6 +843,33 @@ _RE_REVERSE_ENTITY_Q = re.compile(
     r'^ai\s+là\s+([^\s?？]+)\s*[?？]?\s*$',
     re.IGNORECASE,
 )
+# P0-7K-FIX5C-LITE A: incoming-affection set query ("ai đang thích tôi?"). "tích" is a
+# light typo of "thích" accepted only in this affection-query context. Lists the active
+# person -> USER edges.
+_RE_INCOMING_AFFECTION_SET_Q = re.compile(
+    r'^ai\s+(?:đang\s+)?(?:thích|tích)\s+(?:tôi|mình)\s*[?？]?\s*$',
+    re.IGNORECASE,
+)
+# P0-7K-FIX5C-LITE F: person-relation target query ("May thích ai?"). Subject (group 1) is
+# a non-self token; answered from the person -> USER edge (the only person-object relation
+# this lite core stores). Object facts ("May thích ăn kem") are out of scope.
+_RE_PERSON_AFFECTION_TARGET_Q = re.compile(
+    r'^(\S+(?:\s+\S+)?)\s+(?:đang\s+)?(?:thích|tích|yêu|thương|quý)\s+ai\s*[?？]?\s*$',
+    re.IGNORECASE,
+)
+# P0-7K-FIX5C-LITE B: batch third-party relation query ("Quý và May có thích tôi không?").
+# Subjects (group 1) split on "và"/","; object (group 2) is resolved to USER at answer time.
+_RE_BATCH_INCOMING_AFFECTION_Q = re.compile(
+    r'^(.+?(?:\s*,\s*|\s+và\s+).+?)\s+có\s+(?:thích|tích|yêu|thương|quý)\s+'
+    r'(\S+(?:\s+\S+)?)\s+(?:không|ko|hông|hong|chưa)\s*[?？]?\s*$',
+    re.IGNORECASE,
+)
+
+
+def _split_person_subjects(phrase: str) -> list[str]:
+    """Split "Quý, May và Linh" into ["Quý", "May", "Linh"] (no empty tokens)."""
+    parts = re.split(r'\s*,\s*|\s+và\s+', phrase.strip())
+    return [p.strip() for p in parts if p.strip()]
 
 # P0-7F-FIX2/FIX3: values that leaked into the preference store before the write guards
 # were in place. Filtered at read time (never deleted from durable store).
@@ -1171,6 +1200,31 @@ def detect_profile_query(text: str) -> ProfileQuery | None:
     11. Inverse value lookup
     """
     stripped = text.strip()
+
+    # 0. P0-7K-FIX5C-LITE A: incoming-affection set query ("ai đang thích tôi?").
+    if _RE_INCOMING_AFFECTION_SET_Q.match(stripped):
+        return ProfileQuery(kind="incoming_affection_set")
+
+    # 0.02. P0-7K-FIX5C-LITE B: batch third-party relation query ("Quý và May có thích
+    #       tôi không?"). Multi-subject; object resolved to USER at answer time. Checked
+    #       before the single-subject third-party and named-affection forms.
+    m = _RE_BATCH_INCOMING_AFFECTION_Q.match(stripped)
+    if m:
+        subjects_raw = m.group(1).strip()
+        obj = m.group(2).strip().rstrip('?')
+        if len(_split_person_subjects(subjects_raw)) >= 2:
+            return ProfileQuery(
+                kind="batch_incoming_affection", value=subjects_raw, object_value=obj
+            )
+
+    # 0.03. P0-7K-FIX5C-LITE F: person-relation target query ("May thích ai?"). A self-word
+    # subject (incl. "tôi đang") is left to the self-affection lane ("tôi đang thích ai?").
+    m = _RE_PERSON_AFFECTION_TARGET_Q.match(stripped)
+    if m:
+        subject = m.group(1).strip().rstrip('?')
+        first_token = subject.lower().split()[0] if subject.split() else ""
+        if subject.lower() not in _SELF_WORDS and first_token not in _SELF_WORDS:
+            return ProfileQuery(kind="person_affection_target", value=subject)
 
     # 0. P0-7F-FIX3 Part D: third-party mind-state ("quý có thích tôi không?").
     #    Subject must not be a self-word (that would be a yes/no self-preference query).
@@ -2436,7 +2490,9 @@ def build_relationship_typo_clarification(corrected_label: str, name: str) -> st
 # Inner memory clause must start with a supported memory pattern.
 _RE_MEMORY_CLAUSE_START = re.compile(
     r'^(?:'
-    r'(?:tôi|mình)\s+(?:không\s+thích|thích|không\s+biết|biết|làm|là|tên|sẽ|muốn|định|có)'
+    # P0-7K-FIX5C-LITE E: allow a "cũng/vẫn" modifier so an embedded self-affection
+    # reminder ("... tôi cũng thích may rồi") is recognized as a memory clause.
+    r'(?:tôi|mình)\s+(?:cũng\s+|vẫn\s+)?(?:không\s+thích|thích|không\s+biết|biết|làm|là|tên|sẽ|muốn|định|có)'
     r'|(?:bạn\s+gái|bạn\s+trai|người\s+yêu|vợ|chồng|partner)\b'
     r')',
     re.IGNORECASE,
@@ -3000,6 +3056,12 @@ def _preference_item_state(item: str, snap: ProfileSnapshot) -> str:
     """Return positive / negative / unknown for one preference query object."""
     target = _norm_cmp(item)
     pref_values = snap.preferences_personal + snap.preferences_professional
+    # P0-7K-FIX5C-LITE C: a person object ("tôi có thích quý và may không?") resolves
+    # against outgoing self-affection state, keeping positive/negative/unknown distinct.
+    if any(_norm_cmp(v) == target for v in snap.negative_affections):
+        return "negative"
+    if any(_norm_cmp(v) == target for v in snap.affections):
+        return "positive"
     if target in {_norm_cmp(v) for v in snap.dislikes} or any(
         _matches_preference_query(v, item) for v in snap.dislikes
     ):
@@ -3762,6 +3824,75 @@ def answer_profile_query(
         return _answer_named_affection_yesno(
             query.value or "", query.object_value or "", store
         )
+
+    # --- P0-7K-FIX5C-LITE A: incoming_affection_set ("ai đang thích tôi?") ---
+    elif query.kind == "incoming_affection_set":
+        snap = collect_profile_snapshot(store)
+        positives = list(snap.external_affections)
+        negatives = list(snap.negative_external_affections)
+        if positives:
+            answer = (
+                f"{_join_vietnamese_items(positives)} đang thích bạn theo thông tin "
+                "bạn cung cấp."
+            )
+            if negatives:
+                answer += (
+                    f" {_join_vietnamese_items(negatives)} thì theo thông tin bạn "
+                    "cung cấp là không thích bạn."
+                )
+            return answer
+        if negatives:
+            return (
+                f"Theo thông tin bạn cung cấp, {_join_vietnamese_items(negatives)} "
+                "không thích bạn. Ngoài ra mình chưa có thông tin về ai đang thích bạn."
+            )
+        return "Mình chưa có thông tin về người đang thích bạn."
+
+    # --- P0-7K-FIX5C-LITE B: batch_incoming_affection ("Quý và May có thích tôi không?") ---
+    elif query.kind == "batch_incoming_affection":
+        snap = collect_profile_snapshot(store)
+        if not _resolves_to_user(query.object_value or "", snap):
+            # Object is not the user → person↔person, out of this lite core's scope.
+            return "Mình chưa có thông tin về việc này."
+        subjects = _split_person_subjects(query.value or "")
+        pos, neg, unknown = [], [], []
+        for subj in subjects:
+            if any(_norm_cmp(subj) == _norm_cmp(v) for v in snap.external_affections):
+                pos.append(subj)
+            elif any(_norm_cmp(subj) == _norm_cmp(v) for v in snap.negative_external_affections):
+                neg.append(subj)
+            else:
+                unknown.append(subj)
+        if pos and not neg and not unknown:
+            return (
+                f"Có, theo thông tin bạn cung cấp thì {_join_vietnamese_items(pos)} "
+                "thích bạn."
+            )
+        parts: list[str] = []
+        if pos:
+            parts.append(f"{_join_vietnamese_items(pos)} thích bạn")
+        if neg:
+            parts.append(f"{_join_vietnamese_items(neg)} không thích bạn")
+        if unknown:
+            parts.append(f"còn {_join_vietnamese_items(unknown)} thì mình chưa có thông tin")
+        return "; ".join(parts) + "."
+
+    # --- P0-7K-FIX5C-LITE F: person_affection_target ("May thích ai?") ---
+    elif query.kind == "person_affection_target":
+        subject = query.value or "người đó"
+        snap = collect_profile_snapshot(store)
+        # An old/current self alias as the subject ("bắc thích ai?") asks the self lane.
+        if _resolves_to_user(subject, snap):
+            if snap.affections:
+                return (
+                    "Bạn đang thích " + _join_vietnamese_items(snap.affections) + "."
+                )
+            return "Mình chưa có thông tin về người bạn thích."
+        if any(_norm_cmp(subject) == _norm_cmp(v) for v in snap.external_affections):
+            return f"Theo thông tin bạn cung cấp, {subject} thích bạn."
+        if any(_norm_cmp(subject) == _norm_cmp(v) for v in snap.negative_external_affections):
+            return f"Theo thông tin bạn cung cấp, {subject} không thích bạn."
+        return f"Mình chưa có thông tin về người mà {subject} thích."
 
     # --- P0-7F-FIX4 Part C: friend_name ("bạn của tôi tên là gì?") ---
     elif query.kind == "friend_name":

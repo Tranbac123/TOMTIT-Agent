@@ -337,3 +337,165 @@ def test_p0_7k_hotfix1_fix1_web_failed_codex_cases():
         summary = chat(sid, "bạn nhớ gì về tôi").lower()
         for bad in ("tôi đã nói rồi", "không nhớ sao", "bạn không nhớ"):
             assert bad not in summary, summary
+
+
+# ===========================================================================
+# CONV-P0 P0-7K-FIX5C-LITE — minimal person relation query core
+# ===========================================================================
+#
+# USER -> likes -> person (outgoing) and person -> likes -> USER (incoming) are
+# distinct edges and must never be inferred into each other.
+
+
+def test_p0_7k_fix5c_lite_incoming_affection_set_query():
+    s = _make_session()
+    _reply(s, "tôi là bắc")
+    _reply(s, "quý thích tôi")
+    _reply(s, "may thích tôi")
+    _reply(s, "linh cũng thích tôi")
+    ans = _reply(s, "ai đang thích tôi?")
+    low = ans.lower()
+    assert not _is_generic(ans) and all(n in low for n in ("quý", "may", "linh"))
+
+
+def test_p0_7k_fix5c_lite_incoming_affection_typo_tich():
+    s = _make_session()
+    _reply(s, "tôi là bắc")
+    _reply(s, "quý thích tôi")
+    _reply(s, "may thích tôi")
+    ans = _reply(s, "ai đang tích tôi?")
+    low = ans.lower()
+    assert not _is_generic(ans) and "quý" in low and "may" in low
+
+
+def test_p0_7k_fix5c_lite_batch_third_party_relation_query_all_positive():
+    s = _make_session()
+    _reply(s, "tôi là bắc")
+    _reply(s, "quý thích tôi")
+    _reply(s, "may thích tôi")
+    ans = _reply(s, "quý và may có thích tôi không?")
+    low = ans.lower()
+    assert not _is_generic(ans) and "quý" in low and "may" in low and "có" in low
+    # Old/current self alias as the object resolves to USER too.
+    ans_alias = _reply(s, "quý và may có thích bắc không?")
+    assert "quý" in ans_alias.lower() and "may" in ans_alias.lower()
+
+
+def test_p0_7k_fix5c_lite_batch_third_party_relation_query_mixed_state():
+    s = _make_session()
+    _reply(s, "tôi là bắc")
+    _reply(s, "quý thích tôi")
+    _reply(s, "may không thích tôi")
+    ans = _reply(s, "quý, may và linh có thích tôi không?")
+    low = ans.lower()
+    assert not _is_generic(ans)
+    assert "quý" in low and "may" in low and "linh" in low
+    assert "không" in low and _is_unknown(ans)
+
+
+def test_p0_7k_fix5c_lite_outgoing_self_affection_batch_query():
+    s = _make_session()
+    _reply(s, "tôi là bắc")
+    _reply(s, "tôi thích quý")
+    _reply(s, "tôi cũng thích may")
+    ans = _reply(s, "tôi có thích quý và may không?")
+    low = ans.lower()
+    assert not _is_generic(ans) and "quý" in low and "may" in low and "có" in low
+    _reply(s, "tôi không thích quý nữa")
+    mixed = _reply(s, "tôi có thích quý và may không?").lower()
+    assert "quý" in mixed and "may" in mixed and "không" in mixed
+
+
+def test_p0_7k_fix5c_lite_outgoing_self_affection_set_query_after_retraction():
+    s = _make_session()
+    _reply(s, "tôi là bắc")
+    _reply(s, "tôi thích quý")
+    _reply(s, "tôi cũng thích may")
+    assert "quý" in _reply(s, "tôi đang thích ai?").lower()
+    _reply(s, "tôi không thích quý nữa")
+    ans = _reply(s, "tôi đang thích ai?").lower()
+    assert "may" in ans and "quý" not in ans
+
+
+def test_p0_7k_fix5c_lite_embedded_self_affection_reminder():
+    s = _make_session()
+    _reply(s, "tôi thích quý")
+    _reply(s, "tôi không thích quý nữa")
+    ans = _reply(s, "tôi đã nói là tôi cũng thích may rồi")
+    assert not _is_generic(ans) and _is_write(ans) and "may" in ans.lower()
+    recall = _reply(s, "tôi đang thích ai?").lower()
+    assert "may" in recall and "quý" not in recall
+
+
+def test_p0_7k_fix5c_lite_person_likes_who_query():
+    s = _make_session()
+    _reply(s, "tôi là bắc")
+    _reply(s, "may thích tôi")
+    ans = _reply(s, "may thích ai?")
+    low = ans.lower()
+    assert not _is_generic(ans) and "may" in low and ("bạn" in low or "bắc" in low)
+
+
+def test_p0_7k_fix5c_lite_old_self_alias_subject_statement():
+    s = _make_session()
+    _reply(s, "tôi là bắc")
+    _reply(s, "bây giờ tôi tên là BB")
+    ans = _reply(s, "bây giờ bắc thích quý")
+    assert not _is_generic(ans) and _is_write(ans) and "quý" in ans.lower()
+    recall = _reply(s, "tôi có thích quý không?").lower()
+    assert "quý" in recall and "có" in recall
+
+
+def test_p0_7k_fix5c_lite_no_inverse_hallucination():
+    # incoming edge does not imply outgoing
+    s = _make_session()
+    _reply(s, "may thích tôi")
+    ans = _reply(s, "tôi có thích may không?")
+    assert "may" in ans.lower() and _is_unknown(ans)
+    # outgoing edge does not imply incoming
+    s2 = _make_session()
+    _reply(s2, "tôi thích may")
+    ans2 = _reply(s2, "may có thích tôi không?")
+    assert "may" in ans2.lower() and _is_unknown(ans2)
+
+
+def test_p0_7k_fix5c_lite_person_likes_who_excludes_object_facts():
+    # "may thích ai?" must not surface a would-be object fact; with no person->USER edge
+    # it stays unknown (never generic fallback).
+    s = _make_session()
+    _reply(s, "tôi là bắc")
+    ans = _reply(s, "may thích ai?")
+    assert not _is_generic(ans) and _is_unknown(ans)
+
+
+def test_p0_7k_fix5c_lite_web_manual_relation_sequence():
+    from fastapi.testclient import TestClient
+
+    from agent_core.web_api.app import create_app
+
+    with TestClient(create_app()) as client:
+        def new_session() -> str:
+            r = client.post("/api/sessions", json={"user_id": "u1"})
+            r.raise_for_status()
+            return r.json()["session_id"]
+
+        def chat(sid: str, text: str) -> str:
+            r = client.post(
+                "/api/chat",
+                json={"session_id": sid, "message": text, "user_id": "u1"},
+            )
+            r.raise_for_status()
+            am = r.json().get("assistant_message") or {}
+            return am.get("content", "") if isinstance(am, dict) else str(am)
+
+        sid = new_session()
+        chat(sid, "tôi là bắc")
+        chat(sid, "quý thích tôi")
+        chat(sid, "may thích tôi")
+        chat(sid, "linh cũng thích tôi")
+        incoming = chat(sid, "ai đang thích tôi?").lower()
+        assert all(n in incoming for n in ("quý", "may", "linh"))
+        batch = chat(sid, "quý và may có thích tôi không?").lower()
+        assert "quý" in batch and "may" in batch and "có" in batch
+        who = chat(sid, "may thích ai?").lower()
+        assert "may" in who and ("bạn" in who or "bắc" in who)
