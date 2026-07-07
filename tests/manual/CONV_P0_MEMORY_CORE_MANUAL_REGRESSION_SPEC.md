@@ -3175,6 +3175,12 @@ tôi muốn làm gì?
 #### D. Reminder/challenge dirty-tail stripping
 
 ```text
+tôi vẫn muốn làm ML mà
+tôi muốn làm gì?
+=> active goal is làm ML
+=> saved/rendered value must NOT include "mà"
+=> summary and recall must include clean ML goal
+
 tôi vẫn muốn làm ML bạn không nhớ à
 tôi muốn làm gì?
 => active goal is làm ML

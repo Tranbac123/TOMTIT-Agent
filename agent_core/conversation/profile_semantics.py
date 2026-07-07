@@ -503,7 +503,7 @@ def _clean_value(raw: str) -> str:
         value,
         flags=re.IGNORECASE,
     ).strip()
-    return value
+    return strip_terminal_discourse_markers(value)
 
 
 def classify_profile_semantic_intent(text: str) -> SemanticProfileIntent | None:

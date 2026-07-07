@@ -5348,3 +5348,42 @@ def test_p0_7k_fix5b_fix3_fix2_preserve_chosi_chuoi_canonical_conflict():
     assert "chối" not in answer, answer
     assert "chuối" in summary, summary
     assert "chối" not in summary, summary
+
+
+# ---------------------------------------------------------------------------
+# P0-7K-FIX5B-FIX3-FIX2-FIX1 tests — terminal "mà" goal reminder repair
+# ---------------------------------------------------------------------------
+
+def test_p0_7k_fix5b_fix3_fix2_fix1_goal_reminder_terminal_ma_persists_clean_goal():
+    sr = _make_sr()
+    ack = (sr.handle_turn("tôi vẫn muốn làm ML mà").final_answer or "").lower()
+    summary = (sr.handle_turn("bạn nhớ gì về tôi?").final_answer or "").lower()
+    recall = (sr.handle_turn("tôi muốn làm gì?").final_answer or "").lower()
+
+    assert "đã nhớ" in ack and "ml" in ack, ack
+    assert "làm ml mà" not in ack and "ml mà" not in ack, ack
+    assert "ml" in summary and "mà" not in summary, summary
+    assert "ml" in recall and "mà" not in recall, recall
+
+
+def test_p0_7k_fix5b_fix3_fix2_fix1_goal_reminder_terminal_ma_ack_summary_recall_clean():
+    dirty_fragments = ("làm ml mà", "ml mà", "rồi mà", "bạn không nhớ", "không nhớ à", "nhớ à")
+
+    sr = _make_sr()
+    ack = (sr.handle_turn("tôi vẫn muốn làm ML mà").final_answer or "").lower()
+    summary = (sr.handle_turn("bạn nhớ gì về tôi?").final_answer or "").lower()
+    recall = (sr.handle_turn("tôi muốn làm gì?").final_answer or "").lower()
+    for answer in (ack, summary, recall):
+        assert all(fragment not in answer for fragment in dirty_fragments), answer
+    assert "ml" in summary and "ml" in recall, (summary, recall)
+
+    sr = _make_sr()
+    sr.handle_turn("tôi vẫn muốn làm ML bạn không nhớ à")
+    summary = (sr.handle_turn("bạn nhớ gì về tôi?").final_answer or "").lower()
+    assert "ml" in summary and "bạn không nhớ" not in summary and "nhớ à" not in summary, summary
+
+    sr = _make_sr()
+    sr.handle_turn("tôi đã nói là tôi muốn làm AI và ML rồi mà")
+    recall = (sr.handle_turn("tôi muốn làm gì?").final_answer or "").lower()
+    assert "ai" in recall and "ml" in recall, recall
+    assert "rồi mà" not in recall, recall

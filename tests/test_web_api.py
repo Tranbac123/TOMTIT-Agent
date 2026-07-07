@@ -330,6 +330,33 @@ class TestChat:
         assert sent["project_id"] == "my-project"
         assert sent["message"] == "test message"
 
+    def test_p0_7k_fix5b_fix3_fix2_fix1_web_probe_terminal_ma_variant(self) -> None:
+        from agent_core.web_api.app import create_app
+
+        def chat(client: TestClient, session_id: str, text: str) -> str:
+            resp = client.post(
+                "/api/chat",
+                json={"session_id": session_id, "message": text},
+            )
+            assert resp.status_code == 200, resp.text
+            return resp.json()["assistant_message"]["content"]
+
+        app = create_app()
+        with TestClient(app) as client:
+            create_resp = client.post("/api/sessions", json={})
+            assert create_resp.status_code == 201, create_resp.text
+            session_id = create_resp.json()["session_id"]
+
+            ack = chat(client, session_id, "tôi vẫn muốn làm ML mà").lower()
+            summary = chat(client, session_id, "bạn nhớ gì về tôi?").lower()
+            recall = chat(client, session_id, "tôi muốn làm gì?").lower()
+
+        dirty = ("làm ml mà", "ml mà", "rồi mà", "bạn không nhớ", "không nhớ à", "nhớ à")
+        assert "đã nhớ" in ack and "ml" in ack, ack
+        assert all(fragment not in ack for fragment in dirty), ack
+        assert "ml" in summary and all(fragment not in summary for fragment in dirty), summary
+        assert "ml" in recall and all(fragment not in recall for fragment in dirty), recall
+
     def test_chat_returns_normalized_assistant_message(self) -> None:
         adapter = MockRuntimeAdapter()
         adapter.chat_result = RuntimeChatResult(
