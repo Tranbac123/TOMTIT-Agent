@@ -1092,6 +1092,44 @@ def detect_self_name_phrase_update(text: str) -> str | None:
     return value
 
 
+# P0-7K-HOTFIX1 A: natural name assertion with the "tên" keyword (always an update).
+# Covers a leading temporal marker, an inline "bây giờ", and a trailing "mới đúng".
+_RE_NAME_TEN_ASSERT = re.compile(
+    r'^(?:(?:bây\s+giờ|hiện\s+tại|từ\s+nay|giờ)\s*,?\s+)?'
+    r'(?:tôi|mình)\s+tên\s+(?:bây\s+giờ\s+)?(?:là\s+)?(.+?)'
+    r'(?:\s+mới\s+đúng)?\s*[.!?]*\s*$',
+    re.IGNORECASE,
+)
+_RE_TEN_TOI_ASSERT = re.compile(
+    r'^(?:(?:bây\s+giờ|hiện\s+tại|từ\s+nay|giờ)\s*,?\s+)?'
+    r'tên\s+(?:tôi|mình)\s+(?:bây\s+giờ\s+)?(?:là\s+)?(.+?)'
+    r'(?:\s+mới\s+đúng)?\s*[.!?]*\s*$',
+    re.IGNORECASE,
+)
+
+
+def detect_self_name_ten_assertion(text: str) -> str | None:
+    """Return the asserted name for a natural "tên" self-name assertion, else None.
+
+    "bây giờ tôi tên là BB", "tên tôi là BB", "tôi tên là BB mới đúng" → "BB". The "tên"
+    keyword makes this an explicit name assertion, so the caller always applies it as an
+    update (no "sửa tên tôi thành X" required). Role/occupation-shaped values are rejected
+    by ``_is_self_name_phrase``, so "tôi là DEV" never reaches here (no "tên" keyword).
+    """
+    stripped = text.strip()
+    for pat in (_RE_NAME_TEN_ASSERT, _RE_TEN_TOI_ASSERT):
+        m = pat.match(stripped)
+        if m is None:
+            continue
+        value = _clean_query_value(m.group(1))
+        if not value or not _is_self_name_phrase(value):
+            return None
+        if _is_unsafe_or_sensitive_auto_value(value):
+            return None
+        return value
+    return None
+
+
 def _clean_query_value(raw: str) -> str:
     return re.sub(r"\s+", " ", raw.strip().rstrip(".!?？ ")).strip()
 
@@ -1753,6 +1791,10 @@ def answer_yes_no_memory_query(
         # P0-7G: person affection ("tôi có thích Quý không?") answers from affection memory.
         if target in affections:
             return f"Có, mình đang nhớ là bạn thích {query_value}."
+        # P0-7K-HOTFIX1 C: retracted affection ("không thích quý nữa") answers "no",
+        # never unknown — before the generic "chưa thấy" fallthrough.
+        if any(_norm_cmp(v) == target for v in snap.negative_affections):
+            return f"Không, hiện tại bạn không còn thích/quan tâm {query_value}."
         # P0-7G: durable dislike ("tôi có thích ăn cá không?" after "tôi không thích ăn cá").
         if target in dislikes or any(_matches_preference_query(v, query_value) for v in snap.dislikes):
             return f"Không, bạn từng nói là không thích {query_value}."
@@ -1995,6 +2037,10 @@ def save_affection_fact(
     Stored under relation ``affection`` so it never pollutes ordinary preference retrieval
     ("tôi thích gì?") while still answering the affection lane ("tôi thích ai?").
     """
+    # P0-7K-HOTFIX1 C: re-liking a person clears a prior negative-affection record.
+    _delete_profile_records(
+        store, subject="self", relation="negative_affection", value=value,
+    )
     return _save_profile_v2_fact(
         store, session_id,
         subject="self", relation="affection", value=value,
@@ -2049,6 +2095,9 @@ def save_external_affection_fact(
 
     Recorded as reported information (admirer → the user), never as objective truth.
     """
+    _delete_profile_records(
+        store, subject="external", relation="affection_to_user_negative", value=admirer,
+    )
     return _save_profile_v2_fact(
         store, session_id,
         subject="external", relation="affection_to_user", value=admirer,
@@ -2056,6 +2105,64 @@ def save_external_affection_fact(
         tags=["user_profile", "external", "affection"],
         original_text=original_text,
     )
+
+
+def save_negative_external_affection_fact(
+    admirer: str, store: "MemoryStoreProtocol", session_id: str, *, original_text: str = ""
+) -> bool:
+    """P0-7K-HOTFIX1 D: user-reported NEGATIVE external affection ("Quý không thích tôi").
+
+    Supersedes any prior positive external-affection record for the same person.
+    """
+    _delete_profile_records(
+        store, subject="external", relation="affection_to_user", value=admirer,
+    )
+    return _save_profile_v2_fact(
+        store, session_id,
+        subject="external", relation="affection_to_user_negative", value=admirer,
+        content=f"{admirer} không thích bạn (theo thông tin bạn cung cấp)",
+        tags=["user_profile", "external", "affection"],
+        original_text=original_text,
+    )
+
+
+def save_negative_affection_fact(
+    value: str, store: "MemoryStoreProtocol", session_id: str, *, original_text: str = ""
+) -> bool:
+    """P0-7K-HOTFIX1 C: record that the user no longer likes a person ("không thích quý nữa").
+
+    Supersedes any active positive affection so the yes/no query answers "no", not unknown.
+    """
+    _delete_profile_records(
+        store, subject="self", relation="affection", value=value,
+    )
+    return _save_profile_v2_fact(
+        store, session_id,
+        subject="self", relation="negative_affection", value=value,
+        content=f"bạn không còn thích/quan tâm {value}",
+        tags=["user_profile", "self", "affection"],
+        original_text=original_text,
+    )
+
+
+def _delete_profile_records(
+    store: "MemoryStoreProtocol", *, subject: str, relation: str, value: str,
+) -> None:
+    """Delete confirmed profile records matching (subject, relation, value)."""
+    target = _norm_cmp(value)
+    for rec in list(store.search(MemoryQuery(
+        text="", types=[MemoryType.FACT], tags=["user_profile"], limit=200,
+    ))):
+        md = rec.metadata
+        if not (md.get("confirmed") and md.get("profile_schema") in (
+            "user_profile_fact_v1", "user_profile_fact_v2"
+        )):
+            continue
+        if (
+            md.get("subject") == subject and md.get("relation") == relation
+            and _norm_cmp(md.get("value", "")) == target
+        ):
+            store.delete(rec.id, reason="affection_polarity_superseded")
 
 
 def save_self_name_update(
@@ -2394,6 +2501,34 @@ def build_repair_clarification() -> str:
     )
 
 
+# P0-7K-HOTFIX1 F: answer-feedback phrases ("bạn trả lời sai rồi", "bạn phải trả lời
+# là ...", "tôi đã cung cấp thông tin ... rồi"). These are meta-feedback about the
+# previous answer — never saved as memory, never a generic fallback.
+_RE_ANSWER_FEEDBACK = re.compile(
+    r'(?:bạn\s+)?(?:trả\s+lời|nói)\s+sai(?:\s+rồi)?'
+    r'|bạn\s+phải\s+trả\s+lời\s+là'
+    r'|(?:câu\s+)?trả\s+lời\s+(?:trước\s+)?(?:chưa|không)\s+đúng'
+    r'|tôi\s+(?:đã\s+)?cung\s+cấp\s+thông\s+tin.*rồi',
+    re.IGNORECASE,
+)
+
+
+def detect_answer_feedback(text: str) -> bool:
+    """True if text is meta-feedback about the previous answer (no memory write)."""
+    return bool(_RE_ANSWER_FEEDBACK.search(text.strip()))
+
+
+def build_answer_feedback_repair(corrected: str | None) -> str:
+    """Acknowledge answer feedback; include the corrected answer when available."""
+    if corrected:
+        return (
+            "Đúng, câu trả lời trước chưa chính xác. Câu đúng là: " + corrected
+        )
+    return (
+        "Mình hiểu là câu trả lời trước chưa đúng. Bạn muốn mình sửa phần nào?"
+    )
+
+
 # Delete-all profile memory request phrases. Requires EITHER a "hết/toàn bộ/sạch"
 # quantifier OR an explicit memory noun (ký ức/thông tin/memory), so deleting a single
 # note ("xoá ghi chú của tôi") never triggers a full memory wipe.
@@ -2651,6 +2786,9 @@ class ProfileSnapshot:
     dislikes: list[str] = field(default_factory=list)          # negative preferences
     affections: list[str] = field(default_factory=list)        # people the user likes
     external_affections: list[str] = field(default_factory=list)  # people who like the user
+    # P0-7K-HOTFIX1 C/D: retracted/negative affection evidence (answers "no", not unknown)
+    negative_affections: list[str] = field(default_factory=list)      # people the user no longer likes
+    negative_external_affections: list[str] = field(default_factory=list)  # people who do NOT like the user
     # P0-7J: names the user held before the current one (oldest-first, current excluded)
     previous_names: list[str] = field(default_factory=list)
     # P0-7K-FIX1: abilities the user has said they do NOT have ("tôi không biết bơi")
@@ -3026,8 +3164,12 @@ def collect_profile_snapshot(store: "MemoryStoreProtocol") -> ProfileSnapshot:
             _add(snap.dislikes, val)
         elif subject == "self" and rel == "affection":
             _add(snap.affections, val)
+        elif subject == "self" and rel == "negative_affection":
+            _add(snap.negative_affections, val)
         elif subject == "external" and rel == "affection_to_user":
             _add(snap.external_affections, val)
+        elif subject == "external" and rel == "affection_to_user_negative":
+            _add(snap.negative_external_affections, val)
         elif subject == "self" and rel == "occupation":
             _add(snap.occupation, val)
         elif subject == "self" and rel == "skill":
@@ -3123,6 +3265,32 @@ def _answer_entity_lookup(name: str, store: "MemoryStoreProtocol") -> str | None
     return None
 
 
+# P0-7K-HOTFIX1 B: a self-name alias resolver used in every user-memory query path.
+def _resolves_to_user(token: str, snap: "ProfileSnapshot") -> bool:
+    """True if token refers to the current user: a self-word, the current name, or an
+    old/previous self-name alias."""
+    low = token.strip().lower()
+    if low in _SELF_WORDS:
+        return True
+    tnorm = _norm_cmp(token)
+    if snap.name and _norm_cmp(snap.name) == tnorm:
+        return True
+    return any(_norm_cmp(n) == tnorm for n in snap.previous_names)
+
+
+def _self_alias_prefix(token: str, snap: "ProfileSnapshot") -> str:
+    """Return a short clarifying prefix when a self-name alias was used as the subject."""
+    low = token.strip().lower()
+    if low in _SELF_WORDS:
+        return ""
+    tnorm = _norm_cmp(token)
+    if snap.name and _norm_cmp(snap.name) == tnorm:
+        return f"{token} là bạn."
+    if any(_norm_cmp(n) == tnorm for n in snap.previous_names):
+        return f"{token} là tên cũ của bạn."
+    return ""
+
+
 def _answer_named_affection_yesno(
     subject: str, obj: str, store: "MemoryStoreProtocol"
 ) -> str:
@@ -3133,24 +3301,22 @@ def _answer_named_affection_yesno(
     - neither is the user → unrelated third parties; do not infer.
     """
     snap = collect_profile_snapshot(store)
-    self_name = _norm_cmp(snap.name or "")
 
-    def _is_user(tok: str) -> bool:
-        low = tok.strip().lower()
-        return low in _SELF_WORDS or (bool(self_name) and _norm_cmp(tok) == self_name)
-
-    subj_user = _is_user(subject)
-    obj_user = _is_user(obj)
+    subj_user = _resolves_to_user(subject, snap)
+    obj_user = _resolves_to_user(obj, snap)
 
     if subj_user and not obj_user:
-        # "do I like OBJ?"
-        if any(_norm_cmp(obj) == _norm_cmp(v) for v in snap.affections):
-            return f"Có, mình đang nhớ là bạn thích {obj}."
-        return f"Mình chưa có thông tin về việc bạn thích {obj}."
+        # "do I (the user, possibly named by an alias) like OBJ?" — delegate to the full
+        # preference/affection resolver so batch objects and retracted affections resolve.
+        prefix = _self_alias_prefix(subject, snap)
+        answer = answer_yes_no_memory_query("preference", obj, store)
+        return (prefix + " " + answer).strip() if prefix else answer
     if obj_user and not subj_user:
-        # "does SUBJ like me?"
+        # "does SUBJ like me?" — external affection (positive/negative/unknown).
         if any(_norm_cmp(subject) == _norm_cmp(v) for v in snap.external_affections):
             return f"Có, theo thông tin bạn cung cấp thì {subject} thích bạn."
+        if any(_norm_cmp(subject) == _norm_cmp(v) for v in snap.negative_external_affections):
+            return f"Không, theo thông tin bạn cung cấp thì {subject} không thích bạn."
         return (
             f"Mình không biết {subject} có thích bạn hay không nếu bạn chưa cung cấp "
             "thông tin đó."
@@ -3557,6 +3723,9 @@ def answer_profile_query(
         # P0-7G: answer from a user-reported external affection fact if one exists.
         if any(_norm_cmp(subject) == _norm_cmp(v) for v in snap.external_affections):
             return f"Có, theo thông tin bạn cung cấp thì {subject} thích bạn."
+        # P0-7K-HOTFIX1 D: negative external affection ("Quý không thích tôi").
+        if any(_norm_cmp(subject) == _norm_cmp(v) for v in snap.negative_external_affections):
+            return f"Không, theo thông tin bạn cung cấp thì {subject} không thích bạn."
         return (
             f"Mình không biết {subject} có thích bạn hay không nếu bạn chưa cung cấp "
             "thông tin đó."

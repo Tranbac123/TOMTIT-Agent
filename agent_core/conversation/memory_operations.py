@@ -40,6 +40,7 @@ from agent_core.conversation.profile_memory import (
     save_affection_fact,
     save_auto_profile_fact,
     save_favorite_fact,
+    save_negative_affection_fact,
     save_relation_update,
     save_self_name_update,
 )
@@ -748,6 +749,9 @@ def apply_memory_operation(
         removed = delete_affection_fact(op.value, store)
         if removed is None:
             return None
+        # P0-7K-HOTFIX1 C: record the retracted affection so the yes/no query answers
+        # "no" (not unknown) afterwards.
+        save_negative_affection_fact(removed, store, session_id, original_text=op.raw_text)
         return MemoryOperationOutcome(
             build_affection_removed_ack(removed), "conv:memop_affection_removed"
         )
@@ -1016,7 +1020,11 @@ def apply_memory_operations(
             continue
 
         if op.domain == "affection" and op.op in ("REMOVE", "REMOVE_PART"):
-            if delete_affection_fact(op.value, store) is not None:
+            removed_aff = delete_affection_fact(op.value, store)
+            if removed_aff is not None:
+                save_negative_affection_fact(
+                    removed_aff, store, session_id, original_text=raw_text or op.raw_text,
+                )
                 applied += 1
                 ack_parts.append(
                     f"Đã ghi nhận bạn không còn thích/quan tâm {op.value} nữa."

@@ -125,20 +125,22 @@ def test_self_name_query_immediately_after_auto_save():
 # 7. P0-7E: conflicting self-name is handled safely (no silent overwrite)
 # ---------------------------------------------------------------------------
 
-def test_self_name_conflict_does_not_silently_overwrite():
+def test_self_name_reassertion_updates_with_explicit_from_to_ack():
+    # CONV-P0 P0-7K-HOTFIX1 A (supersedes the earlier "conflict does not silently
+    # overwrite" behavior): a natural "tôi tên là X" re-assertion now UPDATES the stored
+    # name. The overwrite is explicit — the ack names both the old and the new value —
+    # so it is not a silent overwrite.
     sr = _make_sr()
     sr.handle_turn("Tôi tên là Bắc")          # auto-saved
-    s = sr.handle_turn("tôi tên là Nam")       # conflict
+    s = sr.handle_turn("tôi tên là Nam")       # explicit update
 
     assert s.status == AgentStatus.COMPLETED
     answer = s.final_answer or ""
-    # Must acknowledge existing name and not claim a new save.
-    assert "Bắc" in answer
-    assert not _auto_saved(answer), answer
-    # Original name is preserved.
+    # Update ack must name both the old and the new value (not a silent swap).
+    assert "Bắc" in answer and "Nam" in answer
+    # New name is now the stored name.
     q = sr.handle_turn("tôi tên là gì?")
-    assert "Bắc" in (q.final_answer or "")
-    assert "Nam" not in (q.final_answer or "")
+    assert "Nam" in (q.final_answer or "")
 
 
 # ---------------------------------------------------------------------------

@@ -476,8 +476,12 @@ _RE_NEGATIVE_DESIRE = re.compile(
 # the runtime (only saved when the object is the current user).
 # P0-7G-FIX4A: object uses \S+(?:\s+\S+)? (1–2 tokens) so "Bắc Trần" is captured;
 # the 1-token cap prevents over-matching long non-name phrases like "cho tôi về AI".
+# P0-7K-HOTFIX1 D: optional modifiers ("cũng/vẫn/đang") and negation ("không") — the
+# negation group (2) carries polarity so "Quý không thích tôi" becomes a negative edge.
 _RE_EXTERNAL_AFFECTION = re.compile(
-    r'^(\S+)\s+(?:thích|yêu|thương|crush|quý\s+mến)\s+(\S+(?:\s+\S+)?)\s*[.!]*\s*$',
+    r'^(\S+)\s+(?:cũng\s+|vẫn\s+|đang\s+)?(không\s+)?'
+    r'(?:thích|yêu|thương|crush|quý\s+mến|quan\s+tâm(?:\s+(?:đến|tới))?)\s+'
+    r'(\S+(?:\s+\S+)?)\s*[.!]*\s*$',
     re.IGNORECASE,
 )
 _SELF_WORD_SET: frozenset[str] = frozenset({"tôi", "mình", "tao", "ta"})
@@ -647,7 +651,8 @@ def classify_profile_semantic_intent(text: str) -> SemanticProfileIntent | None:
     m = _RE_EXTERNAL_AFFECTION.match(stripped)
     if m:
         subj = _clean_value(m.group(1))
-        obj = _clean_value(m.group(2))
+        negated = bool(m.group(2))
+        obj = _clean_value(m.group(3))
         subj_low = subj.lower()
         if (
             subj
@@ -656,8 +661,9 @@ def classify_profile_semantic_intent(text: str) -> SemanticProfileIntent | None:
             and subj_low not in _RELATION_PREFIX_WORDS
             and _is_person_affinity_value(subj)
         ):
+            category = "external_affection_negative" if negated else "external_affection"
             return SemanticProfileIntent(
-                kind="profile_write", category="external_affection",
+                kind="profile_write", category=category,
                 value=subj, relation_label=obj, write_policy="auto_safe",
             )
 

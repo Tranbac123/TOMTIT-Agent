@@ -45,6 +45,7 @@ from agent_core.conversation.profile_memory import (
     build_profile_fact_ack,
     build_relation_removal_ack,
     build_relationship_typo_clarification,
+    build_answer_feedback_repair,
     build_repair_clarification,
     build_relation_removal_not_found,
     build_relation_update_ack,
@@ -63,12 +64,14 @@ from agent_core.conversation.profile_memory import (
     detect_delete_all_confirmation,
     detect_delete_all_memory_request,
     detect_reminder_inner_clause,
+    detect_answer_feedback,
     detect_repair_intent,
     detect_relation_alias_query,
     detect_relation_removal_cmd,
     detect_relation_update_cmd,
     detect_relationship_typo,
     detect_self_name_phrase_update,
+    detect_self_name_ten_assertion,
     detect_self_name_update,
     find_existing_profile_value,
     looks_like_proper_full_name,
@@ -80,6 +83,7 @@ from agent_core.conversation.profile_memory import (
     save_auto_profile_fact,
     save_confirmed_profile_fact,
     save_external_affection_fact,
+    save_negative_external_affection_fact,
     save_relation_update,
     save_self_name_update,
 )
@@ -316,6 +320,8 @@ class SessionRuntime:
         # CONV-P0 P0-7K-FIX1: kind of the last answered profile query, for the bounded
         # goal follow-up ("và gì nữa?"). Session-local only, never persisted.
         self._last_profile_query_kind: str | None = None
+        # P0-7K-HOTFIX1 F: last answered profile query, for answer-feedback re-answering.
+        self._last_answered_query: ProfileQuery | None = None
         # CONV-P0 P0-7K-FIX3: bounded continuation context ("và ML nữa") + delete-all
         # pending confirmation. Session-local only, never persisted.
         self._last_memory_write_kind: str | None = None
@@ -770,6 +776,8 @@ class SessionRuntime:
         # P0-7F: remember that a profile query was just answered, for a "gì nữa?" follow-up.
         self._profile_query_context_turn = len(self._session.turns)
         self._last_profile_query_kind = query.kind
+        # P0-7K-HOTFIX1 F: remember the last answered query so answer-feedback can re-answer.
+        self._last_answered_query = query
         state.history.append("conv:profile_query_answered")
         state.complete(answer)
         state.history.append("conv:state_finalized")
@@ -900,7 +908,13 @@ class SessionRuntime:
         text = user_message.strip()
         current = collect_profile_snapshot(self._store).name
 
-        new_name = detect_self_name_update(text)
+        # P0-7K-HOTFIX1 A: a natural "tên" assertion ("bây giờ tôi tên là BB", "tên tôi
+        # là BB") is an explicit UPDATE to an existing name. A first-time "tôi tên là X"
+        # (no stored name) is left to the downstream confirm/conflict path so its save
+        # still flows through save_confirmed_profile_fact.
+        new_name = detect_self_name_ten_assertion(text) if current is not None else None
+        if new_name is None:
+            new_name = detect_self_name_update(text)
         if new_name is None:
             phrase = detect_self_name_phrase_update(text)
             # Implicit update requires an existing name that differs from the new phrase.
@@ -1316,6 +1330,16 @@ class SessionRuntime:
             result = self._run_memory_write_pipeline(inner, state)
             if result is not None:
                 return result
+        # P0-7K-HOTFIX1 F: answer feedback ("bạn trả lời sai rồi", "bạn phải trả lời
+        # là ...") — never write memory; re-answer the last query if we can, else clarify.
+        if detect_answer_feedback(user_message.strip()):
+            corrected: str | None = None
+            if self._last_answered_query is not None:
+                corrected = answer_profile_query(self._last_answered_query, self._store)
+            return self._complete_conv(
+                state, "conv:answer_feedback_repair",
+                build_answer_feedback_repair(corrected),
+            )
         if detect_repair_intent(user_message.strip()):
             return self._complete_conv(
                 state, "conv:repair_clarify", build_repair_clarification()
@@ -1651,9 +1675,13 @@ class SessionRuntime:
                 state, "conv:affection_saved", build_affection_memory_ack(value)
             )
 
-        # P0-7G: user-reported external affection ("Quý thích tôi"/"Quý thích Bắc").
-        if intent.category == "external_affection":
-            return self._handle_external_affection(intent, user_message, state)
+        # P0-7G / P0-7K-HOTFIX1 D: user-reported external affection, positive or negative
+        # ("Quý (cũng/vẫn) thích tôi", "Quý không thích tôi").
+        if intent.category in ("external_affection", "external_affection_negative"):
+            return self._handle_external_affection(
+                intent, user_message, state,
+                negated=(intent.category == "external_affection_negative"),
+            )
 
         # P0-7G: durable negative preference ("tôi không thích ăn cá").
         if intent.category == "negative_preference":
@@ -1739,16 +1767,19 @@ class SessionRuntime:
         )
 
     def _handle_external_affection(
-        self, intent: SemanticProfileIntent, user_message: str, state: AgentState
+        self, intent: SemanticProfileIntent, user_message: str, state: AgentState,
+        *, negated: bool = False,
     ) -> AgentState | None:
-        """P0-7G: save a user-reported external affection fact only when its object is the
-        current user (a self word or the saved self-name). Otherwise fall through."""
+        """P0-7G / P0-7K-HOTFIX1 D: save a user-reported external affection fact (positive
+        or negative) only when its object is the current user (a self word, the saved
+        name, or an old-name alias). Otherwise fall through."""
         admirer = intent.value or ""
         obj = (intent.relation_label or "").strip()
-        current = collect_profile_snapshot(self._store).name
+        snap = collect_profile_snapshot(self._store)
         obj_is_user = (
             obj.lower() in _EXTERNAL_AFFECTION_SELF_WORDS
-            or (current is not None and self._norm(obj) == self._norm(current))
+            or (snap.name is not None and self._norm(obj) == self._norm(snap.name))
+            or any(self._norm(obj) == self._norm(n) for n in snap.previous_names)
         )
         if not obj_is_user:
             # P0-7G-FIX1: unrelated third-party affection ("Quý thích Nam") — narrow
@@ -1756,6 +1787,16 @@ class SessionRuntime:
             return self._complete_conv(
                 state, "conv:unrelated_external_affection",
                 build_unrelated_external_affection_response(admirer, obj),
+            )
+        if negated:
+            if not save_negative_external_affection_fact(
+                admirer, self._store, state.session_id, original_text=user_message.strip()
+            ):
+                return None
+            self._confirmed_profile_fact_count += 1
+            return self._complete_conv(
+                state, "conv:external_affection_negative_saved",
+                f"Đã ghi nhận theo thông tin bạn cung cấp: {admirer} không thích bạn.",
             )
         if not save_external_affection_fact(
             admirer, self._store, state.session_id, original_text=user_message.strip()
