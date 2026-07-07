@@ -229,3 +229,111 @@ def test_p0_7k_hotfix1_web_manual_regression_sequence():
         chat(sid, "tôi không thích quý nữa")
         ans = chat(sid, "tôi có thích quý không?")
         assert "quý" in ans.lower() and "không" in ans.lower() and not _is_unknown(ans)
+
+
+# ===========================================================================
+# CONV-P0 P0-7K-HOTFIX1-FIX1 — repair the two Codex-blocked reminder cases
+# ===========================================================================
+#
+# FIX1.A: embedded negative-affection reminder must record negative evidence even
+#         when no active positive affection exists (was hitting a "don't save person
+#         affection" guard → follow-up answered "unknown").
+# FIX1.B: a generic "bạn không nhớ à/sao?" reminder must not fall to the generic MVP
+#         response and must not write memory — while a goal challenge that merely ends
+#         with "bạn không nhớ à" ("tôi vẫn muốn làm ML bạn không nhớ à") still saves.
+
+
+def test_p0_7k_hotfix1_fix1_embedded_negative_affection_reminder_mentions_target_and_answers_no():
+    # Standalone (no prior "tôi thích quý") — the Codex-failing case.
+    s = _make_session()
+    _reply(s, "tôi là bắc")
+    ans = _reply(s, "tôi đã nói là tôi không thích quý nữa")
+    assert not _is_generic(ans) and "quý" in ans.lower() and "không" in ans.lower()
+    q = _reply(s, "tôi có thích quý không?")
+    assert "quý" in q.lower() and "không" in q.lower() and not _is_unknown(q)
+
+
+def test_p0_7k_hotfix1_fix1_embedded_negative_affection_reminder_variants():
+    variants = [
+        "tôi đã nói tôi không thích quý nữa",
+        "tôi nói rồi mà tôi không thích quý nữa",
+        "tôi bảo rồi mà tôi không thích quý nữa",
+        "mình đã nói là mình không thích quý nữa",
+    ]
+    for text in variants:
+        s = _make_session()
+        _reply(s, "tôi thích quý")
+        ans = _reply(s, text)
+        assert not _is_generic(ans) and "quý" in ans.lower() and "không" in ans.lower(), text
+        q = _reply(s, "tôi có thích quý không?")
+        assert "quý" in q.lower() and "không" in q.lower() and not _is_unknown(q), text
+
+
+def test_p0_7k_hotfix1_fix1_generic_reminder_no_fallback_no_write():
+    for text in [
+        "tôi đã nói rồi bạn không nhớ sao?",
+        "tôi nói rồi mà bạn không nhớ à?",
+        "tôi đã nói rồi mà",
+        "bạn không nhớ à?",
+        "bạn không nhớ sao?",
+        "tôi bảo rồi mà",
+    ]:
+        s = _make_session()
+        ans = _reply(s, text)
+        assert not _is_generic(ans) and not _is_write(ans), text
+
+
+def test_p0_7k_hotfix1_fix1_generic_reminder_does_not_pollute_summary():
+    s = _make_session()
+    _reply(s, "tôi là bắc")
+    _reply(s, "tôi đã nói rồi bạn không nhớ sao?")
+    summary = _reply(s, "bạn nhớ gì về tôi").lower()
+    for bad in ("tôi đã nói rồi", "không nhớ sao", "bạn không nhớ"):
+        assert bad not in summary, summary
+
+
+def test_p0_7k_hotfix1_fix1_generic_reminder_does_not_steal_goal_challenge():
+    s = _make_session()
+    ans = _reply(s, "tôi vẫn muốn làm ML bạn không nhớ à")
+    assert not _is_generic(ans) and _is_write(ans) and "ml" in ans.lower()
+    recall = _reply(s, "tôi muốn làm gì?").lower()
+    assert "ml" in recall and "không nhớ" not in recall
+
+
+def test_p0_7k_hotfix1_fix1_web_failed_codex_cases():
+    from fastapi.testclient import TestClient
+
+    from agent_core.web_api.app import create_app
+
+    with TestClient(create_app()) as client:
+        def new_session() -> str:
+            r = client.post("/api/sessions", json={"user_id": "u1"})
+            r.raise_for_status()
+            return r.json()["session_id"]
+
+        def chat(sid: str, text: str) -> str:
+            r = client.post(
+                "/api/chat",
+                json={"session_id": sid, "message": text, "user_id": "u1"},
+            )
+            r.raise_for_status()
+            am = r.json().get("assistant_message") or {}
+            return am.get("content", "") if isinstance(am, dict) else str(am)
+
+        # Embedded negative affection reminder (standalone).
+        sid = new_session()
+        chat(sid, "tôi là bắc")
+        chat(sid, "tôi thích quý")
+        ans = chat(sid, "tôi đã nói là tôi không thích quý nữa")
+        assert "quý" in ans.lower() and "không" in ans.lower()
+        q = chat(sid, "tôi có thích quý không?")
+        assert "quý" in q.lower() and "không" in q.lower() and not _is_unknown(q)
+
+        # Generic reminder — no fallback, no write, no summary pollution.
+        sid = new_session()
+        chat(sid, "tôi là bắc")
+        ans = chat(sid, "tôi đã nói rồi bạn không nhớ sao?")
+        assert not _is_generic(ans) and not _is_write(ans)
+        summary = chat(sid, "bạn nhớ gì về tôi").lower()
+        for bad in ("tôi đã nói rồi", "không nhớ sao", "bạn không nhớ"):
+            assert bad not in summary, summary

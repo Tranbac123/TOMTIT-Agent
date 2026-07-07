@@ -2443,11 +2443,11 @@ _RE_MEMORY_CLAUSE_START = re.compile(
 )
 # "... đã nói: <inner>" — the inner clause is everything after the colon.
 _RE_REMINDER_COLON = re.compile(
-    r'(?:tôi\s+)?(?:đã\s+)?(?:nói|bảo)\s*:\s*(.+)$', re.IGNORECASE,
+    r'(?:(?:tôi|mình)\s+)?(?:đã\s+)?(?:nói|bảo)\s*:\s*(.+)$', re.IGNORECASE,
 )
-# Leading reminder markers ("tôi đã nói rồi mà ...", "tôi bảo ...", "tôi đã nói ...").
+# Leading reminder markers ("tôi đã nói rồi mà ...", "mình đã nói là ...", "tôi bảo ...").
 _RE_REMINDER_LEADING = re.compile(
-    r'^(?:tôi\s+)?(?:đã\s+)?(?:nói|bảo)(?:\s+là)?(?:\s+rồi)?(?:\s+mà)?\s*',
+    r'^(?:(?:tôi|mình)\s+)?(?:đã\s+)?(?:nói|bảo)(?:\s+là)?(?:\s+rồi)?(?:\s+mà)?\s*',
     re.IGNORECASE,
 )
 # Trailing reminder tails to drop from an inner clause ("... rồi mà").
@@ -2492,6 +2492,32 @@ def detect_repair_intent(text: str) -> bool:
     if _RE_REPAIR_STANDALONE.match(stripped):
         return True
     return bool(_RE_REMINDER_MARKER.search(stripped))
+
+
+# P0-7K-HOTFIX1-FIX1 B: a bare "you forgot" reminder, optionally led by a "tôi (đã) nói/bảo
+# rồi" marker. Anchored end-to-end so a goal/fact-bearing sentence like "tôi vẫn muốn làm ML
+# bạn không nhớ à" is NOT matched (its "tôi vẫn muốn làm ML" is not a nói/bảo lead), leaving
+# it to the goal-reminder path.
+_RE_GENERIC_REMINDER = re.compile(
+    r'^(?:(?:tôi|mình)\s+(?:đã\s+)?(?:nói|bảo)(?:\s+là)?(?:\s+rồi)?(?:\s+mà)?\s+)?'
+    r'bạn\s+(?:không|ko)\s+nhớ\s*(?:à|a|sao|hả|gì|nữa)?\s*[.!?]*\s*$',
+    re.IGNORECASE,
+)
+
+
+def detect_generic_reminder(text: str) -> bool:
+    """True if text is a generic "bạn không nhớ (à/sao)?" reminder with no embedded fact."""
+    return bool(_RE_GENERIC_REMINDER.match(text.strip()))
+
+
+def build_generic_reminder_repair(corrected: str | None) -> str:
+    """Acknowledge a generic reminder; re-answer the last query when one is resolvable."""
+    if corrected:
+        return "Đúng, mình cần kiểm tra lại thông tin đã nhớ. Câu đúng là: " + corrected
+    return (
+        "Mình hiểu là bạn đang nhắc mình đã bỏ sót thông tin. "
+        "Bạn muốn mình kiểm tra lại thông tin nào?"
+    )
 
 
 def build_repair_clarification() -> str:

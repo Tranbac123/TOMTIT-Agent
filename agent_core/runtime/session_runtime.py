@@ -46,6 +46,7 @@ from agent_core.conversation.profile_memory import (
     build_relation_removal_ack,
     build_relationship_typo_clarification,
     build_answer_feedback_repair,
+    build_generic_reminder_repair,
     build_repair_clarification,
     build_relation_removal_not_found,
     build_relation_update_ack,
@@ -65,6 +66,7 @@ from agent_core.conversation.profile_memory import (
     detect_delete_all_memory_request,
     detect_reminder_inner_clause,
     detect_answer_feedback,
+    detect_generic_reminder,
     detect_repair_intent,
     detect_relation_alias_query,
     detect_relation_removal_cmd,
@@ -83,6 +85,7 @@ from agent_core.conversation.profile_memory import (
     save_auto_profile_fact,
     save_confirmed_profile_fact,
     save_external_affection_fact,
+    save_negative_affection_fact,
     save_negative_external_affection_fact,
     save_relation_update,
     save_self_name_update,
@@ -1340,6 +1343,20 @@ class SessionRuntime:
                 state, "conv:answer_feedback_repair",
                 build_answer_feedback_repair(corrected),
             )
+        # P0-7K-HOTFIX1-FIX1 B: a generic "bạn không nhớ à/sao?" reminder — never write,
+        # never fall to the generic MVP response; re-answer the last query if resolvable,
+        # else offer a targeted clarification. Anchored so a goal challenge like "tôi vẫn
+        # muốn làm ML bạn không nhớ à" is left to the goal-reminder path.
+        if detect_generic_reminder(user_message.strip()):
+            reminder_answer: str | None = None
+            if self._last_answered_query is not None:
+                reminder_answer = answer_profile_query(
+                    self._last_answered_query, self._store
+                )
+            return self._complete_conv(
+                state, "conv:generic_reminder_repair",
+                build_generic_reminder_repair(reminder_answer),
+            )
         if detect_repair_intent(user_message.strip()):
             return self._complete_conv(
                 state, "conv:repair_clarify", build_repair_clarification()
@@ -1673,6 +1690,23 @@ class SessionRuntime:
             self._confirmed_profile_fact_count += 1
             return self._complete_conv(
                 state, "conv:affection_saved", build_affection_memory_ack(value)
+            )
+
+        # P0-7K-HOTFIX1-FIX1 A: "tôi không thích <người> nữa" with no active positive
+        # affection — record negative-affection evidence so the follow-up yes/no answers
+        # "no" (not unknown). The WITH-prior case is handled earlier by the affection
+        # REMOVE kernel; this branch only fires when nothing was there to remove.
+        if intent.category == "affection_negative":
+            value = intent.value or ""
+            if not save_negative_affection_fact(
+                value, self._store, state.session_id,
+                original_text=user_message.strip(),
+            ):
+                return None
+            self._confirmed_profile_fact_count += 1
+            return self._complete_conv(
+                state, "conv:affection_negative_saved",
+                f"Mình hiểu. Hiện tại bạn không còn thích/quan tâm {value}.",
             )
 
         # P0-7G / P0-7K-HOTFIX1 D: user-reported external affection, positive or negative

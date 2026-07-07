@@ -613,12 +613,26 @@ def classify_profile_semantic_intent(text: str) -> SemanticProfileIntent | None:
     # ("tôi không thích Quý") is routed to clarify instead of a dislike write.
     m = _RE_NEGATIVE_PREFERENCE.match(stripped)
     if m:
+        # Detect the "nữa" retraction marker on the RAW group before _clean_value strips
+        # it (it removes terminal discourse markers, "nữa" included).
+        had_retraction = bool(re.search(r'\bnữa\b\s*[.!?]*\s*$', m.group(1), flags=re.IGNORECASE))
         value = _clean_value(m.group(1))
         # P0-7J: "tôi không thích X nữa" means "no longer" — "nữa" is never part of the
         # value, so "quý nữa" cannot leak into memory as a stored object.
         value = re.sub(r'\s+nữa$', '', value, flags=re.IGNORECASE)
         if value and not _is_interrogative_value(value) and not _value_is_query_polluted(value):
             if _is_person_affinity_value(value):
+                # P0-7K-HOTFIX1-FIX1 A: "tôi không thích <người> nữa" is a retraction of
+                # affection (negative-affection evidence), not a request to disable memory.
+                # The WITH-prior case is already resolved by the affection-REMOVE kernel;
+                # this branch covers the standalone case (no active positive affection) so
+                # the follow-up yes/no answers "no", not "unknown". Bare "tôi không thích
+                # <người>" (no "nữa") stays a clarify (negation_no_affection).
+                if had_retraction and not _is_unsafe_or_sensitive_auto_value(value):
+                    return SemanticProfileIntent(
+                        kind="profile_write", category="affection_negative",
+                        value=value, write_policy="auto_safe",
+                    )
                 return SemanticProfileIntent(
                     kind="profile_write", category="negation_no_affection", value=None,
                     sensitivity="safe", write_policy="clarify",
