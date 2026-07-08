@@ -89,6 +89,9 @@ from agent_core.conversation.profile_memory import (
     save_negative_external_affection_fact,
     save_relation_update,
     save_self_name_update,
+    save_temporal_today_fact,
+    delete_temporal_today_fact,
+    delete_wants_to_eat_fact,
 )
 from agent_core.conversation.memory_operations import (
     apply_memory_operation,
@@ -215,6 +218,22 @@ _RE_DELETE_CANCEL = re.compile(
 _RE_CURRENT_STATE_SKILL = re.compile(
     r'^(?:bây\s+giờ|hiện\s+tại|giờ|từ\s+nay)\s*,?\s+'
     r'((?:tôi|mình)\s+(?:không\s+)?biết\b.+)$',
+    re.IGNORECASE,
+)
+
+# CONV-P0 P0-7K-FIX7-LITE D: today-scoped intention write ("hôm nay tôi muốn build AI") and
+# retraction ("hôm nay tôi không muốn build AI nữa"). Only "hôm nay" is supported.
+_RE_TEMPORAL_TODAY_WRITE = re.compile(
+    r'^hôm\s+nay\s+(?:tôi|mình)\s+(?:đang\s+)?muốn\s+(.+?)\s*[.!]*\s*$',
+    re.IGNORECASE,
+)
+_RE_TEMPORAL_TODAY_REMOVE = re.compile(
+    r'^hôm\s+nay\s+(?:tôi|mình)\s+không\s+muốn\s+(.+?)(?:\s+nữa)?\s*[.!]*\s*$',
+    re.IGNORECASE,
+)
+# CONV-P0 P0-7K-FIX7-LITE C: eating-desire retraction ("tôi không muốn ăn kem nữa").
+_RE_STOP_EAT = re.compile(
+    r'^(?:tôi|mình)\s+không\s+muốn\s+ăn\s+(.+?)(?:\s+nữa)?\s*[.!]*\s*$',
     re.IGNORECASE,
 )
 
@@ -471,6 +490,16 @@ class SessionRuntime:
         profile_answer = self._maybe_answer_profile_query(user_message, state)
         if profile_answer is not None:
             return profile_answer
+
+        # CONV-P0 P0-7K-FIX7-LITE priority 4.02: today-scoped intention write/retraction and
+        # eating-desire retraction. After the profile-query answer (which owns the "hôm nay
+        # ... làm gì?" and "muốn ăn gì?" query forms), before the general desire writers.
+        temporal = self._maybe_handle_temporal_today(user_message, state)
+        if temporal is not None:
+            return temporal
+        stop_eat = self._maybe_handle_stop_eat(user_message, state)
+        if stop_eat is not None:
+            return stop_eat
 
         # CONV-P0 P0-7I priority 4.1: correction lead-in stripping ("không, ", "ý tôi là ",
         # "tôi mới/vừa nói ... mà") — re-dispatches the remainder through the normal write
@@ -1768,6 +1797,21 @@ class SessionRuntime:
                 f"Đã nhớ là bạn muốn cưới {person}.",
             )
 
+        # P0-7K-FIX7-LITE C: "tôi muốn ăn <món>" — a current eating desire stored as weak
+        # preference evidence (relation wants_to_eat), kept out of the general goal set.
+        if intent.category == "wants_to_eat":
+            food = intent.value or ""
+            candidate = AutoProfileCandidate(
+                relation="wants_to_eat", value=food, original_text=user_message.strip(),
+            )
+            if not save_auto_profile_fact(candidate, self._store, state.session_id):
+                return None
+            self._confirmed_profile_fact_count += 1
+            return self._complete_conv(
+                state, "conv:wants_to_eat_saved",
+                f"Đã nhớ là hiện tại bạn muốn ăn {food}.",
+            )
+
         # P0-7K-FIX6-LITE C: "tôi muốn học <chủ đề>" — an intention to learn, stored as an
         # action goal ("học <topic>") so it appears in "muốn làm gì?", but acknowledged as
         # an intention (never "đang học", which is a current-activity fact).
@@ -1872,6 +1916,67 @@ class SessionRuntime:
         self._confirmed_profile_fact_count += 1
         return self._complete_conv(
             state, "conv:external_affection_saved", build_external_affection_ack(admirer)
+        )
+
+    def _maybe_handle_temporal_today(
+        self, user_message: str, state: AgentState
+    ) -> AgentState | None:
+        """P0-7K-FIX7-LITE D: "hôm nay tôi muốn <action>" (write) / "hôm nay tôi không muốn
+        <action> nữa" (retract) — a today-scoped intention. Not a scheduler."""
+        text = user_message.strip()
+        m = _RE_TEMPORAL_TODAY_REMOVE.match(text)
+        if m:
+            plan = re.sub(r"\s+", " ", m.group(1).strip())
+            removed = delete_temporal_today_fact(plan, self._store)
+            if removed is not None:
+                return self._complete_conv(
+                    state, "conv:temporal_today_removed",
+                    f"Đã bỏ kế hoạch hôm nay: {removed}.",
+                )
+            return self._complete_conv(
+                state, "conv:temporal_today_remove_noop",
+                f"Hôm nay mình chưa thấy kế hoạch {plan} nào để bỏ.",
+            )
+        m = _RE_TEMPORAL_TODAY_WRITE.match(text)
+        if m:
+            plan = re.sub(r"\s+", " ", m.group(1).strip())
+            # A trailing question pronoun ("làm gì") is a query, already answered above.
+            # "ai" is checked case-sensitively so the tech token "AI" ("build AI") writes.
+            tokens = plan.rstrip("?？ ").split()
+            last = tokens[-1] if tokens else ""
+            if not tokens or last.lower() in ("gì", "gi") or last == "ai":
+                return None
+            if not save_temporal_today_fact(
+                plan, self._store, state.session_id, original_text=text
+            ):
+                return None
+            self._confirmed_profile_fact_count += 1
+            return self._complete_conv(
+                state, "conv:temporal_today_saved",
+                f"Đã nhớ kế hoạch hôm nay của bạn: {plan}.",
+            )
+        return None
+
+    def _maybe_handle_stop_eat(
+        self, user_message: str, state: AgentState
+    ) -> AgentState | None:
+        """P0-7K-FIX7-LITE C: "tôi không muốn ăn <món> nữa" — drop the eating desire."""
+        m = _RE_STOP_EAT.match(user_message.strip())
+        if m is None:
+            return None
+        food = re.sub(r"\s+", " ", m.group(1).strip())
+        tokens = food.rstrip("?？ ").split()
+        if not tokens or tokens[-1].lower() in ("gì", "gi"):
+            return None
+        removed = delete_wants_to_eat_fact(food, self._store)
+        if removed is not None:
+            return self._complete_conv(
+                state, "conv:wants_to_eat_removed",
+                f"Đã bỏ, hiện tại bạn không còn muốn ăn {removed}.",
+            )
+        return self._complete_conv(
+            state, "conv:wants_to_eat_remove_noop",
+            f"Mình chưa thấy bạn đang muốn ăn {food}.",
         )
 
     def _maybe_handle_coordinated_external_affection(

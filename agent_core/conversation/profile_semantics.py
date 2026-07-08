@@ -981,6 +981,16 @@ def classify_profile_semantic_intent(text: str) -> SemanticProfileIntent | None:
         # "làm gì") is a QUERY — never store it. The query layer answers it.
         if _ends_with_question_pronoun(rest):
             return None
+        # P0-7K-FIX7-LITE C: "muốn ăn <món>" is a current eating desire, stored as weak
+        # preference evidence (never a strong long-term likes_food).
+        if low.startswith("ăn "):
+            food = _clean_value(rest[len("ăn "):])
+            if not food or _ends_with_question_pronoun(food):
+                return None
+            return SemanticProfileIntent(
+                kind="profile_write", category="wants_to_eat",
+                value=food, write_policy="auto_safe",
+            )
         # P0-7K-FIX6-LITE B: "muốn cưới <người>" is a distinct marry intention, kept out of
         # the general work/build goal set.
         if low.startswith("cưới "):

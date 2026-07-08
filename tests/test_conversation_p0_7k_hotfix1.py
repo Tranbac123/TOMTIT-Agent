@@ -720,3 +720,163 @@ def test_p0_7k_fix6_lite_fix1_web_lowercase_ai_query():
         summary = chat(sid, "bạn nhớ gì về tôi")
         assert ("AI" in summary or "học AI" in summary)
         assert "muốn học ai" not in summary.lower()
+
+
+# ===========================================================================
+# CONV-P0 P0-7K-FIX7-LITE — query view aliases + temporal intention lite
+# ===========================================================================
+
+
+def test_p0_7k_fix7_query_view_user_likes_what():
+    s = _make_session()
+    _reply(s, "tôi thích quý")
+    _reply(s, "tôi thích may")
+    _reply(s, "tôi thích ăn ổi và táo")
+    ans = _reply(s, "tôi đang thích gì?").lower()
+    assert all(x in ans for x in ("quý", "may", "ổi", "táo"))
+    # The bare "tôi thích gì?" stays preferences-only (no people).
+    bare = _reply(s, "tôi thích gì?").lower()
+    assert "quý" not in bare and "ổi" in bare
+
+
+def test_p0_7k_fix7_query_view_user_negative_affection_who():
+    s = _make_session()
+    _reply(s, "tôi thích quý")
+    _reply(s, "tôi không thích quý nữa")
+    ans = _reply(s, "tôi đang không thích ai?").lower()
+    assert not _is_generic(ans) and "quý" in ans and "không" in ans
+    empty = _reply(_make_session(), "tôi đang không thích ai?")
+    assert not _is_generic(empty) and _is_unknown(empty)
+
+
+def test_p0_7k_fix7_query_view_external_negative_affection_who():
+    s = _make_session()
+    _reply(s, "linh không thích tôi")
+    ans = _reply(s, "ai đang không thích tôi?").lower()
+    assert not _is_generic(ans) and "linh" in ans and "không" in ans
+    empty = _reply(_make_session(), "ai đang không thích tôi?")
+    assert not _is_generic(empty) and _is_unknown(empty)
+
+
+def test_p0_7k_fix7_query_view_interest_aliases():
+    s = _make_session()
+    _reply(s, "tôi thích may")
+    _reply(s, "tôi thích ăn ổi")
+    _reply(s, "tôi muốn học AI")
+    _reply(s, "tôi muốn build Agent")
+    for query in ("tôi đang quan tâm đến điều gì?", "tôi đang quan tâm đến gì?"):
+        ans = _reply(s, query)
+        low = ans.lower()
+        assert not _is_generic(ans)
+        assert "may" in low and "ổi" in low and "AI" in ans and "agent" in low
+
+
+def test_p0_7k_fix7_current_external_affection_yes_no_alias():
+    s = _make_session()
+    _reply(s, "may thích tôi")
+    yes = _reply(s, "may có đang thích tôi không?").lower()
+    assert not _is_generic(yes) and "may" in yes and "có" in yes
+    unk = _reply(s, "linh có đang thích tôi không?")
+    assert not _is_generic(unk) and "linh" in unk.lower() and _is_unknown(unk)
+
+
+def test_p0_7k_fix7_strong_co_khong_guard_no_question_mark():
+    s = _make_session()
+    _reply(s, "tôi thích quý")
+    _reply(s, "tôi thích may")
+    ans = _reply(s, "tôi có thích quý và may và linh không")
+    low = ans.lower()
+    assert not _is_generic(ans)
+    assert "quý" in low and "may" in low and "linh" in low and _is_unknown(ans)
+
+
+def test_p0_7k_fix7_strong_co_khong_guard_no_dirty_write():
+    s = _make_session()
+    _reply(s, "tôi thích quý")
+    _reply(s, "tôi thích may")
+    _reply(s, "tôi có thích quý và may và linh không")
+    summary = _reply(s, "bạn nhớ gì về tôi").lower()
+    assert "linh không" not in summary and "thích linh không" not in summary
+    # linh was never turned into a positive affection.
+    assert _is_unknown(_reply(s, "tôi có thích linh không?"))
+
+
+def test_p0_7k_fix7_wants_to_eat_weak_preference():
+    s = _make_session()
+    ans = _reply(s, "tôi muốn ăn kem")
+    assert not _is_generic(ans) and _is_write(ans) and "kem" in ans.lower()
+    assert "kem" in _reply(s, "tôi muốn ăn gì?").lower()
+    weak = _reply(s, "tôi thích kem không?").lower()
+    assert "kem" in weak and ("muốn ăn" in weak or "hứng thú" in weak)
+    # wants_to_eat is not a general work/do goal.
+    assert "kem" not in _reply(s, "tôi muốn làm gì?").lower()
+
+
+def test_p0_7k_fix7_wants_to_eat_negative_preference_overrides_weak():
+    s = _make_session()
+    _reply(s, "tôi muốn ăn kem")
+    _reply(s, "tôi không thích kem")
+    ans = _reply(s, "tôi thích kem không?").lower()
+    assert "kem" in ans and "không" in ans
+    # Retraction of the desire clears the eat query.
+    s2 = _make_session()
+    _reply(s2, "tôi muốn ăn kem")
+    _reply(s2, "tôi không muốn ăn kem nữa")
+    assert _is_unknown(_reply(s2, "tôi muốn ăn gì?"))
+
+
+def test_p0_7k_fix7_temporal_today_build_intention():
+    s = _make_session()
+    ans = _reply(s, "hôm nay tôi muốn build AI")
+    assert _is_write(ans) and "AI" in ans and "hôm nay" in ans.lower()
+    recall = _reply(s, "hôm nay tôi muốn làm gì?")
+    assert "AI" in recall and "build" in recall.lower()
+    # Today-scoped plan is not a general goal.
+    assert "AI" not in _reply(s, "tôi muốn làm gì?")
+
+
+def test_p0_7k_fix7_temporal_today_build_retraction():
+    s = _make_session()
+    _reply(s, "hôm nay tôi muốn build AI")
+    _reply(s, "hôm nay tôi không muốn build AI nữa")
+    assert _is_unknown(_reply(s, "hôm nay tôi muốn làm gì?"))
+
+
+def test_p0_7k_fix7_web_manual_sequence():
+    from fastapi.testclient import TestClient
+
+    from agent_core.web_api.app import create_app
+
+    with TestClient(create_app()) as client:
+        def new_session() -> str:
+            r = client.post("/api/sessions", json={"user_id": "u1"})
+            r.raise_for_status()
+            return r.json()["session_id"]
+
+        def chat(sid: str, text: str) -> str:
+            r = client.post(
+                "/api/chat",
+                json={"session_id": sid, "message": text, "user_id": "u1"},
+            )
+            r.raise_for_status()
+            am = r.json().get("assistant_message") or {}
+            return am.get("content", "") if isinstance(am, dict) else str(am)
+
+        sid = new_session()
+        chat(sid, "tôi là bắc")
+        chat(sid, "tôi thích quý")
+        chat(sid, "tôi thích may")
+        likes = chat(sid, "tôi đang thích gì?").lower()
+        assert "quý" in likes and "may" in likes
+        # co-khong guard: no dirty write
+        chat(sid, "tôi có thích quý và may và linh không")
+        summary = chat(sid, "bạn nhớ gì về tôi").lower()
+        assert "linh không" not in summary
+        # wants_to_eat weak
+        chat(sid, "tôi muốn ăn kem")
+        weak = chat(sid, "tôi thích kem không?").lower()
+        assert "kem" in weak and ("muốn ăn" in weak or "hứng thú" in weak)
+        # temporal today
+        today = chat(sid, "hôm nay tôi muốn build AI")
+        assert _is_write(today) and "AI" in today
+        assert "AI" in chat(sid, "hôm nay tôi muốn làm gì?")

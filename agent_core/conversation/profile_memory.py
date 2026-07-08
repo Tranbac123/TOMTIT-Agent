@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from datetime import date
 from typing import TYPE_CHECKING, Literal
 
 from agent_core.memory.memory_records import MemoryQuery
@@ -130,6 +131,10 @@ class ProfileQuery:
         "incoming_affection_set", "batch_incoming_affection", "person_affection_target",
         # P0-7K-FIX6-LITE — predicate/action fact core
         "wants_to_marry_query", "wants_to_learn_query", "wants_to_build_query",
+        # P0-7K-FIX7-LITE — query view aliases + temporal intention lite
+        "user_likes_what", "user_negative_affection_who",
+        "external_negative_affection_who", "user_interests_what",
+        "wants_to_eat_query", "temporal_today_do_query",
     ]
     value: str | None = None          # for inverse_value: the name to look up
     relation_label: str | None = None  # for relation_name / relation_existence
@@ -797,7 +802,7 @@ _RE_AFFECTION_Q = re.compile(
 # P0-7F-FIX3 Part D: third-party mind-state ("quý có thích tôi không?"). Subject (group 1)
 # is any non-self token; runtime returns a deterministic "cannot know" response, never a save.
 _RE_THIRD_PARTY_AFFECTION_Q = re.compile(
-    r'^(\S+)\s+có\s+(?:thích|yêu|quý|thương)\s+(?:tôi|mình)\s+'
+    r'^(\S+)\s+có\s+(?:đang\s+)?(?:thích|yêu|quý|thương)\s+(?:tôi|mình)\s+'
     r'(?:không|ko|hông|hong)\s*[?？]?\s*$',
     re.IGNORECASE,
 )
@@ -890,6 +895,42 @@ def _split_person_subjects(phrase: str) -> list[str]:
     """Split "Quý, May và Linh" into ["Quý", "May", "Linh"] (no empty tokens)."""
     parts = re.split(r'\s*,\s*|\s+và\s+', phrase.strip())
     return [p.strip() for p in parts if p.strip()]
+
+
+# P0-7K-FIX7-LITE A1: "tôi đang thích gì?" — everything the user currently likes (people +
+# ordinary preferences). The "đang/hiện tại" marker is REQUIRED so the bare "tôi thích gì?"
+# keeps its preferences-only lane. "gì" is case-sensitive so it never swallows a tech token.
+_RE_USER_LIKES_WHAT_Q = re.compile(
+    r'^(?:tôi|mình)\s+(?:đang|hiện\s+(?:tại|đang))\s+thích\s+(?-i:gì)\s*[?？]?\s*$',
+    re.IGNORECASE,
+)
+# P0-7K-FIX7-LITE A2: "tôi đang không thích ai?" — people the user no longer likes. The
+# marker is REQUIRED so the bare "tôi không thích ai" keeps its negation-clarify lane.
+_RE_USER_NEG_AFFECTION_WHO_Q = re.compile(
+    r'^(?:tôi|mình)\s+(?:đang|hiện\s+(?:tại|đang))\s+không\s+thích\s+(?-i:ai)\s*[?？]?\s*$',
+    re.IGNORECASE,
+)
+# P0-7K-FIX7-LITE A3: "ai (đang) không thích tôi?" — people who (per the user) do not like them.
+_RE_EXTERNAL_NEG_AFFECTION_WHO_Q = re.compile(
+    r'^ai\s+(?:đang\s+)?không\s+thích\s+(?:tôi|mình)\s*[?？]?\s*$',
+    re.IGNORECASE,
+)
+# P0-7K-FIX7-LITE A4: "tôi (đang) quan tâm đến (điều) gì?" — active interests/actions.
+_RE_USER_INTERESTS_WHAT_Q = re.compile(
+    r'^(?:tôi|mình)\s+(?:đang\s+|hiện\s+(?:tại|đang)\s+)?'
+    r'quan\s+tâm\s+(?:đến|tới)\s+(?:điều\s+)?(?-i:gì)\s*[?？]?\s*$',
+    re.IGNORECASE,
+)
+# P0-7K-FIX7-LITE C: "tôi (đang) muốn ăn gì?" — active eating desires.
+_RE_WANTS_EAT_Q = re.compile(
+    r'^(?:tôi|mình)\s+(?:đang\s+)?muốn\s+ăn\s+(?:gì|gi)\s*[?？]?\s*$',
+    re.IGNORECASE,
+)
+# P0-7K-FIX7-LITE D: "hôm nay tôi muốn làm gì?" — today-scoped intention query.
+_RE_TEMPORAL_TODAY_DO_Q = re.compile(
+    r'^hôm\s+nay\s+(?:tôi|mình)\s+(?:đang\s+)?muốn\s+(?:làm|build)\s+(?:gì|gi)\s*[?？]?\s*$',
+    re.IGNORECASE,
+)
 
 # P0-7F-FIX2/FIX3: values that leaked into the preference store before the write guards
 # were in place. Filtered at read time (never deleted from durable store).
@@ -1220,6 +1261,21 @@ def detect_profile_query(text: str) -> ProfileQuery | None:
     11. Inverse value lookup
     """
     stripped = text.strip()
+
+    # 0.00. P0-7K-FIX7-LITE query view aliases (checked before the write-side layers). Each
+    #       is a read-only view over ProfileSnapshot; none writes memory.
+    if _RE_TEMPORAL_TODAY_DO_Q.match(stripped):
+        return ProfileQuery(kind="temporal_today_do_query")
+    if _RE_WANTS_EAT_Q.match(stripped):
+        return ProfileQuery(kind="wants_to_eat_query")
+    if _RE_USER_NEG_AFFECTION_WHO_Q.match(stripped):
+        return ProfileQuery(kind="user_negative_affection_who")
+    if _RE_EXTERNAL_NEG_AFFECTION_WHO_Q.match(stripped):
+        return ProfileQuery(kind="external_negative_affection_who")
+    if _RE_USER_INTERESTS_WHAT_Q.match(stripped):
+        return ProfileQuery(kind="user_interests_what")
+    if _RE_USER_LIKES_WHAT_Q.match(stripped):
+        return ProfileQuery(kind="user_likes_what")
 
     # 0. P0-7K-FIX5C-LITE A: incoming-affection set query ("ai đang thích tôi?").
     if _RE_INCOMING_AFFECTION_SET_Q.match(stripped):
@@ -1895,6 +1951,14 @@ def answer_yes_no_memory_query(
             return (
                 f'Mình đang nhớ bạn biết {query_value}, nhưng chưa lưu "{query_value}" như một sở thích.'
             )
+        # P0-7K-FIX7-LITE C: "muốn ăn X" is weak (current-desire) evidence of interest —
+        # softer than unknown, but explicitly not a confirmed long-term preference. Runs
+        # after the explicit dislike check above, so a stated dislike always wins.
+        if any(_norm_cmp(v) == target for v in snap.eat_desires):
+            return (
+                f"Bạn từng nói muốn ăn {query_value}, nên hiện tại mình hiểu bạn có hứng "
+                f"thú với {query_value}. Mình chưa có câu rõ ràng rằng đó là sở thích lâu dài."
+            )
         return f"Mình chưa thấy thông tin rằng bạn thích {query_value}."
 
     if category == "skill":
@@ -2034,6 +2098,8 @@ def save_auto_profile_fact(
         "preference": f"bạn thích {value}",
         "goal": f"mục tiêu của bạn là {value}",
         "wants_to_marry": f"bạn muốn cưới {value}",
+        "wants_to_eat": f"bạn muốn ăn {value}",
+        "temporal_today": f"hôm nay bạn muốn {value}",
         "learning_focus": f"bạn đang học {value}",
         "habit": f"bạn hay {value}",
         "skill": f"bạn biết {value}",
@@ -2248,6 +2314,47 @@ def _delete_profile_records(
             and _norm_cmp(md.get("value", "")) == target
         ):
             store.delete(rec.id, reason="affection_polarity_superseded")
+
+
+def save_temporal_today_fact(
+    value: str, store: "MemoryStoreProtocol", session_id: str, *, original_text: str = ""
+) -> bool:
+    """P0-7K-FIX7-LITE D: record a today-scoped intention ("hôm nay tôi muốn build AI").
+
+    Not a scheduler — just a date_scope tag so retrieval can surface only today's plans.
+    """
+    return _save_profile_v2_fact(
+        store, session_id,
+        subject="self", relation="temporal_today", value=value,
+        content=f"hôm nay bạn muốn {value}",
+        tags=["user_profile", "self", "temporal_today"],
+        original_text=original_text,
+        extra_metadata={"date_scope": date.today().isoformat()},
+    )
+
+
+def delete_temporal_today_fact(value: str, store: "MemoryStoreProtocol") -> str | None:
+    """Remove a today-scoped intention matching value; return the removed value or None."""
+    snap = collect_profile_snapshot(store)
+    match = next(
+        (v for v in snap.today_intentions if _norm_cmp(v) == _norm_cmp(value)), None
+    )
+    if match is None:
+        return None
+    _delete_profile_records(store, subject="self", relation="temporal_today", value=value)
+    return match
+
+
+def delete_wants_to_eat_fact(value: str, store: "MemoryStoreProtocol") -> str | None:
+    """Remove a wants_to_eat desire matching value; return the removed value or None."""
+    snap = collect_profile_snapshot(store)
+    match = next(
+        (v for v in snap.eat_desires if _norm_cmp(v) == _norm_cmp(value)), None
+    )
+    if match is None:
+        return None
+    _delete_profile_records(store, subject="self", relation="wants_to_eat", value=value)
+    return match
 
 
 def save_self_name_update(
@@ -2904,6 +3011,8 @@ class ProfileSnapshot:
     learning: list[str] = field(default_factory=list)
     goals: list[str] = field(default_factory=list)
     marry_targets: list[str] = field(default_factory=list)  # P0-7K-FIX6-LITE wants_to_marry
+    eat_desires: list[str] = field(default_factory=list)  # P0-7K-FIX7-LITE wants_to_eat (weak)
+    today_intentions: list[str] = field(default_factory=list)  # P0-7K-FIX7-LITE temporal (today)
     preferences_personal: list[str] = field(default_factory=list)
     preferences_professional: list[str] = field(default_factory=list)
     habits: list[str] = field(default_factory=list)
@@ -3329,6 +3438,12 @@ def collect_profile_snapshot(store: "MemoryStoreProtocol") -> ProfileSnapshot:
             _add(snap.goals, val)
         elif subject == "self" and rel == "wants_to_marry":
             _add(snap.marry_targets, val)
+        elif subject == "self" and rel == "wants_to_eat":
+            _add(snap.eat_desires, val)
+        elif subject == "self" and rel == "temporal_today":
+            # P0-7K-FIX7-LITE D: only surface today's date-scoped intentions.
+            if md.get("date_scope") == date.today().isoformat():
+                _add(snap.today_intentions, val)
         elif subject == "self" and rel == "goal_focus":
             # P0-7K-FIX1: latest focus wins; also recorded as an active goal.
             snap.current_focus = val
@@ -3977,6 +4092,70 @@ def answer_profile_query(
         if any(_norm_cmp(subject) == _norm_cmp(v) for v in snap.negative_external_affections):
             return f"Theo thông tin bạn cung cấp, {subject} không thích bạn."
         return f"Mình chưa có thông tin về người mà {subject} thích."
+
+    # --- P0-7K-FIX7-LITE A1: user_likes_what ("tôi đang thích gì?") ---
+    elif query.kind == "user_likes_what":
+        snap = collect_profile_snapshot(store)
+        people = list(snap.affections)
+        things = snap.preferences_personal + snap.preferences_professional
+        if people and things:
+            return (
+                f"Bạn đang thích/quan tâm đến {_join_vietnamese_items(people)}; "
+                f"bạn cũng thích {_join_vietnamese_items(things)}."
+            )
+        if people:
+            return f"Bạn đang thích/quan tâm đến {_join_vietnamese_items(people)}."
+        if things:
+            return f"Bạn đang thích {_join_vietnamese_items(things)}."
+        return "Mình chưa thấy bạn đang thích gì."
+
+    # --- P0-7K-FIX7-LITE A2: user_negative_affection_who ("tôi đang không thích ai?") ---
+    elif query.kind == "user_negative_affection_who":
+        snap = collect_profile_snapshot(store)
+        if snap.negative_affections:
+            return (
+                "Hiện tại bạn không còn thích/quan tâm "
+                + _join_vietnamese_items(snap.negative_affections) + "."
+            )
+        return "Mình chưa thấy bạn đang không thích ai."
+
+    # --- P0-7K-FIX7-LITE A3: external_negative_affection_who ("ai đang không thích tôi?") ---
+    elif query.kind == "external_negative_affection_who":
+        snap = collect_profile_snapshot(store)
+        if snap.negative_external_affections:
+            return (
+                "Theo thông tin bạn cung cấp, "
+                + _join_vietnamese_items(snap.negative_external_affections)
+                + " không thích bạn."
+            )
+        return "Mình chưa thấy ai không thích bạn theo thông tin bạn cung cấp."
+
+    # --- P0-7K-FIX7-LITE A4: user_interests_what ("tôi đang quan tâm đến gì?") ---
+    elif query.kind == "user_interests_what":
+        snap = collect_profile_snapshot(store)
+        items = (
+            list(snap.affections)
+            + snap.preferences_personal
+            + snap.preferences_professional
+            + list(snap.goals)
+        )
+        if items:
+            return "Bạn đang quan tâm đến " + _join_vietnamese_items(items) + "."
+        return "Mình chưa thấy bạn đang quan tâm đến điều gì."
+
+    # --- P0-7K-FIX7-LITE C: wants_to_eat_query ("tôi muốn ăn gì?") ---
+    elif query.kind == "wants_to_eat_query":
+        snap = collect_profile_snapshot(store)
+        if snap.eat_desires:
+            return "Bạn đang muốn ăn " + _join_vietnamese_items(snap.eat_desires) + "."
+        return "Mình chưa thấy món nào bạn đang muốn ăn."
+
+    # --- P0-7K-FIX7-LITE D: temporal_today_do_query ("hôm nay tôi muốn làm gì?") ---
+    elif query.kind == "temporal_today_do_query":
+        snap = collect_profile_snapshot(store)
+        if snap.today_intentions:
+            return "Hôm nay bạn muốn " + _join_vietnamese_items(snap.today_intentions) + "."
+        return "Hôm nay mình chưa thấy kế hoạch/mong muốn nào còn active."
 
     # --- P0-7F-FIX4 Part C: friend_name ("bạn của tôi tên là gì?") ---
     elif query.kind == "friend_name":
