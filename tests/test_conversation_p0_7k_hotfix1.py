@@ -642,3 +642,81 @@ def test_p0_7k_fix6_lite_web_manual_predicate_sequence():
         assert "ai" in chat(sid, "tôi muốn học gì?").lower()
         do = chat(sid, "tôi muốn làm gì?").lower()
         assert "ai" in do and "cưới ai" not in do
+
+
+# ===========================================================================
+# CONV-P0 P0-7K-FIX6-LITE-FIX1 — lowercase learn-pronoun query no-fallback
+# ===========================================================================
+#
+# Lowercase "ai" is the question pronoun ("tôi muốn học ai" is a query, no write),
+# uppercase "AI" stays a valid learn topic ("tôi muốn học AI" writes).
+
+
+def test_p0_7k_fix6_lite_fix1_wants_to_learn_lowercase_ai_no_fallback_no_write():
+    for text in ("tôi muốn học ai", "mình muốn học ai"):
+        s = _make_session()
+        ans = _reply(s, text)
+        assert not _is_generic(ans) and not _is_write(ans), text
+        summary = _reply(s, "bạn nhớ gì về tôi").lower()
+        assert "muốn học ai" not in summary and "học ai" not in summary
+
+
+def test_p0_7k_fix6_lite_fix1_wants_to_learn_lowercase_ai_question_mark_no_fallback_no_write():
+    for text in ("tôi muốn học ai?", "mình muốn học ai?"):
+        s = _make_session()
+        ans = _reply(s, text)
+        assert not _is_generic(ans) and not _is_write(ans), text
+
+
+def test_p0_7k_fix6_lite_fix1_uppercase_AI_still_writes_learn_topic():
+    s = _make_session()
+    ans = _reply(s, "tôi muốn học AI")
+    assert _is_write(ans) and "ai" in ans.lower() and "đang học" not in ans.lower()
+    learn = _reply(s, "tôi muốn học gì?").lower()
+    assert "ai" in learn and not _is_unknown(learn)
+
+
+def test_p0_7k_fix6_lite_fix1_uppercase_AI_summary_is_not_dirty_query():
+    s = _make_session()
+    _reply(s, "tôi muốn học AI")
+    summary = _reply(s, "bạn nhớ gì về tôi")
+    # Uppercase "AI" is a legitimate stored topic; never scrubbed as a dirty pronoun query.
+    assert "học AI" in summary or "AI" in summary
+    assert "muốn học ai" not in summary.lower()
+    # A lowercase query BEFORE does not pollute the uppercase-AI recall.
+    s2 = _make_session()
+    _reply(s2, "tôi muốn học ai")
+    _reply(s2, "tôi muốn học AI")
+    recall = _reply(s2, "tôi muốn học gì?")
+    assert "ai" in recall.lower() and "học ai" not in recall
+
+
+def test_p0_7k_fix6_lite_fix1_web_lowercase_ai_query():
+    from fastapi.testclient import TestClient
+
+    from agent_core.web_api.app import create_app
+
+    with TestClient(create_app()) as client:
+        def new_session() -> str:
+            r = client.post("/api/sessions", json={"user_id": "u1"})
+            r.raise_for_status()
+            return r.json()["session_id"]
+
+        def chat(sid: str, text: str) -> str:
+            r = client.post(
+                "/api/chat",
+                json={"session_id": sid, "message": text, "user_id": "u1"},
+            )
+            r.raise_for_status()
+            am = r.json().get("assistant_message") or {}
+            return am.get("content", "") if isinstance(am, dict) else str(am)
+
+        sid = new_session()
+        write = chat(sid, "tôi muốn học AI")
+        assert _is_write(write) and "đang học" not in write.lower()
+        assert "ai" in chat(sid, "tôi muốn học gì?").lower()
+        pronoun = chat(sid, "tôi muốn học ai")
+        assert not _is_generic(pronoun) and not _is_write(pronoun)
+        summary = chat(sid, "bạn nhớ gì về tôi")
+        assert ("AI" in summary or "học AI" in summary)
+        assert "muốn học ai" not in summary.lower()

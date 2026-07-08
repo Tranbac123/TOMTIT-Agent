@@ -637,10 +637,11 @@ _RE_WANTS_MARRY_Q = re.compile(
     r'^(?:tôi|mình)\s+(?:đang\s+)?muốn\s+cưới\s+(?:ai|gì|gi)\s*[?？]?\s*$',
     re.IGNORECASE,
 )
-# "ai" is intentionally excluded here: "tôi muốn học AI" is a WRITE (learn AI), only "gì"
-# is the learn query pronoun.
+# P0-7K-FIX6-LITE-FIX1: lowercase "ai" is the question pronoun and routes here as a query;
+# uppercase "AI" ("tôi muốn học AI") is a tech topic and must fall through to the write
+# path. The scoped case-sensitive group ``(?-i:ai)`` matches only lowercase "ai".
 _RE_WANTS_LEARN_Q = re.compile(
-    r'^(?:tôi|mình)\s+(?:đang\s+)?muốn\s+học\s+(?:gì|gi)\s*[?？]?\s*$',
+    r'^(?:tôi|mình)\s+(?:đang\s+)?muốn\s+học\s+(?:gì|gi|(?-i:ai))\s*[?？]?\s*$',
     re.IGNORECASE,
 )
 _RE_WANTS_BUILD_Q = re.compile(
