@@ -398,6 +398,16 @@ code {
   max-width: 100%;
 }
 
+/* Centered composer row aligned with the chat message column (.chat-messages). */
+.composer-inner {
+  display: flex;
+  gap: 10px;
+  align-items: flex-end;
+  width: 100%;
+  max-width: 760px;
+  margin: 0 auto;
+}
+
 .composer-input {
   flex: 1;
   padding: 10px 12px;
@@ -406,6 +416,8 @@ code {
   min-height: 42px;
   max-height: 200px;
   overflow-y: auto;
+  resize: none;
+  line-height: 1.5;
   background: var(--bg-input);
   border: 1px solid var(--border);
 }
