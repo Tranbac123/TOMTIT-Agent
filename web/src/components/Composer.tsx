@@ -1,4 +1,14 @@
-import { useState, useRef, useCallback, type KeyboardEvent } from 'react';
+import {
+  useState,
+  useRef,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  type KeyboardEvent,
+} from 'react';
+
+// Max visual height of the auto-growing composer; past this it scrolls internally.
+const MAX_COMPOSER_HEIGHT = 200;
 
 interface ComposerProps {
   disabled: boolean;
@@ -9,14 +19,41 @@ interface ComposerProps {
 export function Composer({ disabled, onSend, variant = 'default' }: ComposerProps) {
   const [text, setText] = useState('');
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  // Set when a send just happened, so we can refocus once the composer re-enables
+  // (it is disabled while the response is pending, which drops focus).
+  const justSentRef = useRef(false);
+
+  const focusComposer = useCallback(() => {
+    requestAnimationFrame(() => textareaRef.current?.focus());
+  }, []);
+
+  // Auto-resize: reset to one line, then grow to fit content up to the max height.
+  useLayoutEffect(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = `${Math.min(el.scrollHeight, MAX_COMPOSER_HEIGHT)}px`;
+  }, [text]);
+
+  // Refocus once the composer becomes enabled again after a send. Only fires when a send
+  // just occurred, so it never steals focus while the user reads/selects old messages.
+  useEffect(() => {
+    if (!disabled && justSentRef.current) {
+      justSentRef.current = false;
+      focusComposer();
+    }
+  }, [disabled, focusComposer]);
 
   const handleSend = useCallback(() => {
     const trimmed = text.trim();
     if (!trimmed || disabled) return;
     onSend(trimmed);
     setText('');
-    textareaRef.current?.focus();
-  }, [text, disabled, onSend]);
+    justSentRef.current = true;
+    // Immediate attempt (covers the case where the composer is not disabled on send);
+    // the effect above handles the disabled-while-pending case.
+    focusComposer();
+  }, [text, disabled, onSend, focusComposer]);
 
   const handleKeyDown = useCallback(
     (e: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -66,25 +103,27 @@ export function Composer({ disabled, onSend, variant = 'default' }: ComposerProp
 
   return (
     <div className="composer">
-      <textarea
-        ref={textareaRef}
-        className="composer-input"
-        value={text}
-        onChange={(e) => setText(e.target.value)}
-        onKeyDown={handleKeyDown}
-        placeholder={disabled ? 'Waiting for response…' : 'Message TomTit — Enter to send, Shift+Enter for newline'}
-        disabled={disabled}
-        rows={1}
-        aria-label="Message input"
-      />
-      <button
-        className="composer-send"
-        onClick={handleSend}
-        disabled={disabled || !text.trim()}
-        aria-label="Send message"
-      >
-        Send
-      </button>
+      <div className="composer-inner">
+        <textarea
+          ref={textareaRef}
+          className="composer-input"
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={handleKeyDown}
+          placeholder={disabled ? 'Waiting for response…' : 'Message TomTit — Enter to send, Shift+Enter for newline'}
+          disabled={disabled}
+          rows={1}
+          aria-label="Message input"
+        />
+        <button
+          className="composer-send"
+          onClick={handleSend}
+          disabled={disabled || !text.trim()}
+          aria-label="Send message"
+        >
+          Send
+        </button>
+      </div>
     </div>
   );
 }

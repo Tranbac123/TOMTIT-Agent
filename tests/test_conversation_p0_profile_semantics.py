@@ -119,10 +119,13 @@ def test_toi_lam_bai_tap_is_not_occupation():
 # "muốn" desires
 # ---------------------------------------------------------------------------
 
-def test_muon_hoc_is_learning_topic():
+def test_muon_hoc_is_wants_to_learn():
+    # CONV-P0 P0-7K-FIX6-LITE Invariant 3 (supersedes the earlier "learning_topic"
+    # classification): "muốn học X" is an intention to learn (a wants_to_learn action
+    # goal), NOT a current-learning fact ("đang học").
     c = _c("tôi muốn học LLM")
     assert c is not None
-    assert c.category == "learning_topic"
+    assert c.category == "wants_to_learn"
     assert c.value == "LLM"
 
 
