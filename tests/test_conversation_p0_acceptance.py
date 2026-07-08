@@ -5,14 +5,17 @@ Makes ``tests/acceptance/conversation_p0_cases.yaml`` (spec
 regression gate WITHOUT implementing CONV-P0 behavior:
 
 - dataset integrity tests (count / unique ids / status distribution / impl flag);
-- the 5 ``ALREADY_IMPLEMENTED_FIRST_PASS`` cases are asserted strictly against the
-  current rule-based parser/planner path;
-- the other 35 cases (1 PARTIAL + 34 NOT_IMPLEMENTED) are ``xfail`` with an explicit
+- ``ALREADY_IMPLEMENTED_FIRST_PASS`` cases are asserted strictly. Cases whose behavior
+  lives in the bare parser/planner (greetings, calculation, recoverable-unknown) assert
+  against ``RuleBasedIntentParser`` -> ``IntentPlanner``. Cases tagged
+  ``current_runner: session_runtime`` (identity/capability/memory-read/clarification)
+  assert against the shipped ``SessionRuntime.handle_turn`` path (P0-7K burndown P1);
+- the remaining ``SPEC_REQUIRED_NOT_IMPLEMENTED`` cases are ``xfail`` with an explicit
   reason — they are an executable future contract, not a premature pass.
 
-Constraints honoured: rule-based parser/planner only; NO tool execution, NO memory,
-NO Web API, NO LLM, NO ConversationRouter/DirectResponder (none exist yet), and NO
-import of the dormant LLM parser / hybrid / skill-aware planner modules.
+Constraints honoured: no LLM parser / hybrid / skill-aware planner import; the
+``session_runtime`` cases exercise only the already-shipped rule-based conversation
+runtime (no LLM, no network).
 """
 from __future__ import annotations
 
@@ -39,10 +42,12 @@ _VALID_STATUSES = {
     "SPEC_REQUIRED_NOT_IMPLEMENTED",
     "OUT_OF_SCOPE_FOR_CONV_P0",
 }
+# P0-7K xfail-burndown P1: 8 cases whose current behavior lives in SessionRuntime were
+# promoted NOT_IMPLEMENTED->IMPLEMENTED (current_runner: session_runtime) and greeting_002
+# was promoted PARTIAL->IMPLEMENTED (passes via parser/planner). See conversation_p0_cases.yaml.
 _EXPECTED_STATUS_DISTRIBUTION = {
-    "ALREADY_IMPLEMENTED_FIRST_PASS": 5,
-    "SPEC_REQUIRED_PARTIAL": 1,
-    "SPEC_REQUIRED_NOT_IMPLEMENTED": 34,
+    "ALREADY_IMPLEMENTED_FIRST_PASS": 14,
+    "SPEC_REQUIRED_NOT_IMPLEMENTED": 26,
 }
 _REQUIRED_FIELDS = {
     "id", "group", "input", "expected_intent", "expected_handling",
@@ -50,9 +55,10 @@ _REQUIRED_FIELDS = {
     "requires_memory", "requires_tool", "requires_llm", "notes",
 }
 
-# CONV-P0 spec intent name -> the IntentName that ALREADY exists in code today.
-# Only the implemented-first-pass intents are mapped; unimplemented CONV-P0 intents
-# (IDENTITY_QUERY, MEMORY_READ, ...) are intentionally absent — their cases xfail.
+# CONV-P0 spec intent name -> the IntentName that the bare parser produces today. Only the
+# parser/planner-first-pass intents are mapped. Runtime-layer intents (IDENTITY_QUERY,
+# CAPABILITY_QUERY, MEMORY_READ, CLARIFICATION_REQUEST, ...) are handled via
+# current_runner: session_runtime, not through this map.
 _IMPLEMENTED_INTENT_MAP = {
     "GREETING": IntentName.GREETING,
     "CALCULATION_REQUEST": IntentName.CALCULATE,
@@ -71,6 +77,63 @@ def _is_static_text(text: str | None) -> bool:
     # A planner FINISH answer containing "$" is a runtime template (e.g.
     # "Kết quả: ${last.output.value}") resolved by the executor — not assertable here.
     return text is not None and "$" not in text
+
+
+# ---------------------------------------------------------------------------
+# P0-7K xfail-burndown P1: assert current SessionRuntime behavior
+# ---------------------------------------------------------------------------
+# Some CONV-P0 cases (identity/capability/memory-read/clarification) are handled by the
+# shipped conversation runtime, NOT by the bare parser/planner path. Cases tagged
+# ``current_runner: session_runtime`` are executed against SessionRuntime.handle_turn and
+# asserted against their frozen must_include_any / must_not_include contract.
+
+_GENERIC_FALLBACK_MARKERS = ("rule-based mvp", "tôi chưa xử lý được yêu cầu này")
+# A forbidden "over-claim" phrase (e.g. "tự động làm mọi thứ") is acceptable when the answer
+# NEGATES it ("không tự động làm mọi thứ"). must_not_include forbids the AFFIRMATIVE claim.
+_NEGATION_PREFIXES = ("không", "chưa", "đừng", "không có")
+
+
+def _affirmatively_present(low_answer: str, phrase: str) -> bool:
+    """True if ``phrase`` occurs NOT immediately preceded by a negation word.
+
+    Keeps must_not_include truthful: "tự động làm mọi thứ" inside "không tự động làm mọi
+    thứ" is a correct humility statement, not the forbidden over-claim.
+    """
+    idx = 0
+    while True:
+        hit = low_answer.find(phrase, idx)
+        if hit == -1:
+            return False
+        preceding = low_answer[:hit].rstrip()
+        if not any(preceding.endswith(neg) for neg in _NEGATION_PREFIXES):
+            return True
+        idx = hit + len(phrase)
+
+
+def _assert_session_runtime_case(case) -> None:
+    from agent_core.runtime.runtime_agent import build_local_agent
+    from agent_core.runtime.session_runtime import SessionRuntime
+
+    agent, store = build_local_agent()
+    session = SessionRuntime(agent, store)
+    answer = session.handle_turn(case["input"]).final_answer or ""
+    low = answer.lower()
+
+    # 1. Never the generic rule-based fallback.
+    assert not any(m in low for m in _GENERIC_FALLBACK_MARKERS), (
+        f"{case['id']}: generic fallback answer {answer!r}"
+    )
+    # 2. Must include at least one expected key phrase (case-insensitive).
+    include_any = case.get("must_include_any") or []
+    if include_any:
+        assert any(tok.lower() in low for tok in include_any), (
+            f"{case['id']}: none of {include_any} found in answer {answer!r}"
+        )
+    # 3. Must not AFFIRMATIVELY claim any forbidden over-reach (negation-aware).
+    for forbidden in case.get("must_not_include") or []:
+        assert not _affirmatively_present(low, forbidden.lower()), (
+            f"{case['id']}: forbidden over-claim {forbidden!r} present in answer {answer!r}"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -111,7 +174,8 @@ def test_conversation_p0_dataset_implementation_authorized_false():
 
 
 # ---------------------------------------------------------------------------
-# Per-case current behavior (40 parametrized): 5 strict, 35 xfail
+# Per-case current behavior (40 parametrized): 14 strict (6 parser/planner + 8 session_runtime),
+# 26 xfail future-contract.
 # ---------------------------------------------------------------------------
 
 @pytest.mark.parametrize("case", _CASES, ids=[c["id"] for c in _CASES])
@@ -125,6 +189,11 @@ def test_conversation_p0_case_current_behavior(case):
         pytest.xfail(
             "CONV-P0 behavior not implemented by frozen dataset status; P0-1 runner only."
         )
+
+    # P0-7K burndown P1: runtime-layer cases assert against SessionRuntime.handle_turn.
+    if case.get("current_runner") == "session_runtime":
+        _assert_session_runtime_case(case)
+        return
 
     # Strict path — current rule-based parser/planner only (no tools/memory/LLM).
     parsed = RuleBasedIntentParser().parse(case["input"])

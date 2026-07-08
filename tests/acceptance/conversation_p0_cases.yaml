@@ -26,13 +26,13 @@ cases:
     input: "Chào buổi sáng"
     expected_intent: "GREETING"
     expected_handling: "DIRECT_RESPONSE"
-    current_status: "SPEC_REQUIRED_PARTIAL"
+    current_status: "ALREADY_IMPLEMENTED_FIRST_PASS"
     must_include_any: ["Chào", "buổi sáng", "giúp"]
     must_not_include: ["UNKNOWN"]
     requires_memory: false
     requires_tool: false
     requires_llm: false
-    notes: "Greeting regex matches 'chào'; 'buổi sáng' nuance not specifically handled yet."
+    notes: "Greeting regex matches 'chào'; P0-7K burndown P1 promoted PARTIAL->IMPL (passes via parser/planner)."
 
   - id: greeting_003_hi
     group: greeting_identity
@@ -52,7 +52,8 @@ cases:
     input: "Bạn là ai?"
     expected_intent: "IDENTITY_QUERY"
     expected_handling: "DIRECT_RESPONSE"
-    current_status: "SPEC_REQUIRED_NOT_IMPLEMENTED"
+    current_status: "ALREADY_IMPLEMENTED_FIRST_PASS"
+    current_runner: "session_runtime"
     must_include_any: ["TOMTIT", "TomTit", "AI Agent", "trợ lý"]
     must_not_include: ["tự động làm mọi thứ", "không có giới hạn"]
     requires_memory: false
@@ -65,7 +66,8 @@ cases:
     input: "Bạn làm được gì?"
     expected_intent: "CAPABILITY_QUERY"
     expected_handling: "DIRECT_RESPONSE"
-    current_status: "SPEC_REQUIRED_NOT_IMPLEMENTED"
+    current_status: "ALREADY_IMPLEMENTED_FIRST_PASS"
+    current_runner: "session_runtime"
     must_include_any: ["tính", "memory", "ghi chú", "review", "lập kế hoạch"]
     must_not_include: ["làm được mọi thứ", "không giới hạn"]
     requires_memory: false
@@ -78,7 +80,8 @@ cases:
     input: "Bạn khác chatbot thường ở đâu?"
     expected_intent: "CAPABILITY_QUERY"
     expected_handling: "DIRECT_RESPONSE"
-    current_status: "SPEC_REQUIRED_NOT_IMPLEMENTED"
+    current_status: "ALREADY_IMPLEMENTED_FIRST_PASS"
+    current_runner: "session_runtime"
     must_include_any: ["memory", "runtime", "tool", "giới hạn", "kiểm soát"]
     must_not_include: ["hoàn toàn tự động", "không cần kiểm soát"]
     requires_memory: false
@@ -91,7 +94,8 @@ cases:
     input: "Tôi nên dùng bạn như thế nào?"
     expected_intent: "CAPABILITY_QUERY"
     expected_handling: "DIRECT_RESPONSE"
-    current_status: "SPEC_REQUIRED_NOT_IMPLEMENTED"
+    current_status: "ALREADY_IMPLEMENTED_FIRST_PASS"
+    current_runner: "session_runtime"
     must_include_any: ["ví dụ", "tính", "ghi chú", "review"]
     must_not_include: ["UNKNOWN"]
     requires_memory: false
@@ -104,7 +108,8 @@ cases:
     input: "Bạn có giới hạn gì?"
     expected_intent: "CAPABILITY_QUERY"
     expected_handling: "DIRECT_RESPONSE"
-    current_status: "SPEC_REQUIRED_NOT_IMPLEMENTED"
+    current_status: "ALREADY_IMPLEMENTED_FIRST_PASS"
+    current_runner: "session_runtime"
     must_include_any: ["giới hạn", "cần xác nhận", "có thể sai", "không tự ý"]
     must_not_include: ["không có giới hạn"]
     requires_memory: false
@@ -118,7 +123,8 @@ cases:
     input: "Bạn đang nhớ gì về tôi?"
     expected_intent: "MEMORY_READ"
     expected_handling: "MEMORY_FLOW"
-    current_status: "SPEC_REQUIRED_NOT_IMPLEMENTED"
+    current_status: "ALREADY_IMPLEMENTED_FIRST_PASS"
+    current_runner: "session_runtime"
     must_include_any: ["memory", "nhớ", "chưa có", "theo thông tin"]
     must_not_include: ["bịa", "chắc chắn 100%"]
     requires_memory: true
@@ -408,7 +414,8 @@ cases:
     input: "Review đoạn code này"
     expected_intent: "CODE_REVIEW_REQUEST"
     expected_handling: "CLARIFICATION"
-    current_status: "SPEC_REQUIRED_NOT_IMPLEMENTED"
+    current_status: "ALREADY_IMPLEMENTED_FIRST_PASS"
+    current_runner: "session_runtime"
     must_include_any: ["gửi code", "review", "đoạn code"]
     must_not_include: ["UNKNOWN"]
     requires_memory: false
@@ -513,13 +520,14 @@ cases:
     input: "làm cái đó đi"
     expected_intent: "CLARIFICATION_REQUEST"
     expected_handling: "CLARIFICATION"
-    current_status: "SPEC_REQUIRED_NOT_IMPLEMENTED"
+    current_status: "ALREADY_IMPLEMENTED_FIRST_PASS"
+    current_runner: "session_runtime"
     must_include_any: ["cái đó", "việc nào", "nói rõ"]
     must_not_include: ["UNKNOWN"]
     requires_memory: false
     requires_tool: false
     requires_llm: false
-    notes: "Ambiguous reference. Currently falls into recoverable UNKNOWN."
+    notes: "Ambiguous reference; SessionRuntime asks for missing context (clarification)."
 
   - id: fallback_005_unknown_question_marks
     group: fallback_calculation
