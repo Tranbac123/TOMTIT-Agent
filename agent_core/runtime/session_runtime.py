@@ -45,6 +45,8 @@ from agent_core.conversation.profile_memory import (
     build_profile_fact_ack,
     build_relation_removal_ack,
     build_relationship_typo_clarification,
+    build_answer_feedback_repair,
+    build_generic_reminder_repair,
     build_repair_clarification,
     build_relation_removal_not_found,
     build_relation_update_ack,
@@ -63,12 +65,15 @@ from agent_core.conversation.profile_memory import (
     detect_delete_all_confirmation,
     detect_delete_all_memory_request,
     detect_reminder_inner_clause,
+    detect_answer_feedback,
+    detect_generic_reminder,
     detect_repair_intent,
     detect_relation_alias_query,
     detect_relation_removal_cmd,
     detect_relation_update_cmd,
     detect_relationship_typo,
     detect_self_name_phrase_update,
+    detect_self_name_ten_assertion,
     detect_self_name_update,
     find_existing_profile_value,
     looks_like_proper_full_name,
@@ -80,8 +85,13 @@ from agent_core.conversation.profile_memory import (
     save_auto_profile_fact,
     save_confirmed_profile_fact,
     save_external_affection_fact,
+    save_negative_affection_fact,
+    save_negative_external_affection_fact,
     save_relation_update,
     save_self_name_update,
+    save_temporal_today_fact,
+    delete_temporal_today_fact,
+    delete_wants_to_eat_fact,
 )
 from agent_core.conversation.memory_operations import (
     apply_memory_operation,
@@ -211,6 +221,43 @@ _RE_CURRENT_STATE_SKILL = re.compile(
     re.IGNORECASE,
 )
 
+# CONV-P0 P0-7K-FIX7-LITE D: today-scoped intention write ("hôm nay tôi muốn build AI") and
+# retraction ("hôm nay tôi không muốn build AI nữa"). Only "hôm nay" is supported.
+_RE_TEMPORAL_TODAY_WRITE = re.compile(
+    r'^hôm\s+nay\s+(?:tôi|mình)\s+(?:đang\s+)?muốn\s+(.+?)\s*[.!]*\s*$',
+    re.IGNORECASE,
+)
+_RE_TEMPORAL_TODAY_REMOVE = re.compile(
+    r'^hôm\s+nay\s+(?:tôi|mình)\s+không\s+muốn\s+(.+?)(?:\s+nữa)?\s*[.!]*\s*$',
+    re.IGNORECASE,
+)
+# CONV-P0 P0-7K-FIX7-LITE C: eating-desire retraction ("tôi không muốn ăn kem nữa").
+_RE_STOP_EAT = re.compile(
+    r'^(?:tôi|mình)\s+không\s+muốn\s+ăn\s+(.+?)(?:\s+nữa)?\s*[.!]*\s*$',
+    re.IGNORECASE,
+)
+
+# CONV-P0 P0-7K-FIX6-LITE G: coordinated external affection ("may và quý đều thích tôi").
+# The "đều" marker signals multiple person→USER edges; subjects (group1) split on "và"/",".
+_RE_COORDINATED_EXTERNAL_AFFECTION = re.compile(
+    r'^(.+?(?:\s*,\s*|\s+và\s+).+?)\s+(?:đều\s+)?(?:cũng\s+|vẫn\s+|đang\s+)?'
+    r'(?:thích|yêu|thương|quý\s+mến|quan\s+tâm(?:\s+(?:đến|tới))?)\s+'
+    r'(\S+)\s*[.!]*\s*$',
+    re.IGNORECASE,
+)
+
+# CONV-P0 P0-7K-FIX5C-LITE G: affection statement whose subject is an old/current self
+# alias ("bây giờ bắc thích quý"). Optional temporal marker; group1=subject, group2=verb,
+# group3=object. When the subject resolves to the user, the sentence is rewritten to
+# first person and re-dispatched, so person-vs-preference disambiguation is reused.
+_RE_ALIAS_AFFECTION_STMT = re.compile(
+    r'^(?:(?:bây\s+giờ|hiện\s+tại|giờ|từ\s+nay)\s*,?\s+)?'
+    r'(\S+(?:\s+\S+)?)\s+(?:cũng\s+|vẫn\s+|đang\s+)?'
+    r'(thích|yêu|thương|quý\s+mến|quan\s+tâm(?:\s+(?:đến|tới))?)\s+'
+    r'(\S+(?:\s+\S+)?)\s*[.!]*\s*$',
+    re.IGNORECASE,
+)
+
 # CONV-P0 P0-7K-FIX5A: obvious meta-feedback about a prior answer. This is not a memory
 # write and not a full repair system; it simply avoids fallback/pollution.
 _RE_PROFILE_FEEDBACK_NO_WRITE = re.compile(
@@ -316,6 +363,8 @@ class SessionRuntime:
         # CONV-P0 P0-7K-FIX1: kind of the last answered profile query, for the bounded
         # goal follow-up ("và gì nữa?"). Session-local only, never persisted.
         self._last_profile_query_kind: str | None = None
+        # P0-7K-HOTFIX1 F: last answered profile query, for answer-feedback re-answering.
+        self._last_answered_query: ProfileQuery | None = None
         # CONV-P0 P0-7K-FIX3: bounded continuation context ("và ML nữa") + delete-all
         # pending confirmation. Session-local only, never persisted.
         self._last_memory_write_kind: str | None = None
@@ -442,6 +491,16 @@ class SessionRuntime:
         if profile_answer is not None:
             return profile_answer
 
+        # CONV-P0 P0-7K-FIX7-LITE priority 4.02: today-scoped intention write/retraction and
+        # eating-desire retraction. After the profile-query answer (which owns the "hôm nay
+        # ... làm gì?" and "muốn ăn gì?" query forms), before the general desire writers.
+        temporal = self._maybe_handle_temporal_today(user_message, state)
+        if temporal is not None:
+            return temporal
+        stop_eat = self._maybe_handle_stop_eat(user_message, state)
+        if stop_eat is not None:
+            return stop_eat
+
         # CONV-P0 P0-7I priority 4.1: correction lead-in stripping ("không, ", "ý tôi là ",
         # "tôi mới/vừa nói ... mà") — re-dispatches the remainder through the normal write
         # detectors so a correction is understood instead of falling to a generic fallback.
@@ -488,6 +547,20 @@ class SessionRuntime:
         rel_cmd = self._maybe_handle_relation_cmd(user_message, state)
         if rel_cmd is not None:
             return rel_cmd
+
+        # CONV-P0 P0-7K-FIX6-LITE priority 4.44: coordinated external affection
+        # ("may và quý đều thích tôi") → one person→USER edge per subject.
+        coord_aff = self._maybe_handle_coordinated_external_affection(user_message, state)
+        if coord_aff is not None:
+            return coord_aff
+
+        # CONV-P0 P0-7K-FIX5C-LITE priority 4.45: an affection statement whose subject is an
+        # old/current self alias ("bây giờ bắc thích quý") → rewrite to first person and
+        # re-dispatch as a self-affection write. Before the semantic layer, which would
+        # otherwise read the name-subject as an (unrelated) external affection.
+        alias_aff = self._maybe_handle_alias_affection_statement(user_message, state)
+        if alias_aff is not None:
+            return alias_aff
 
         # CONV-P0 P0-7F priority 4.5: semantic profile layer — skill/occupation/preference
         # split/person-affinity/muốn desires/relationship variants + yes-no + "gì nữa" follow-up.
@@ -770,6 +843,8 @@ class SessionRuntime:
         # P0-7F: remember that a profile query was just answered, for a "gì nữa?" follow-up.
         self._profile_query_context_turn = len(self._session.turns)
         self._last_profile_query_kind = query.kind
+        # P0-7K-HOTFIX1 F: remember the last answered query so answer-feedback can re-answer.
+        self._last_answered_query = query
         state.history.append("conv:profile_query_answered")
         state.complete(answer)
         state.history.append("conv:state_finalized")
@@ -900,7 +975,13 @@ class SessionRuntime:
         text = user_message.strip()
         current = collect_profile_snapshot(self._store).name
 
-        new_name = detect_self_name_update(text)
+        # P0-7K-HOTFIX1 A: a natural "tên" assertion ("bây giờ tôi tên là BB", "tên tôi
+        # là BB") is an explicit UPDATE to an existing name. A first-time "tôi tên là X"
+        # (no stored name) is left to the downstream confirm/conflict path so its save
+        # still flows through save_confirmed_profile_fact.
+        new_name = detect_self_name_ten_assertion(text) if current is not None else None
+        if new_name is None:
+            new_name = detect_self_name_update(text)
         if new_name is None:
             phrase = detect_self_name_phrase_update(text)
             # Implicit update requires an existing name that differs from the new phrase.
@@ -1316,6 +1397,30 @@ class SessionRuntime:
             result = self._run_memory_write_pipeline(inner, state)
             if result is not None:
                 return result
+        # P0-7K-HOTFIX1 F: answer feedback ("bạn trả lời sai rồi", "bạn phải trả lời
+        # là ...") — never write memory; re-answer the last query if we can, else clarify.
+        if detect_answer_feedback(user_message.strip()):
+            corrected: str | None = None
+            if self._last_answered_query is not None:
+                corrected = answer_profile_query(self._last_answered_query, self._store)
+            return self._complete_conv(
+                state, "conv:answer_feedback_repair",
+                build_answer_feedback_repair(corrected),
+            )
+        # P0-7K-HOTFIX1-FIX1 B: a generic "bạn không nhớ à/sao?" reminder — never write,
+        # never fall to the generic MVP response; re-answer the last query if resolvable,
+        # else offer a targeted clarification. Anchored so a goal challenge like "tôi vẫn
+        # muốn làm ML bạn không nhớ à" is left to the goal-reminder path.
+        if detect_generic_reminder(user_message.strip()):
+            reminder_answer: str | None = None
+            if self._last_answered_query is not None:
+                reminder_answer = answer_profile_query(
+                    self._last_answered_query, self._store
+                )
+            return self._complete_conv(
+                state, "conv:generic_reminder_repair",
+                build_generic_reminder_repair(reminder_answer),
+            )
         if detect_repair_intent(user_message.strip()):
             return self._complete_conv(
                 state, "conv:repair_clarify", build_repair_clarification()
@@ -1651,9 +1756,84 @@ class SessionRuntime:
                 state, "conv:affection_saved", build_affection_memory_ack(value)
             )
 
-        # P0-7G: user-reported external affection ("Quý thích tôi"/"Quý thích Bắc").
-        if intent.category == "external_affection":
-            return self._handle_external_affection(intent, user_message, state)
+        # P0-7K-HOTFIX1-FIX1 A: "tôi không thích <người> nữa" with no active positive
+        # affection — record negative-affection evidence so the follow-up yes/no answers
+        # "no" (not unknown). The WITH-prior case is handled earlier by the affection
+        # REMOVE kernel; this branch only fires when nothing was there to remove.
+        if intent.category == "affection_negative":
+            value = intent.value or ""
+            if not save_negative_affection_fact(
+                value, self._store, state.session_id,
+                original_text=user_message.strip(),
+            ):
+                return None
+            self._confirmed_profile_fact_count += 1
+            return self._complete_conv(
+                state, "conv:affection_negative_saved",
+                f"Mình hiểu. Hiện tại bạn không còn thích/quan tâm {value}.",
+            )
+
+        # P0-7G / P0-7K-HOTFIX1 D: user-reported external affection, positive or negative
+        # ("Quý (cũng/vẫn) thích tôi", "Quý không thích tôi").
+        if intent.category in ("external_affection", "external_affection_negative"):
+            return self._handle_external_affection(
+                intent, user_message, state,
+                negated=(intent.category == "external_affection_negative"),
+            )
+
+        # P0-7K-FIX6-LITE B: "tôi muốn cưới <người>" — a marry intention stored distinctly
+        # (never surfaced by the general "muốn làm gì?" goal query).
+        if intent.category == "wants_to_marry":
+            person = intent.value or ""
+            candidate = AutoProfileCandidate(
+                relation="wants_to_marry", value=person,
+                original_text=user_message.strip(),
+            )
+            if not save_auto_profile_fact(candidate, self._store, state.session_id):
+                return None
+            self._confirmed_profile_fact_count += 1
+            return self._complete_conv(
+                state, "conv:wants_to_marry_saved",
+                f"Đã nhớ là bạn muốn cưới {person}.",
+            )
+
+        # P0-7K-FIX7-LITE C: "tôi muốn ăn <món>" — a current eating desire stored as weak
+        # preference evidence (relation wants_to_eat), kept out of the general goal set.
+        if intent.category == "wants_to_eat":
+            food = intent.value or ""
+            candidate = AutoProfileCandidate(
+                relation="wants_to_eat", value=food, original_text=user_message.strip(),
+            )
+            if not save_auto_profile_fact(candidate, self._store, state.session_id):
+                return None
+            self._confirmed_profile_fact_count += 1
+            return self._complete_conv(
+                state, "conv:wants_to_eat_saved",
+                f"Đã nhớ là hiện tại bạn muốn ăn {food}.",
+            )
+
+        # P0-7K-FIX6-LITE C: "tôi muốn học <chủ đề>" — an intention to learn, stored as an
+        # action goal ("học <topic>") so it appears in "muốn làm gì?", but acknowledged as
+        # an intention (never "đang học", which is a current-activity fact).
+        if intent.category == "wants_to_learn":
+            topic = intent.value or ""
+            goal_value = f"học {topic}"
+            if goal_already_active(goal_value, self._store):
+                return self._complete_conv(
+                    state, "conv:wants_to_learn_saved",
+                    f"Đã nhớ là bạn muốn học {topic}.",
+                )
+            candidate = AutoProfileCandidate(
+                relation="goal", value=goal_value, original_text=user_message.strip(),
+            )
+            if not save_auto_profile_fact(candidate, self._store, state.session_id):
+                return None
+            self._confirmed_profile_fact_count += 1
+            self._last_memory_write_kind = "goal"
+            return self._complete_conv(
+                state, "conv:wants_to_learn_saved",
+                f"Đã nhớ là bạn muốn học {topic}.",
+            )
 
         # P0-7G: durable negative preference ("tôi không thích ăn cá").
         if intent.category == "negative_preference":
@@ -1738,17 +1918,154 @@ class SessionRuntime:
             state, "conv:external_affection_saved", build_external_affection_ack(admirer)
         )
 
-    def _handle_external_affection(
-        self, intent: SemanticProfileIntent, user_message: str, state: AgentState
+    def _maybe_handle_temporal_today(
+        self, user_message: str, state: AgentState
     ) -> AgentState | None:
-        """P0-7G: save a user-reported external affection fact only when its object is the
-        current user (a self word or the saved self-name). Otherwise fall through."""
-        admirer = intent.value or ""
-        obj = (intent.relation_label or "").strip()
-        current = collect_profile_snapshot(self._store).name
+        """P0-7K-FIX7-LITE D: "hôm nay tôi muốn <action>" (write) / "hôm nay tôi không muốn
+        <action> nữa" (retract) — a today-scoped intention. Not a scheduler."""
+        text = user_message.strip()
+        m = _RE_TEMPORAL_TODAY_REMOVE.match(text)
+        if m:
+            plan = re.sub(r"\s+", " ", m.group(1).strip())
+            removed = delete_temporal_today_fact(plan, self._store)
+            if removed is not None:
+                return self._complete_conv(
+                    state, "conv:temporal_today_removed",
+                    f"Đã bỏ kế hoạch hôm nay: {removed}.",
+                )
+            return self._complete_conv(
+                state, "conv:temporal_today_remove_noop",
+                f"Hôm nay mình chưa thấy kế hoạch {plan} nào để bỏ.",
+            )
+        m = _RE_TEMPORAL_TODAY_WRITE.match(text)
+        if m:
+            plan = re.sub(r"\s+", " ", m.group(1).strip())
+            # A trailing question pronoun ("làm gì") is a query, already answered above.
+            # "ai" is checked case-sensitively so the tech token "AI" ("build AI") writes.
+            tokens = plan.rstrip("?？ ").split()
+            last = tokens[-1] if tokens else ""
+            if not tokens or last.lower() in ("gì", "gi") or last == "ai":
+                return None
+            if not save_temporal_today_fact(
+                plan, self._store, state.session_id, original_text=text
+            ):
+                return None
+            self._confirmed_profile_fact_count += 1
+            return self._complete_conv(
+                state, "conv:temporal_today_saved",
+                f"Đã nhớ kế hoạch hôm nay của bạn: {plan}.",
+            )
+        return None
+
+    def _maybe_handle_stop_eat(
+        self, user_message: str, state: AgentState
+    ) -> AgentState | None:
+        """P0-7K-FIX7-LITE C: "tôi không muốn ăn <món> nữa" — drop the eating desire."""
+        m = _RE_STOP_EAT.match(user_message.strip())
+        if m is None:
+            return None
+        food = re.sub(r"\s+", " ", m.group(1).strip())
+        tokens = food.rstrip("?？ ").split()
+        if not tokens or tokens[-1].lower() in ("gì", "gi"):
+            return None
+        removed = delete_wants_to_eat_fact(food, self._store)
+        if removed is not None:
+            return self._complete_conv(
+                state, "conv:wants_to_eat_removed",
+                f"Đã bỏ, hiện tại bạn không còn muốn ăn {removed}.",
+            )
+        return self._complete_conv(
+            state, "conv:wants_to_eat_remove_noop",
+            f"Mình chưa thấy bạn đang muốn ăn {food}.",
+        )
+
+    def _maybe_handle_coordinated_external_affection(
+        self, user_message: str, state: AgentState
+    ) -> AgentState | None:
+        """P0-7K-FIX6-LITE G: "may và quý (đều) thích tôi" → save one person→USER affection
+        edge per subject. Fires only for ≥2 subjects whose object resolves to the user."""
+        m = _RE_COORDINATED_EXTERNAL_AFFECTION.match(user_message.strip())
+        if m is None:
+            return None
+        obj = m.group(2).strip()
+        snap = collect_profile_snapshot(self._store)
         obj_is_user = (
             obj.lower() in _EXTERNAL_AFFECTION_SELF_WORDS
-            or (current is not None and self._norm(obj) == self._norm(current))
+            or (snap.name is not None and self._norm(obj) == self._norm(snap.name))
+            or any(self._norm(obj) == self._norm(n) for n in snap.previous_names)
+        )
+        if not obj_is_user:
+            return None
+        subjects = [
+            s.strip() for s in re.split(r'\s*,\s*|\s+và\s+', m.group(1).strip()) if s.strip()
+        ]
+        # Any admirer that is itself a self word is not a real third-party subject.
+        subjects = [s for s in subjects if s.lower() not in _EXTERNAL_AFFECTION_SELF_WORDS]
+        if len(subjects) < 2:
+            return None
+        saved: list[str] = []
+        for subj in subjects:
+            if save_external_affection_fact(
+                subj, self._store, state.session_id, original_text=user_message.strip()
+            ):
+                saved.append(subj)
+        if not saved:
+            return None
+        self._confirmed_profile_fact_count += len(saved)
+        joined = " và ".join(saved) if len(saved) <= 2 else (
+            ", ".join(saved[:-1]) + " và " + saved[-1]
+        )
+        return self._complete_conv(
+            state, "conv:coordinated_external_affection_saved",
+            f"Đã nhớ theo thông tin bạn cung cấp: {joined} thích bạn.",
+        )
+
+    def _maybe_handle_alias_affection_statement(
+        self, user_message: str, state: AgentState
+    ) -> AgentState | None:
+        """P0-7K-FIX5C-LITE G: "bây giờ bắc thích quý" where "bắc" is an old/current self
+        alias → rewrite to "tôi thích quý" and re-dispatch so it becomes a self-affection
+        write (reusing the person-vs-preference disambiguation). Bare self-word subjects
+        ("tôi thích quý") already flow through the normal pipeline, so they are left alone."""
+        m = _RE_ALIAS_AFFECTION_STMT.match(user_message.strip())
+        if m is None:
+            return None
+        subject = m.group(1).strip()
+        verb = m.group(2).strip()
+        obj = m.group(3).strip()
+        if subject.lower() in _EXTERNAL_AFFECTION_SELF_WORDS or obj.lower() in ("ai",):
+            return None
+        snap = collect_profile_snapshot(self._store)
+        subject_is_user = (
+            (snap.name is not None and self._norm(subject) == self._norm(snap.name))
+            or any(self._norm(subject) == self._norm(n) for n in snap.previous_names)
+        )
+        if not subject_is_user:
+            return None
+        # The object must not itself be the user ("bắc thích BB" is not a self-affection).
+        obj_is_user = (
+            obj.lower() in _EXTERNAL_AFFECTION_SELF_WORDS
+            or (snap.name is not None and self._norm(obj) == self._norm(snap.name))
+            or any(self._norm(obj) == self._norm(n) for n in snap.previous_names)
+        )
+        if obj_is_user:
+            return None
+        return self._run_memory_write_pipeline(f"tôi {verb} {obj}", state)
+
+    def _handle_external_affection(
+        self, intent: SemanticProfileIntent, user_message: str, state: AgentState,
+        *, negated: bool = False,
+    ) -> AgentState | None:
+        """P0-7G / P0-7K-HOTFIX1 D: save a user-reported external affection fact (positive
+        or negative) only when its object is the current user (a self word, the saved
+        name, or an old-name alias). Otherwise fall through."""
+        admirer = intent.value or ""
+        obj = (intent.relation_label or "").strip()
+        snap = collect_profile_snapshot(self._store)
+        obj_is_user = (
+            obj.lower() in _EXTERNAL_AFFECTION_SELF_WORDS
+            or (snap.name is not None and self._norm(obj) == self._norm(snap.name))
+            or any(self._norm(obj) == self._norm(n) for n in snap.previous_names)
         )
         if not obj_is_user:
             # P0-7G-FIX1: unrelated third-party affection ("Quý thích Nam") — narrow
@@ -1756,6 +2073,16 @@ class SessionRuntime:
             return self._complete_conv(
                 state, "conv:unrelated_external_affection",
                 build_unrelated_external_affection_response(admirer, obj),
+            )
+        if negated:
+            if not save_negative_external_affection_fact(
+                admirer, self._store, state.session_id, original_text=user_message.strip()
+            ):
+                return None
+            self._confirmed_profile_fact_count += 1
+            return self._complete_conv(
+                state, "conv:external_affection_negative_saved",
+                f"Đã ghi nhận theo thông tin bạn cung cấp: {admirer} không thích bạn.",
             )
         if not save_external_affection_fact(
             admirer, self._store, state.session_id, original_text=user_message.strip()

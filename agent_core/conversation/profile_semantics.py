@@ -245,6 +245,27 @@ def _is_interrogative_value(value: str) -> bool:
     return any(v.lower().endswith(end) for end in _INTERROGATIVE_ENDINGS)
 
 
+# P0-7K-FIX6-LITE: question pronouns that must never be stored as a memory object. A
+# desire/goal object that is (or ends with) one of these is a QUERY, not a write. "ai" is
+# handled separately (case-sensitive) so the tech token "AI" ("muốn học AI") is not treated
+# as the question word "ai".
+_QUESTION_PRONOUN_TAILS: tuple[str, ...] = (
+    "gì", "gi", "nào", "đâu", "dau", "bao giờ", "khi nào",
+)
+
+
+def _ends_with_question_pronoun(value: str) -> bool:
+    """True if value is, or ends with, a bare question pronoun ("cưới ai", "học gì")."""
+    raw = re.sub(r"\s+", " ", value.strip()).rstrip("?？.! ")
+    low = raw.lower()
+    if any(low == p or low.endswith(" " + p) for p in _QUESTION_PRONOUN_TAILS):
+        return True
+    # Lowercase "ai" is the question word; uppercase "AI" is the technology token.
+    tokens = raw.split()
+    last = tokens[-1] if tokens else ""
+    return last == "ai"
+
+
 def _is_person_affinity_value(value: str) -> bool:
     """True if value looks like a single human name (not an activity/professional thing).
 
@@ -476,8 +497,12 @@ _RE_NEGATIVE_DESIRE = re.compile(
 # the runtime (only saved when the object is the current user).
 # P0-7G-FIX4A: object uses \S+(?:\s+\S+)? (1–2 tokens) so "Bắc Trần" is captured;
 # the 1-token cap prevents over-matching long non-name phrases like "cho tôi về AI".
+# P0-7K-HOTFIX1 D: optional modifiers ("cũng/vẫn/đang") and negation ("không") — the
+# negation group (2) carries polarity so "Quý không thích tôi" becomes a negative edge.
 _RE_EXTERNAL_AFFECTION = re.compile(
-    r'^(\S+)\s+(?:thích|yêu|thương|crush|quý\s+mến)\s+(\S+(?:\s+\S+)?)\s*[.!]*\s*$',
+    r'^(\S+)\s+(?:cũng\s+|vẫn\s+|đang\s+)?(không\s+)?'
+    r'(?:thích|yêu|thương|crush|quý\s+mến|quan\s+tâm(?:\s+(?:đến|tới))?)\s+'
+    r'(\S+(?:\s+\S+)?)\s*[.!]*\s*$',
     re.IGNORECASE,
 )
 _SELF_WORD_SET: frozenset[str] = frozenset({"tôi", "mình", "tao", "ta"})
@@ -609,12 +634,26 @@ def classify_profile_semantic_intent(text: str) -> SemanticProfileIntent | None:
     # ("tôi không thích Quý") is routed to clarify instead of a dislike write.
     m = _RE_NEGATIVE_PREFERENCE.match(stripped)
     if m:
+        # Detect the "nữa" retraction marker on the RAW group before _clean_value strips
+        # it (it removes terminal discourse markers, "nữa" included).
+        had_retraction = bool(re.search(r'\bnữa\b\s*[.!?]*\s*$', m.group(1), flags=re.IGNORECASE))
         value = _clean_value(m.group(1))
         # P0-7J: "tôi không thích X nữa" means "no longer" — "nữa" is never part of the
         # value, so "quý nữa" cannot leak into memory as a stored object.
         value = re.sub(r'\s+nữa$', '', value, flags=re.IGNORECASE)
         if value and not _is_interrogative_value(value) and not _value_is_query_polluted(value):
             if _is_person_affinity_value(value):
+                # P0-7K-HOTFIX1-FIX1 A: "tôi không thích <người> nữa" is a retraction of
+                # affection (negative-affection evidence), not a request to disable memory.
+                # The WITH-prior case is already resolved by the affection-REMOVE kernel;
+                # this branch covers the standalone case (no active positive affection) so
+                # the follow-up yes/no answers "no", not "unknown". Bare "tôi không thích
+                # <người>" (no "nữa") stays a clarify (negation_no_affection).
+                if had_retraction and not _is_unsafe_or_sensitive_auto_value(value):
+                    return SemanticProfileIntent(
+                        kind="profile_write", category="affection_negative",
+                        value=value, write_policy="auto_safe",
+                    )
                 return SemanticProfileIntent(
                     kind="profile_write", category="negation_no_affection", value=None,
                     sensitivity="safe", write_policy="clarify",
@@ -647,7 +686,8 @@ def classify_profile_semantic_intent(text: str) -> SemanticProfileIntent | None:
     m = _RE_EXTERNAL_AFFECTION.match(stripped)
     if m:
         subj = _clean_value(m.group(1))
-        obj = _clean_value(m.group(2))
+        negated = bool(m.group(2))
+        obj = _clean_value(m.group(3))
         subj_low = subj.lower()
         if (
             subj
@@ -656,8 +696,9 @@ def classify_profile_semantic_intent(text: str) -> SemanticProfileIntent | None:
             and subj_low not in _RELATION_PREFIX_WORDS
             and _is_person_affinity_value(subj)
         ):
+            category = "external_affection_negative" if negated else "external_affection"
             return SemanticProfileIntent(
-                kind="profile_write", category="external_affection",
+                kind="profile_write", category=category,
                 value=subj, relation_label=obj, write_policy="auto_safe",
             )
 
@@ -936,10 +977,39 @@ def classify_profile_semantic_intent(text: str) -> SemanticProfileIntent | None:
                 kind="profile_write", category="sensitive", value=rest,
                 sensitivity="unsafe", write_policy="block",
             )
-        if low.startswith("học "):
+        # P0-7K-FIX6-LITE F: a trailing question pronoun ("cưới ai", "học gì", "build gì",
+        # "làm gì") is a QUERY — never store it. The query layer answers it.
+        if _ends_with_question_pronoun(rest):
+            return None
+        # P0-7K-FIX7-LITE C: "muốn ăn <món>" is a current eating desire, stored as weak
+        # preference evidence (never a strong long-term likes_food).
+        if low.startswith("ăn "):
+            food = _clean_value(rest[len("ăn "):])
+            if not food or _ends_with_question_pronoun(food):
+                return None
             return SemanticProfileIntent(
-                kind="profile_write", category="learning_topic",
-                value=_clean_value(rest[4:]), write_policy="auto_safe",
+                kind="profile_write", category="wants_to_eat",
+                value=food, write_policy="auto_safe",
+            )
+        # P0-7K-FIX6-LITE B: "muốn cưới <người>" is a distinct marry intention, kept out of
+        # the general work/build goal set.
+        if low.startswith("cưới "):
+            person = _clean_value(rest[len("cưới "):])
+            if not person or _ends_with_question_pronoun(person):
+                return None
+            return SemanticProfileIntent(
+                kind="profile_write", category="wants_to_marry",
+                value=person, write_policy="auto_safe",
+            )
+        # P0-7K-FIX6-LITE C: "muốn học <chủ đề>" is an intention to learn (an action goal),
+        # NOT a current-learning fact ("đang học").
+        if low.startswith("học "):
+            topic = _clean_value(rest[4:])
+            if not topic or _ends_with_question_pronoun(topic):
+                return None
+            return SemanticProfileIntent(
+                kind="profile_write", category="wants_to_learn",
+                value=topic, write_policy="auto_safe",
             )
         if low.startswith("trở thành ") or low.startswith("build ") or _has_professional_token(rest):
             return SemanticProfileIntent(

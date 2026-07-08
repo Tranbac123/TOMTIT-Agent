@@ -247,6 +247,19 @@ def is_technical_explanation_request(text: str) -> bool:
     return bool(_RE_TECHNICAL_COMPARISON.search(stripped))
 
 
+# P0-7K-FIX7-LITE B: a "<subject> có <predicate> ... không" frame is a yes/no QUESTION even
+# without a "?", so it must never be routed to the write-side extractor.
+_RE_CO_KHONG_QUESTION = re.compile(
+    r'^\S.*\bcó\b.+\bkh[ôo]ng\b\s*(?:nh[ỉể]|ạ|à|vậy|hả)?\s*[?？!.]*\s*$',
+    re.IGNORECASE,
+)
+
+
+def is_co_khong_question(text: str) -> bool:
+    """True if text is a "... có ... không" yes/no question (with or without "?")."""
+    return bool(_RE_CO_KHONG_QUESTION.match(text.strip()))
+
+
 def detect_memory_complexity(text: str) -> str | None:
     """Return a complexity reason if text needs semantic extraction, else None.
 
@@ -254,6 +267,9 @@ def detect_memory_complexity(text: str) -> str | None:
     """
     stripped = re.sub(r"\s+", " ", text.strip())
     if not stripped or "?" in stripped or "？" in stripped:
+        return None
+    # P0-7K-FIX7-LITE B: never extract from a "có ... không" question missing its "?".
+    if is_co_khong_question(stripped):
         return None
     low = stripped.lower()
     if is_technical_explanation_request(stripped):
