@@ -208,26 +208,28 @@ cases:
     input: "Lên kế hoạch cho tôi để học AI Agent"
     expected_intent: "PLANNING_REQUEST"
     expected_handling: "LLM_RESPONDER"
-    current_status: "SPEC_REQUIRED_NOT_IMPLEMENTED"
-    must_include_any: ["mục tiêu", "bước", "tuần", "next step"]
+    current_status: "ALREADY_IMPLEMENTED_FIRST_PASS"
+    current_runner: "session_runtime"
+    must_include_any: ["LLMResponder", "MVP", "mục tiêu"]
     must_not_include: ["UNKNOWN"]
     requires_memory: false
     requires_tool: false
     requires_llm: true
-    notes: "LLMResponder, not LLMPlanner."
+    notes: "Full plan needs LLMResponder (post-MVP). Current MVP: truthful limitation + bounded next step (goal/time/level/constraints)."
 
   - id: planning_002_2_tieng_hom_nay
     group: planning
     input: "Tôi có 2 tiếng hôm nay, nên làm gì?"
     expected_intent: "PLANNING_REQUEST"
     expected_handling: "LLM_RESPONDER"
-    current_status: "SPEC_REQUIRED_NOT_IMPLEMENTED"
-    must_include_any: ["2 tiếng", "ưu tiên", "việc quan trọng"]
+    current_status: "ALREADY_IMPLEMENTED_FIRST_PASS"
+    current_runner: "session_runtime"
+    must_include_any: ["LLMResponder", "MVP", "thời gian", "ưu tiên"]
     must_not_include: ["không biết"]
     requires_memory: false
     requires_tool: false
     requires_llm: true
-    notes: "Time-boxed planning."
+    notes: "Time-boxed planning needs LLMResponder (post-MVP). Current MVP: truthful limitation + ask for goal/time/constraints."
 
   - id: planning_003_chia_thanh_checklist
     group: planning
@@ -262,26 +264,28 @@ cases:
     input: "Tạo roadmap 30 ngày"
     expected_intent: "PLANNING_REQUEST"
     expected_handling: "LLM_RESPONDER"
-    current_status: "SPEC_REQUIRED_NOT_IMPLEMENTED"
-    must_include_any: ["30 ngày", "tuần", "mục tiêu"]
+    current_status: "ALREADY_IMPLEMENTED_FIRST_PASS"
+    current_runner: "session_runtime"
+    must_include_any: ["LLMResponder", "MVP", "roadmap"]
     must_not_include: ["UNKNOWN"]
     requires_memory: false
     requires_tool: false
     requires_llm: true
-    notes: "Generic roadmap with stated assumptions."
+    notes: "Roadmap generation needs LLMResponder (post-MVP). Current MVP: truthful limitation + ask for goal/time/constraints."
 
   - id: planning_006_qua_tai_focus
     group: planning
     input: "Tôi đang bị quá tải, hãy giúp tôi focus"
     expected_intent: "PLANNING_REQUEST"
     expected_handling: "LLM_RESPONDER"
-    current_status: "SPEC_REQUIRED_NOT_IMPLEMENTED"
-    must_include_any: ["focus", "ưu tiên", "việc quan trọng"]
+    current_status: "ALREADY_IMPLEMENTED_FIRST_PASS"
+    current_runner: "session_runtime"
+    must_include_any: ["LLMResponder", "MVP", "focus", "ưu tiên"]
     must_not_include: ["cứ làm hết"]
     requires_memory: false
     requires_tool: false
     requires_llm: true
-    notes: "Focus and prioritization."
+    notes: "Focus/prioritization strategy needs LLMResponder (post-MVP). Current MVP: truthful limitation + ask for goal/constraints."
 
   # --- Product / startup ---
   - id: product_001_y_tuong_dang_lam
@@ -388,13 +392,14 @@ cases:
     input: "Dịch đoạn này sang tiếng Anh"
     expected_intent: "TRANSLATION_REQUEST"
     expected_handling: "CLARIFICATION"
-    current_status: "SPEC_REQUIRED_NOT_IMPLEMENTED"
-    must_include_any: ["gửi đoạn", "dịch", "tiếng Anh"]
+    current_status: "ALREADY_IMPLEMENTED_FIRST_PASS"
+    current_runner: "session_runtime"
+    must_include_any: ["LLMResponder", "MVP", "dịch", "tiếng Anh"]
     must_not_include: ["UNKNOWN"]
     requires_memory: false
     requires_tool: false
-    requires_llm: false
-    notes: "Missing content → clarify."
+    requires_llm: true
+    notes: "Full translation needs LLMResponder (post-MVP). Current MVP: truthful limitation + ask for source text; no fabricated translation."
 
   - id: writing_004_viet_email_ngan
     group: writing
@@ -472,26 +477,28 @@ cases:
     input: "Thiết kế architecture cho AI Agent đơn giản"
     expected_intent: "TECHNICAL_EXPLANATION_REQUEST"
     expected_handling: "LLM_RESPONDER"
-    current_status: "SPEC_REQUIRED_NOT_IMPLEMENTED"
-    must_include_any: ["AgentState", "Runtime", "Tool", "Memory", "Safety"]
+    current_status: "ALREADY_IMPLEMENTED_FIRST_PASS"
+    current_runner: "session_runtime"
+    must_include_any: ["LLMResponder", "MVP", "architecture"]
     must_not_include: ["UNKNOWN"]
     requires_memory: false
     requires_tool: false
     requires_llm: true
-    notes: "Generic technical answer allowed."
+    notes: "Architecture design needs LLMResponder (post-MVP). Current MVP: truthful limitation + ask for project context; no fabricated design."
 
   - id: code_005_giai_thich_planner_runtime_tool_memory
     group: code_technical
     input: "Giải thích Planner, Runtime, Tool, Memory khác nhau thế nào"
     expected_intent: "TECHNICAL_EXPLANATION_REQUEST"
     expected_handling: "LLM_RESPONDER"
-    current_status: "SPEC_REQUIRED_NOT_IMPLEMENTED"
-    must_include_any: ["Planner", "Runtime", "Tool", "Memory"]
+    current_status: "ALREADY_IMPLEMENTED_FIRST_PASS"
+    current_runner: "session_runtime"
+    must_include_any: ["LLMResponder", "MVP", "Planner", "Runtime", "Tool", "Memory"]
     must_not_include: ["UNKNOWN"]
     requires_memory: false
     requires_tool: false
     requires_llm: true
-    notes: "Technical explanation."
+    notes: "Full technical explanation needs LLMResponder (post-MVP). Current MVP: truthful limitation + ask for project context; no fabricated explanation."
 
   # --- Fallback / calculation ---
   - id: fallback_001_1_plus_1

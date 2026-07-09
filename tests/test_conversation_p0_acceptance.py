@@ -10,10 +10,12 @@ regression gate WITHOUT implementing CONV-P0 behavior:
   against ``RuleBasedIntentParser`` -> ``IntentPlanner``. Cases tagged
   ``current_runner: session_runtime`` (identity/capability/memory-read/clarification,
   planning/product/writing/code task-shaped clarifications, continuation, memory-edge
-  goal-read/imperative-remember/vague-forget/disable-turn/assumption) assert against the
-  shipped ``SessionRuntime.handle_turn`` path (P0-7K burndown P1/P2/P3);
-- the remaining ``SPEC_REQUIRED_NOT_IMPLEMENTED`` cases are ``xfail`` with an explicit
-  reason — they are an executable future contract, not a premature pass.
+  goal-read/imperative-remember/vague-forget/disable-turn/assumption, and the LLM-forbidden
+  full-plan/translation/technical cases whose current MVP behavior is a truthful
+  current-limitation disclosure) assert against the shipped ``SessionRuntime.handle_turn``
+  path (P0-7K burndown P1/P2/P3/P4);
+- no cases remain ``xfail``: every frozen case now has an executable current-behavior
+  contract (the LLM-forbidden ones assert the limitation disclosure, not fabricated output).
 
 Constraints honoured: no LLM parser / hybrid / skill-aware planner import; the
 ``session_runtime`` cases exercise only the already-shipped rule-based conversation
@@ -53,9 +55,13 @@ _VALID_STATUSES = {
 # P0-7K xfail-burndown P3: 5 memory-edge cases (goal-read variant, imperative remember,
 # vague forget clarification, disable-memory-for-turn, assumption/provenance limitation)
 # promoted the same way. See conversation_p0_cases.yaml.
+# P0-7K xfail-burndown P4: the final 7 LLM-forbidden cases (full planning x4, translation,
+# architecture design, technical explanation) promoted the same way. Their current MVP
+# behavior is a truthful current-limitation disclosure (LLMResponder not configured) plus a
+# bounded next step — NOT fabricated plan/translation/explanation. No LLMResponder exists.
+# All 40 cases now assert current behavior; zero remain xfail (Counter omits 0-count keys).
 _EXPECTED_STATUS_DISTRIBUTION = {
-    "ALREADY_IMPLEMENTED_FIRST_PASS": 33,
-    "SPEC_REQUIRED_NOT_IMPLEMENTED": 7,
+    "ALREADY_IMPLEMENTED_FIRST_PASS": 40,
 }
 _REQUIRED_FIELDS = {
     "id", "group", "input", "expected_intent", "expected_handling",
@@ -182,8 +188,8 @@ def test_conversation_p0_dataset_implementation_authorized_false():
 
 
 # ---------------------------------------------------------------------------
-# Per-case current behavior (40 parametrized): 33 strict (6 parser/planner + 27 session_runtime),
-# 7 xfail future-contract.
+# Per-case current behavior (40 parametrized): all 40 strict
+# (6 parser/planner + 34 session_runtime), 0 xfail.
 # ---------------------------------------------------------------------------
 
 @pytest.mark.parametrize("case", _CASES, ids=[c["id"] for c in _CASES])

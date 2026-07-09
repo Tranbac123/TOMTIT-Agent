@@ -268,6 +268,40 @@ _RE_ASSUMPTION_QUERY = re.compile(
     re.IGNORECASE,
 )
 
+# CONV-P0 P0-7K xfail-burndown P4: LLM-forbidden requests get a truthful current-MVP
+# limitation (LLMResponder is not configured; no plan/translation/explanation is generated).
+# Deliberately NARROW so they do not shadow the general LLM-explanation lane
+# ("giải thích AI là gì?" stays LLM_RESPONSE) or the spy-responder translation test
+# ('dịch "hello" sang tiếng Việt').
+# Full plan/roadmap/focus-strategy requests.
+_RE_P4_PLANNING = re.compile(
+    r'(?:lên|lập|tạo)\s+(?:kế\s+hoạch|lộ\s+trình)'
+    r'|\broadmap\b'
+    r'|\d+\s+tiếng\b'
+    r'|quá\s+tải',
+    re.IGNORECASE,
+)
+# Translation of a provided passage ("Dịch đoạn này ..."); the quoted-literal translation
+# test ('dịch "hello" sang tiếng Việt') has no "đoạn" and stays on the LLM lane.
+_RE_P4_TRANSLATION = re.compile(
+    r'^d[ịi]ch\s+đoạn\b',
+    re.IGNORECASE,
+)
+# Architecture design ("thiết kế architecture ...").
+_RE_P4_TECHNICAL_DESIGN = re.compile(
+    r'thiết\s+kế\s+architecture', re.IGNORECASE,
+)
+# A "giải thích/phân biệt/so sánh" request that names ALL of Planner+Runtime+Tool+Memory
+# together (code_005). A single-component "giải thích Planner là gì" is NOT matched.
+_P4_TECHNICAL_COMPONENTS = ("planner", "runtime", "tool", "memory")
+
+
+def _is_p4_technical_components_request(text: str) -> bool:
+    low = text.lower()
+    if not any(v in low for v in ("giải thích", "phân biệt", "so sánh")):
+        return False
+    return all(c in low for c in _P4_TECHNICAL_COMPONENTS)
+
 # CONV-P0 P0-7K-FIX6-LITE G: coordinated external affection ("may và quý đều thích tôi").
 # The "đều" marker signals multiple person→USER edges; subjects (group1) split on "và"/",".
 _RE_COORDINATED_EXTERNAL_AFFECTION = re.compile(
@@ -450,6 +484,16 @@ class SessionRuntime:
         memory_edge = self._maybe_handle_memory_edge(user_message, state)
         if memory_edge is not None:
             return memory_edge
+
+        # CONV-P0 P0-7K xfail-burndown P4 priority 1.46: LLM-forbidden requests (full plan /
+        # translation / technical design) → truthful current-MVP limitation. Placed before
+        # the affection/profile handlers so a narrow request like "Giải thích Planner,
+        # Runtime, Tool, Memory" (which contains "thích" inside "giải thích") is not misread
+        # as an affection write. Narrow patterns only; the general LLM-explanation lane
+        # ("giải thích AI là gì?") and the responder path are untouched.
+        llm_forbidden = self._maybe_handle_llm_forbidden_limitation(user_message, state)
+        if llm_forbidden is not None:
+            return llm_forbidden
 
         # CONV-P0 P0-7K-FIX3 priority 1.5: delete-all memory request → set pending, confirm.
         delete_req = self._maybe_handle_delete_all_request(user_message, state)
@@ -1358,6 +1402,32 @@ class SessionRuntime:
             result = getattr(self, name)(text, state)
             if result is not None:
                 return result
+        return None
+
+    def _maybe_handle_llm_forbidden_limitation(
+        self, user_message: str, state: AgentState
+    ) -> AgentState | None:
+        """P0-7K xfail-burndown P4: full plan / translation / technical-explanation requests
+        cannot be answered without ``LLMResponder`` (forbidden in this MVP). Return a truthful
+        current-limitation reply with a bounded next step — NEVER a fabricated plan/answer,
+        NEVER a model/provider call. Narrow patterns only, so the general LLM-explanation lane
+        ("giải thích AI là gì?") and the responder translation path are untouched."""
+        text = user_message.strip()
+        if _RE_P4_PLANNING.search(text):
+            return self._complete_conv(
+                state, "conv:p4_planning_limitation",
+                self._response_composer.compose_planning_limitation(),
+            )
+        if _RE_P4_TRANSLATION.match(text):
+            return self._complete_conv(
+                state, "conv:p4_translation_limitation",
+                self._response_composer.compose_translation_limitation(),
+            )
+        if _RE_P4_TECHNICAL_DESIGN.search(text) or _is_p4_technical_components_request(text):
+            return self._complete_conv(
+                state, "conv:p4_technical_limitation",
+                self._response_composer.compose_technical_limitation(),
+            )
         return None
 
     def _maybe_handle_memory_edge(

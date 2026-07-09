@@ -127,6 +127,34 @@ _ASSUMPTION_QUERY_LIMITATION = (
     "chưa thể liệt kê chính xác phần nào là giả định — mình chỉ chắc về những gì bạn đã nói rõ."
 )
 
+# P0-7K xfail-burndown P4: current-limitation contracts for LLM-forbidden requests. These
+# NEVER generate a full plan/translation/explanation (LLMResponder is not configured in this
+# MVP); each states the limitation and offers a bounded next step. No model/provider is
+# invoked.
+
+# planning_001/002/005/006: full plan/roadmap/focus-strategy generation.
+_PLANNING_LIMITATION = (
+    "Mình chưa có LLMResponder trong MVP này để lập kế hoạch/roadmap hay chiến lược focus "
+    "đầy đủ. Bạn hãy gửi mục tiêu cụ thể, thời gian bạn có, trình độ hiện tại và ràng buộc; "
+    "mình sẽ giúp chia nhỏ, sắp xếp ưu tiên các việc quan trọng, hoặc hỏi thêm thông tin "
+    "cần thiết."
+)
+
+# writing_003: full translation (no source text and no responder configured).
+_TRANSLATION_LIMITATION = (
+    "Mình chưa có LLMResponder trong MVP này để dịch nội dung đầy đủ, và bạn cũng chưa gửi "
+    "đoạn văn bản cần dịch. Bạn hãy gửi đoạn văn bản muốn dịch sang tiếng Anh; hiện tại mình "
+    "có thể ghi nhận yêu cầu hoặc hỏi thêm ngữ cảnh."
+)
+
+# code_004/005: architecture design / technical explanation generation.
+_TECHNICAL_LIMITATION = (
+    "Mình chưa có LLMResponder trong MVP này để giải thích/thiết kế kỹ thuật đầy đủ (ví dụ "
+    "architecture, hay các thành phần như Planner, Runtime, Tool, Memory, Safety). Bạn hãy "
+    "gửi ngữ cảnh project, ràng buộc và phần muốn phân tích; mình sẽ hỏi rõ hoặc định tuyến "
+    "theo khả năng hiện tại."
+)
+
 _LLM_RESPONSE_UNCONFIGURED = (
     "Hiện tại trong runtime này LLMResponder chưa được cấu hình, nên tôi chưa thể trả lời yêu cầu mở này. "
     "Tôi chưa gọi tool, memory hay thực hiện hành động nào."
@@ -189,6 +217,15 @@ class ResponseComposer:
 
     def compose_assumption_query_limitation(self) -> str:
         return _ASSUMPTION_QUERY_LIMITATION
+
+    def compose_planning_limitation(self) -> str:
+        return _PLANNING_LIMITATION
+
+    def compose_translation_limitation(self) -> str:
+        return _TRANSLATION_LIMITATION
+
+    def compose_technical_limitation(self) -> str:
+        return _TECHNICAL_LIMITATION
 
     def compose_llm_unconfigured(self) -> str:
         return _LLM_RESPONSE_UNCONFIGURED
