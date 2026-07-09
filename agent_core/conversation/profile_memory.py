@@ -2756,9 +2756,13 @@ def build_answer_feedback_repair(corrected: str | None) -> str:
 _XOA = r'x[oó][áa]'
 _RE_DELETE_ALL_MEMORY = re.compile(
     r'(?:' + _XOA + r'|quên)\s+'
-    r'(?:(?:hết|toàn\s+bộ|sạch)\s*(?:ký\s+ức|thông\s+tin|memory|mọi\s+thứ)?'
+    r'(?:(?:hết|toàn\s+bộ|sạch)\s*(?:ký\s+ức|thông\s+tin|memory|trí\s+nhớ|mọi\s+thứ)?'
     r'|(?:ký\s+ức|thông\s+tin|memory))'
     r'.*?(?:về|của)\s+(?:tôi|mình)'
+    # P0-7K burndown P3: explicit wipe-all with a memory noun needs no "của tôi" tail
+    # ("xoá hết trí nhớ", "quên toàn bộ ký ức"); the "hết/toàn bộ/sạch" quantifier keeps a
+    # single-note delete ("xoá ghi chú") and a vague "quên thông tin đó" from matching.
+    r'|(?:' + _XOA + r'|quên)\s+(?:hết|toàn\s+bộ|sạch)\s+(?:trí\s+nhớ|ký\s+ức|memory|thông\s+tin)\b'
     r'|đừng\s+nhớ\s+gì\s+(?:về\s+)?(?:tôi|mình)\s+nữa'
     r'|clear\s+memory|forget\s+me',
     re.IGNORECASE,

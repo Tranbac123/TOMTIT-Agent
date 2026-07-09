@@ -237,6 +237,37 @@ _RE_STOP_EAT = re.compile(
     re.IGNORECASE,
 )
 
+# CONV-P0 P0-7K xfail-burndown P3: memory-edge patterns (goal-read variant, imperative
+# remember, vague forget, disable-memory-for-turn, assumption/provenance query).
+# memory_002: "Bạn (có) biết mục tiêu hiện tại của tôi (là gì) (không)?"
+_RE_GOAL_CONFIRM_Q = re.compile(
+    r'^bạn\s+(?:có\s+)?biết\s+mục\s+tiêu\s+(?:hiện\s+tại\s+)?(?:của\s+)?(?:tôi|mình)\s*'
+    r'(?:là\s+g[ìi])?\s*(?:không|ko)?\s*[?？]*\s*$',
+    re.IGNORECASE,
+)
+# memory_003: "Hãy (ghi) nhớ (giúp tôi) rằng/là <content>" — imperative confirmed write.
+_RE_IMPERATIVE_REMEMBER = re.compile(
+    r'^(?:hãy\s+)?(?:ghi\s+)?nhớ\s+(?:giúp\s+(?:tôi|mình)\s+)?(?:rằng|là)\s+(.+?)\s*[.!]*\s*$',
+    re.IGNORECASE,
+)
+# memory_004: "Hãy quên thông tin/cái/điều đó/này (đi)" — vague, no resolvable target.
+_RE_VAGUE_FORGET = re.compile(
+    r'^(?:hãy\s+)?quên\s+(?:thông\s+tin|cái|điều)\s+(?:đó|này|ấy|kia)\s*(?:đi)?\s*[.!?]*\s*$',
+    re.IGNORECASE,
+)
+# memory_005: "Đừng dùng memory/trí nhớ (trong) câu trả lời này/lần này".
+_RE_DISABLE_MEMORY_TURN = re.compile(
+    r'^đừng\s+dùng\s+(?:memory|trí\s+nhớ|bộ\s+nhớ|thông\s+tin\s+đã\s+nhớ)\b.*'
+    r'(?:câu\s+(?:trả\s+lời|này)|lần\s+này|turn\s+này|trả\s+lời\s+này).*$',
+    re.IGNORECASE,
+)
+# memory_006: "Thông tin nào (về tôi) là assumption/giả định?".
+_RE_ASSUMPTION_QUERY = re.compile(
+    r'^(?:thông\s+tin|cái|điều)\s+(?:g[ìi]|nào)\s+(?:về\s+)?(?:tôi|mình)\s+'
+    r'là\s+(?:assumption|giả\s+định|suy\s+đoán|suy\s+diễn)\s*[?？]*\s*$',
+    re.IGNORECASE,
+)
+
 # CONV-P0 P0-7K-FIX6-LITE G: coordinated external affection ("may và quý đều thích tôi").
 # The "đều" marker signals multiple person→USER edges; subjects (group1) split on "và"/",".
 _RE_COORDINATED_EXTERNAL_AFFECTION = re.compile(
@@ -411,6 +442,14 @@ class SessionRuntime:
                 memory=self._store,
                 session_id=self._session.session_id,
             )
+
+        # CONV-P0 P0-7K xfail-burndown P3 priority 1.45: bounded memory-edge turns
+        # (goal-read variant, imperative remember, vague forget, disable-memory-for-turn,
+        # assumption/provenance query). Before delete-all so a vague "quên thông tin đó"
+        # is clarified, never routed to any deletion.
+        memory_edge = self._maybe_handle_memory_edge(user_message, state)
+        if memory_edge is not None:
+            return memory_edge
 
         # CONV-P0 P0-7K-FIX3 priority 1.5: delete-all memory request → set pending, confirm.
         delete_req = self._maybe_handle_delete_all_request(user_message, state)
@@ -1319,6 +1358,86 @@ class SessionRuntime:
             result = getattr(self, name)(text, state)
             if result is not None:
                 return result
+        return None
+
+    def _maybe_handle_memory_edge(
+        self, user_message: str, state: AgentState
+    ) -> AgentState | None:
+        """P0-7K xfail-burndown P3: bounded memory-edge turns (goal-read variant, imperative
+        remember, vague forget, disable-memory-for-turn, assumption/provenance query).
+
+        All are deterministic and truthful: vague forget NEVER deletes (asks which memory),
+        the assumption query states the current-MVP limitation instead of faking a
+        provenance audit, and disable-for-turn neither stores nor deletes anything.
+        """
+        text = user_message.strip()
+
+        # memory_004: vague "quên thông tin đó" — clarify, never delete arbitrary memory.
+        if _RE_VAGUE_FORGET.match(text):
+            return self._complete_conv(
+                state, "conv:memory_vague_forget_clarify",
+                self._response_composer.compose_vague_forget_clarification(),
+            )
+
+        # memory_005: per-turn memory suppression — acknowledge, no store, no delete.
+        if _RE_DISABLE_MEMORY_TURN.match(text):
+            return self._complete_conv(
+                state, "conv:memory_disable_for_turn",
+                self._response_composer.compose_disable_memory_for_turn(),
+            )
+
+        # memory_006: assumption/provenance query — honest current-MVP limitation.
+        if _RE_ASSUMPTION_QUERY.match(text):
+            return self._complete_conv(
+                state, "conv:memory_assumption_limitation",
+                self._response_composer.compose_assumption_query_limitation(),
+            )
+
+        # memory_002: "Bạn biết mục tiêu hiện tại của tôi (là gì) không?" — goal-read.
+        if _RE_GOAL_CONFIRM_Q.match(text):
+            snap = collect_profile_snapshot(self._store)
+            if snap.goals:
+                answer = (
+                    "Theo thông tin bạn cung cấp, mục tiêu hiện tại của bạn là: "
+                    + ", ".join(snap.goals) + "."
+                )
+            else:
+                answer = "Mình chưa có thông tin xác nhận về mục tiêu hiện tại của bạn."
+            return self._complete_conv(state, "conv:memory_goal_confirm", answer)
+
+        # memory_003: "Hãy nhớ rằng <content>" — imperative confirmed write.
+        m = _RE_IMPERATIVE_REMEMBER.match(text)
+        if m:
+            content = re.sub(r"\s+", " ", m.group(1).strip())
+            tokens = content.rstrip("?？ ").split()
+            if not tokens or tokens[-1].lower() in ("gì", "gi") or tokens[-1] == "ai":
+                return None  # a question, not a fact to store
+            # Recognized facts ("hãy nhớ rằng tôi thích X") flow through the normal
+            # memory-write handlers; only an otherwise-unhandled activity is stored as a
+            # goal below.
+            write_result = self._run_memory_write_pipeline(content, state)
+            if write_result is not None:
+                return write_result
+            value = re.sub(
+                r'^(?:tôi|mình)\s+(?:đang\s+|sẽ\s+|hiện\s+đang\s+)?', '', content
+            ).strip() or content
+            candidate = AutoProfileCandidate(
+                relation="goal", value=value, original_text=text,
+            )
+            if goal_already_active(value, self._store):
+                return self._complete_conv(
+                    state, "conv:memory_imperative_remember_saved",
+                    f"Đã ghi nhớ và lưu lại: {value}.",
+                )
+            if not save_auto_profile_fact(candidate, self._store, state.session_id):
+                return None
+            self._confirmed_profile_fact_count += 1
+            self._last_memory_write_kind = "goal"
+            return self._complete_conv(
+                state, "conv:memory_imperative_remember_saved",
+                f"Đã ghi nhớ và lưu lại: {value}.",
+            )
+
         return None
 
     def _handle_delete_all_pending(
