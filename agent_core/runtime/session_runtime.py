@@ -291,16 +291,27 @@ _RE_P4_TRANSLATION = re.compile(
 _RE_P4_TECHNICAL_DESIGN = re.compile(
     r'thiết\s+kế\s+architecture', re.IGNORECASE,
 )
-# A "giải thích/phân biệt/so sánh" request that names ALL of Planner+Runtime+Tool+Memory
-# together (code_005). A single-component "giải thích Planner là gì" is NOT matched.
+# A technical explain/compare request naming the internal runtime components. Two shapes
+# both need the (unavailable) LLMResponder for a real answer, so both get the bounded P4
+# limitation:
+#   - full explanation naming ALL four (code_005: "giải thích Planner, Runtime, Tool,
+#     Memory khác nhau thế nào");
+#   - a comparison ("phân biệt"/"so sánh"/"khác gì"/"khác nhau") of at least TWO of them
+#     ("phân biệt Planner và Runtime", "so sánh Tool và Memory").
+# A single-component "giải thích Planner là gì" and a plain "giải thích AI là gì?" are NOT
+# matched (they stay on their existing lanes).
 _P4_TECHNICAL_COMPONENTS = ("planner", "runtime", "tool", "memory")
+_P4_TECHNICAL_COMPARE_CUES = ("phân biệt", "so sánh", "khác gì", "khác nhau")
 
 
 def _is_p4_technical_components_request(text: str) -> bool:
     low = text.lower()
-    if not any(v in low for v in ("giải thích", "phân biệt", "so sánh")):
-        return False
-    return all(c in low for c in _P4_TECHNICAL_COMPONENTS)
+    present = sum(1 for c in _P4_TECHNICAL_COMPONENTS if c in low)
+    if any(v in low for v in ("giải thích", "phân biệt", "so sánh")) and present == 4:
+        return True
+    if any(cue in low for cue in _P4_TECHNICAL_COMPARE_CUES) and present >= 2:
+        return True
+    return False
 
 # CONV-P0 P0-7K-FIX6-LITE G: coordinated external affection ("may và quý đều thích tôi").
 # The "đều" marker signals multiple person→USER edges; subjects (group1) split on "và"/",".
