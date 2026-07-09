@@ -101,6 +101,32 @@ _CONTINUE_CLARIFICATION = (
     "xác bạn muốn tiếp tục phần nào, bạn có thể nói rõ hơn giúp mình."
 )
 
+# P0-7K xfail-burndown P3: bounded memory-edge responses. Deterministic, never delete
+# arbitrary memory, never fabricate a provenance/assumption audit that does not exist.
+
+# memory_004: a vague "quên thông tin đó" with no resolvable target → ask which memory,
+# never delete blindly.
+_VAGUE_FORGET_CLARIFICATION = (
+    "Bạn muốn mình quên thông tin nào cụ thể? Mình cần bạn chỉ rõ (ví dụ: một sở thích, "
+    "một mục tiêu, hay một ghi chú) để không xoá nhầm — mình sẽ không tự ý quên thông tin "
+    "khi chưa rõ."
+)
+
+# memory_005: honest per-turn memory suppression. No global disable, no delete, not stored
+# as a preference.
+_DISABLE_MEMORY_FOR_TURN = (
+    "Được, trong câu trả lời này mình sẽ không dùng memory/các thông tin đã nhớ về bạn. "
+    "Mình không xoá gì cả, chỉ tạm không dựa vào chúng cho câu trả lời này. Bạn muốn hỏi gì "
+    "tiếp?"
+)
+
+# memory_006: honest current-MVP limitation on assumption/provenance auditing.
+_ASSUMPTION_QUERY_LIMITATION = (
+    "Hiện tại MVP chủ yếu lưu các thông tin bạn tự cung cấp (confirmed/đã xác nhận), và "
+    "chưa có cơ chế đánh dấu đầy đủ thông tin nào là assumption/giả định suy ra. Vì vậy mình "
+    "chưa thể liệt kê chính xác phần nào là giả định — mình chỉ chắc về những gì bạn đã nói rõ."
+)
+
 _LLM_RESPONSE_UNCONFIGURED = (
     "Hiện tại trong runtime này LLMResponder chưa được cấu hình, nên tôi chưa thể trả lời yêu cầu mở này. "
     "Tôi chưa gọi tool, memory hay thực hiện hành động nào."
@@ -154,6 +180,15 @@ class ResponseComposer:
 
     def compose_continue_clarification(self) -> str:
         return _CONTINUE_CLARIFICATION
+
+    def compose_vague_forget_clarification(self) -> str:
+        return _VAGUE_FORGET_CLARIFICATION
+
+    def compose_disable_memory_for_turn(self) -> str:
+        return _DISABLE_MEMORY_FOR_TURN
+
+    def compose_assumption_query_limitation(self) -> str:
+        return _ASSUMPTION_QUERY_LIMITATION
 
     def compose_llm_unconfigured(self) -> str:
         return _LLM_RESPONSE_UNCONFIGURED

@@ -9,8 +9,9 @@ regression gate WITHOUT implementing CONV-P0 behavior:
   lives in the bare parser/planner (greetings, calculation, recoverable-unknown) assert
   against ``RuleBasedIntentParser`` -> ``IntentPlanner``. Cases tagged
   ``current_runner: session_runtime`` (identity/capability/memory-read/clarification,
-  planning/product/writing/code task-shaped clarifications, continuation) assert against
-  the shipped ``SessionRuntime.handle_turn`` path (P0-7K burndown P1/P2);
+  planning/product/writing/code task-shaped clarifications, continuation, memory-edge
+  goal-read/imperative-remember/vague-forget/disable-turn/assumption) assert against the
+  shipped ``SessionRuntime.handle_turn`` path (P0-7K burndown P1/P2/P3);
 - the remaining ``SPEC_REQUIRED_NOT_IMPLEMENTED`` cases are ``xfail`` with an explicit
   reason — they are an executable future contract, not a premature pass.
 
@@ -48,10 +49,13 @@ _VALID_STATUSES = {
 # was promoted PARTIAL->IMPLEMENTED (passes via parser/planner).
 # P0-7K xfail-burndown P2: 14 more bounded clarification cases (planning checklist/priority,
 # product analysis, writing/summarization, code bug/test, bare "tiếp tục") promoted the same
-# way. See conversation_p0_cases.yaml.
+# way.
+# P0-7K xfail-burndown P3: 5 memory-edge cases (goal-read variant, imperative remember,
+# vague forget clarification, disable-memory-for-turn, assumption/provenance limitation)
+# promoted the same way. See conversation_p0_cases.yaml.
 _EXPECTED_STATUS_DISTRIBUTION = {
-    "ALREADY_IMPLEMENTED_FIRST_PASS": 28,
-    "SPEC_REQUIRED_NOT_IMPLEMENTED": 12,
+    "ALREADY_IMPLEMENTED_FIRST_PASS": 33,
+    "SPEC_REQUIRED_NOT_IMPLEMENTED": 7,
 }
 _REQUIRED_FIELDS = {
     "id", "group", "input", "expected_intent", "expected_handling",
@@ -178,8 +182,8 @@ def test_conversation_p0_dataset_implementation_authorized_false():
 
 
 # ---------------------------------------------------------------------------
-# Per-case current behavior (40 parametrized): 28 strict (6 parser/planner + 22 session_runtime),
-# 12 xfail future-contract.
+# Per-case current behavior (40 parametrized): 33 strict (6 parser/planner + 27 session_runtime),
+# 7 xfail future-contract.
 # ---------------------------------------------------------------------------
 
 @pytest.mark.parametrize("case", _CASES, ids=[c["id"] for c in _CASES])

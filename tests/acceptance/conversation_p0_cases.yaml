@@ -137,7 +137,8 @@ cases:
     input: "Bạn biết mục tiêu hiện tại của tôi không?"
     expected_intent: "MEMORY_READ"
     expected_handling: "MEMORY_FLOW"
-    current_status: "SPEC_REQUIRED_NOT_IMPLEMENTED"
+    current_status: "ALREADY_IMPLEMENTED_FIRST_PASS"
+    current_runner: "session_runtime"
     must_include_any: ["mục tiêu", "memory", "nếu đúng", "theo thông tin"]
     must_not_include: ["chắc chắn 100%"]
     requires_memory: true
@@ -150,7 +151,8 @@ cases:
     input: "Hãy nhớ rằng tôi đang build TOMTIT Agent"
     expected_intent: "MEMORY_WRITE_REQUEST"
     expected_handling: "MEMORY_FLOW"
-    current_status: "SPEC_REQUIRED_NOT_IMPLEMENTED"
+    current_status: "ALREADY_IMPLEMENTED_FIRST_PASS"
+    current_runner: "session_runtime"
     must_include_any: ["xác nhận", "ghi nhớ", "lưu"]
     must_not_include: ["đã lưu tự động"]
     requires_memory: true
@@ -163,7 +165,8 @@ cases:
     input: "Hãy quên thông tin đó"
     expected_intent: "MEMORY_DELETE_REQUEST"
     expected_handling: "MEMORY_FLOW"
-    current_status: "SPEC_REQUIRED_NOT_IMPLEMENTED"
+    current_status: "ALREADY_IMPLEMENTED_FIRST_PASS"
+    current_runner: "session_runtime"
     must_include_any: ["thông tin nào", "cần chỉ rõ", "quên"]
     must_not_include: ["đã xóa tất cả"]
     requires_memory: true
@@ -176,7 +179,8 @@ cases:
     input: "Đừng dùng memory trong câu trả lời này"
     expected_intent: "MEMORY_DISABLE_FOR_TURN"
     expected_handling: "DIRECT_RESPONSE"
-    current_status: "SPEC_REQUIRED_NOT_IMPLEMENTED"
+    current_status: "ALREADY_IMPLEMENTED_FIRST_PASS"
+    current_runner: "session_runtime"
     must_include_any: ["không dùng memory", "câu trả lời này"]
     must_not_include: ["tôi nhớ rằng"]
     requires_memory: false
@@ -189,7 +193,8 @@ cases:
     input: "Thông tin nào về tôi là assumption?"
     expected_intent: "MEMORY_READ"
     expected_handling: "MEMORY_FLOW"
-    current_status: "SPEC_REQUIRED_NOT_IMPLEMENTED"
+    current_status: "ALREADY_IMPLEMENTED_FIRST_PASS"
+    current_runner: "session_runtime"
     must_include_any: ["assumption", "giả định", "confirmed", "chưa chắc"]
     must_not_include: ["tất cả đều chắc chắn"]
     requires_memory: true
