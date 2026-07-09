@@ -205,11 +205,16 @@ def test_fix8_continuation_incoming_admirer():
     assert "quý" in incoming and "may" in incoming, incoming
 
 
-def test_fix8_continuation_without_incoming_context_does_not_fire():
+def test_fix8_continuation_without_incoming_context_asks_named_clarification():
     sr = _make_sr()
-    # No incoming-affection query preceded this bare continuation → must not store an admirer.
+    # No incoming-affection query preceded this bare continuation → must not store an
+    # admirer; must ask a named, context-specific clarification (not the generic prompt).
     ans = _low(sr, "cả may nữa")
+    assert _no_generic(ans), ans
     assert "đã nhớ thêm: may cũng thích bạn" not in ans, ans
+    assert any(tok in ans for tok in ("ý", "ngữ cảnh", "cụ thể", "may")), ans
+    incoming = _low(sr, "ai đang thích tôi")
+    assert "may" not in incoming, incoming
 
 
 # ---------------------------------------------------------------------------

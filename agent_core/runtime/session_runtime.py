@@ -321,10 +321,13 @@ _RE_FIX8_OUTGOING_CLAUSE = re.compile(
     re.IGNORECASE,
 )
 
-# CONV-P0 P0-7K-FIX8 J: continuation adding an admirer after an incoming-affection query
-# ("cả may nữa"). Only fires when the previous answered query was the incoming set.
+# CONV-P0 P0-7K-FIX8 J: continuation adding an admirer ("cả may nữa"/"may nữa"/"thêm may
+# nữa"). With incoming-affection context it stores the admirer; without it, it asks a named
+# clarification (P0-7K-FIX8-FIX1). The negative lookahead excludes a "và ..." lead-in, which
+# is the generic skill/preference/goal continuation marker (_RE_CONTINUATION) and must stay
+# on that lane untouched (e.g. "và ML nữa" after "tôi biết về AI").
 _RE_FIX8_CONTINUATION_ADMIRER = re.compile(
-    r'^(?:cả\s+|thêm\s+)?(\S+(?:\s+\S+)?)\s+nữa\s*[.!?]*\s*$',
+    r'^(?:cả\s+|thêm\s+)?(?!và\s)(\S+(?:\s+\S+)?)\s+nữa\s*[.!?]*\s*$',
     re.IGNORECASE,
 )
 
@@ -2486,15 +2489,30 @@ class SessionRuntime:
     ) -> AgentState | None:
         """P0-7K-FIX8 J: after an incoming-affection query ("ai đang thích tôi"), a bare
         continuation ("cả may nữa") adds one more admirer. Only fires when the previous
-        answered query was the incoming-affection set; otherwise leave it to other lanes."""
-        if self._last_profile_query_kind != "incoming_affection_set":
-            return None
+        answered query was the incoming-affection set.
+
+        P0-7K-FIX8-FIX1: WITHOUT that context, the same shape ("cả may nữa"/"may
+        nữa"/"thêm may nữa") is genuinely ambiguous — it could mean "X likes me", "I like
+        X", or something else entirely. Ask a named, context-specific clarification instead
+        of the generic continuation prompt, and never store an admirer without context."""
         m = _RE_FIX8_CONTINUATION_ADMIRER.match(user_message.strip())
         if m is None:
             return None
         admirer = re.sub(r"\s+", " ", m.group(1).strip())
+        # "gì"/"ai" are question words ("gì nữa?", "ai nữa?"), not a name — leave those to
+        # the existing goal/preference follow-up lane. "ai" is checked case-sensitively so
+        # the tech token "AI" ("cả AI nữa") is still treated as a real admirer candidate.
         if not admirer or admirer.lower() in _EXTERNAL_AFFECTION_SELF_WORDS:
             return None
+        if admirer.lower() in ("gì", "gi") or admirer == "ai":
+            return None
+        if self._last_profile_query_kind != "incoming_affection_set":
+            return self._complete_conv(
+                state, "conv:fix8_continuation_no_context",
+                f'Mình chưa có ngữ cảnh rõ cho "{admirer} nữa". Bạn muốn nói cụ thể là '
+                f"{admirer} thích bạn, bạn thích {admirer}, hay {admirer} cũng thuộc danh "
+                "sách nào?",
+            )
         if not save_external_affection_fact(
             admirer, self._store, state.session_id, original_text=user_message.strip()
         ):
