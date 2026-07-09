@@ -229,7 +229,8 @@ cases:
     input: "Chia việc này thành checklist"
     expected_intent: "PLANNING_REQUEST"
     expected_handling: "CLARIFICATION"
-    current_status: "SPEC_REQUIRED_NOT_IMPLEMENTED"
+    current_status: "ALREADY_IMPLEMENTED_FIRST_PASS"
+    current_runner: "session_runtime"
     must_include_any: ["việc nào", "gửi nội dung", "checklist"]
     must_not_include: ["tôi sẽ tự đoán"]
     requires_memory: false
@@ -242,7 +243,8 @@ cases:
     input: "Ưu tiên các task này giúp tôi"
     expected_intent: "PLANNING_REQUEST"
     expected_handling: "CLARIFICATION"
-    current_status: "SPEC_REQUIRED_NOT_IMPLEMENTED"
+    current_status: "ALREADY_IMPLEMENTED_FIRST_PASS"
+    current_runner: "session_runtime"
     must_include_any: ["task", "gửi danh sách", "ưu tiên"]
     must_not_include: ["UNKNOWN"]
     requires_memory: false
@@ -282,7 +284,8 @@ cases:
     input: "Ý tưởng này có đáng làm không?"
     expected_intent: "PRODUCT_ANALYSIS_REQUEST"
     expected_handling: "CLARIFICATION"
-    current_status: "SPEC_REQUIRED_NOT_IMPLEMENTED"
+    current_status: "ALREADY_IMPLEMENTED_FIRST_PASS"
+    current_runner: "session_runtime"
     must_include_any: ["ý tưởng", "mô tả", "đánh giá"]
     must_not_include: ["chắc chắn đáng làm"]
     requires_memory: false
@@ -295,7 +298,8 @@ cases:
     input: "MVP nên gồm những gì?"
     expected_intent: "PRODUCT_ANALYSIS_REQUEST"
     expected_handling: "CLARIFICATION"
-    current_status: "SPEC_REQUIRED_NOT_IMPLEMENTED"
+    current_status: "ALREADY_IMPLEMENTED_FIRST_PASS"
+    current_runner: "session_runtime"
     must_include_any: ["sản phẩm", "user", "MVP", "bối cảnh"]
     must_not_include: ["UNKNOWN"]
     requires_memory: false
@@ -308,7 +312,8 @@ cases:
     input: "Rủi ro lớn nhất là gì?"
     expected_intent: "PRODUCT_ANALYSIS_REQUEST"
     expected_handling: "CLARIFICATION"
-    current_status: "SPEC_REQUIRED_NOT_IMPLEMENTED"
+    current_status: "ALREADY_IMPLEMENTED_FIRST_PASS"
+    current_runner: "session_runtime"
     must_include_any: ["rủi ro", "bối cảnh", "sản phẩm"]
     must_not_include: ["rủi ro lớn nhất chắc chắn là"]
     requires_memory: false
@@ -321,7 +326,8 @@ cases:
     input: "Làm sao validate idea này?"
     expected_intent: "PRODUCT_ANALYSIS_REQUEST"
     expected_handling: "CLARIFICATION"
-    current_status: "SPEC_REQUIRED_NOT_IMPLEMENTED"
+    current_status: "ALREADY_IMPLEMENTED_FIRST_PASS"
+    current_runner: "session_runtime"
     must_include_any: ["idea", "mô tả", "phỏng vấn", "validate"]
     must_not_include: ["UNKNOWN"]
     requires_memory: false
@@ -334,7 +340,8 @@ cases:
     input: "Ai là user đầu tiên nên phỏng vấn?"
     expected_intent: "PRODUCT_ANALYSIS_REQUEST"
     expected_handling: "CLARIFICATION"
-    current_status: "SPEC_REQUIRED_NOT_IMPLEMENTED"
+    current_status: "ALREADY_IMPLEMENTED_FIRST_PASS"
+    current_runner: "session_runtime"
     must_include_any: ["sản phẩm", "vấn đề", "user", "phỏng vấn"]
     must_not_include: ["chắc chắn là"]
     requires_memory: false
@@ -348,7 +355,8 @@ cases:
     input: "Viết lại đoạn này tự nhiên hơn"
     expected_intent: "WRITING_REQUEST"
     expected_handling: "CLARIFICATION"
-    current_status: "SPEC_REQUIRED_NOT_IMPLEMENTED"
+    current_status: "ALREADY_IMPLEMENTED_FIRST_PASS"
+    current_runner: "session_runtime"
     must_include_any: ["gửi đoạn", "viết lại", "tự nhiên"]
     must_not_include: ["UNKNOWN"]
     requires_memory: false
@@ -361,7 +369,8 @@ cases:
     input: "Tóm tắt đoạn này thành 3 ý"
     expected_intent: "SUMMARIZATION_REQUEST"
     expected_handling: "CLARIFICATION"
-    current_status: "SPEC_REQUIRED_NOT_IMPLEMENTED"
+    current_status: "ALREADY_IMPLEMENTED_FIRST_PASS"
+    current_runner: "session_runtime"
     must_include_any: ["gửi đoạn", "tóm tắt", "3 ý"]
     must_not_include: ["UNKNOWN"]
     requires_memory: false
@@ -387,7 +396,8 @@ cases:
     input: "Viết email ngắn cho tôi"
     expected_intent: "WRITING_REQUEST"
     expected_handling: "CLARIFICATION"
-    current_status: "SPEC_REQUIRED_NOT_IMPLEMENTED"
+    current_status: "ALREADY_IMPLEMENTED_FIRST_PASS"
+    current_runner: "session_runtime"
     must_include_any: ["email", "người nhận", "mục đích", "nội dung"]
     must_not_include: ["UNKNOWN"]
     requires_memory: false
@@ -400,7 +410,8 @@ cases:
     input: "Viết README cho project này"
     expected_intent: "WRITING_REQUEST"
     expected_handling: "CLARIFICATION"
-    current_status: "SPEC_REQUIRED_NOT_IMPLEMENTED"
+    current_status: "ALREADY_IMPLEMENTED_FIRST_PASS"
+    current_runner: "session_runtime"
     must_include_any: ["project", "README", "mô tả"]
     must_not_include: ["UNKNOWN"]
     requires_memory: false
@@ -428,7 +439,8 @@ cases:
     input: "Tìm bug trong code này"
     expected_intent: "CODE_REVIEW_REQUEST"
     expected_handling: "CLARIFICATION"
-    current_status: "SPEC_REQUIRED_NOT_IMPLEMENTED"
+    current_status: "ALREADY_IMPLEMENTED_FIRST_PASS"
+    current_runner: "session_runtime"
     must_include_any: ["gửi code", "bug", "lỗi"]
     must_not_include: ["UNKNOWN"]
     requires_memory: false
@@ -441,7 +453,8 @@ cases:
     input: "Viết test cho function này"
     expected_intent: "CODE_REVIEW_REQUEST"
     expected_handling: "CLARIFICATION"
-    current_status: "SPEC_REQUIRED_NOT_IMPLEMENTED"
+    current_status: "ALREADY_IMPLEMENTED_FIRST_PASS"
+    current_runner: "session_runtime"
     must_include_any: ["function", "code", "test", "gửi"]
     must_not_include: ["UNKNOWN"]
     requires_memory: false
@@ -507,13 +520,14 @@ cases:
     input: "tiếp tục"
     expected_intent: "CONTINUE_REQUEST"
     expected_handling: "CLARIFICATION"
-    current_status: "SPEC_REQUIRED_NOT_IMPLEMENTED"
+    current_status: "ALREADY_IMPLEMENTED_FIRST_PASS"
+    current_runner: "session_runtime"
     must_include_any: ["tiếp tục", "việc nào", "ngữ cảnh"]
     must_not_include: ["UNKNOWN"]
     requires_memory: false
     requires_tool: false
     requires_llm: false
-    notes: "No prior task → ask what to continue. Currently falls into recoverable UNKNOWN."
+    notes: "No prior task → SessionRuntime asks what to continue (bounded clarification)."
 
   - id: fallback_004_lam_cai_do_di
     group: fallback_calculation

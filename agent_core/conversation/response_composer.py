@@ -69,6 +69,38 @@ _EXPLANATION_UNSUPPORTED = (
     "tính toán cơ bản và một số tác vụ ghi chú/runtime."
 )
 
+# P0-7K xfail-burndown P2: bounded task-shaped clarifications. Each asks for the missing
+# concrete input instead of inventing an artifact/analysis, and names the requested
+# dimension so the reply is obviously on-topic (not the generic catch-all clarification).
+
+_PLANNING_TASK_CLARIFICATION = (
+    "Mình cần thêm mục tiêu hoặc danh sách task cụ thể (bạn có thể gửi danh sách hoặc gửi "
+    "nội dung việc cần làm) để chia thành checklist hay sắp xếp ưu tiên chính xác. Bạn muốn "
+    "ưu tiên việc nào trước, hay có task nào cụ thể chưa?"
+)
+
+_PRODUCT_ANALYSIS_CLARIFICATION = (
+    "Mình cần thêm mô tả về ý tưởng/sản phẩm (vấn đề đang giải quyết, user mục tiêu, bối "
+    "cảnh, MVP hiện tại) để đánh giá rủi ro, validate, hay xác định user đầu tiên nên phỏng "
+    "vấn chính xác hơn."
+)
+
+_WRITING_TASK_CLARIFICATION = (
+    "Bạn gửi đoạn văn bản/nội dung cụ thể giúp mình (kèm mục đích, người nhận nếu là email, "
+    "hoặc tên project nếu là README) để mình viết lại tự nhiên hơn, tóm tắt thành 3 ý, soạn "
+    "email, hay viết README chính xác."
+)
+
+_CODE_TASK_CLARIFICATION = (
+    "Bạn gửi đoạn code, function, hoặc mô tả lỗi/bug cụ thể giúp mình để mình review, tìm "
+    "bug, hoặc viết test chính xác hơn."
+)
+
+_CONTINUE_CLARIFICATION = (
+    "Bạn muốn mình tiếp tục việc nào? Hiện tại mình chưa có ngữ cảnh trước đó để biết chính "
+    "xác bạn muốn tiếp tục phần nào, bạn có thể nói rõ hơn giúp mình."
+)
+
 _LLM_RESPONSE_UNCONFIGURED = (
     "Hiện tại trong runtime này LLMResponder chưa được cấu hình, nên tôi chưa thể trả lời yêu cầu mở này. "
     "Tôi chưa gọi tool, memory hay thực hiện hành động nào."
@@ -107,6 +139,21 @@ class ResponseComposer:
 
     def compose_explanation_unsupported(self) -> str:
         return _EXPLANATION_UNSUPPORTED
+
+    def compose_planning_task_clarification(self) -> str:
+        return _PLANNING_TASK_CLARIFICATION
+
+    def compose_product_analysis_clarification(self) -> str:
+        return _PRODUCT_ANALYSIS_CLARIFICATION
+
+    def compose_writing_task_clarification(self) -> str:
+        return _WRITING_TASK_CLARIFICATION
+
+    def compose_code_task_clarification(self) -> str:
+        return _CODE_TASK_CLARIFICATION
+
+    def compose_continue_clarification(self) -> str:
+        return _CONTINUE_CLARIFICATION
 
     def compose_llm_unconfigured(self) -> str:
         return _LLM_RESPONSE_UNCONFIGURED

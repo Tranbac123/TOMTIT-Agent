@@ -78,6 +78,29 @@ _LLM_RESPONSE_INTENTS = frozenset(
     {IntentName.TECHNICAL_EXPLANATION_REQUEST, IntentName.TRANSLATION_REQUEST}
 )
 
+# P0-7K xfail-burndown P2: bounded task-shaped clarification cues (existing CLARIFICATION
+# route, NO new route literal). Each is narrow and text-specific — deliberately NOT a blanket
+# match on PLANNING_REQUEST/WRITING_REQUEST intent, so a full-plan request like "Lên kế
+# hoạch cho tôi để học AI Agent" (planning_001, LLM-forbidden, left for a later batch) is
+# untouched and still falls through to its existing route.
+_CHECKLIST_PRIORITY_CUE = re.compile(
+    r'checklist|ưu\s+tiên\s+(?:các\s+)?(?:task|việc)', re.IGNORECASE,
+)
+_PRODUCT_ANALYSIS_CUE = re.compile(
+    r'đáng\s+làm|\bMVP\b|rủi\s+ro|validate|user\s+đầu\s+tiên|phỏng\s+vấn',
+    re.IGNORECASE,
+)
+# Bare "tiếp tục" with no prior actionable context in this stateless router — asks what to
+# continue rather than pretending a previous task exists.
+_CONTINUE_BARE_CUE = re.compile(r'^tiếp\s+tục\s*[.!?]*\s*$', re.IGNORECASE)
+
+# Writing/summarization requests with concrete source text/context missing. Intent-based
+# (not text-cue-based) because WRITING_REQUEST/SUMMARIZATION_REQUEST are already narrow —
+# the only dataset writing_003 case (translation) is a separate TRANSLATION_REQUEST intent.
+_WRITING_TASK_INTENTS = frozenset(
+    {IntentName.WRITING_REQUEST, IntentName.SUMMARIZATION_REQUEST}
+)
+
 
 class ConversationRouter:
     def __init__(
@@ -107,20 +130,37 @@ class ConversationRouter:
         elif _PUNCTUATION_OR_ACK.match(goal) or _VAGUE_PLANNING_CUE.match(goal):
             route = ConversationRoute.CLARIFICATION
             response_text = self._composer.compose_clarification(intent)
+        elif _CONTINUE_BARE_CUE.match(goal):
+            # P0-7K xfail-burndown P2: bare "tiếp tục" with no prior context.
+            route = ConversationRoute.CLARIFICATION
+            response_text = self._composer.compose_continue_clarification()
+        elif _CHECKLIST_PRIORITY_CUE.search(goal):
+            # P0-7K xfail-burndown P2: checklist/priority planning request, no task list yet.
+            route = ConversationRoute.CLARIFICATION
+            response_text = self._composer.compose_planning_task_clarification()
+        elif _PRODUCT_ANALYSIS_CUE.search(goal):
+            # P0-7K xfail-burndown P2: product-analysis request, no concrete idea/context yet.
+            route = ConversationRoute.CLARIFICATION
+            response_text = self._composer.compose_product_analysis_clarification()
         elif intent in _DIRECT_INTENTS:
             route = ConversationRoute.DIRECT_RESPONSE
             response_text = self._composer.compose_direct(intent)
         elif intent in _CLARIFICATION_INTENTS:
             route = ConversationRoute.CLARIFICATION
             response_text = self._composer.compose_clarification(intent)
+        elif intent in _WRITING_TASK_INTENTS:
+            # P0-7K xfail-burndown P2: writing/summarization request, no source text yet.
+            route = ConversationRoute.CLARIFICATION
+            response_text = self._composer.compose_writing_task_clarification()
         elif _UNSUPPORTED_UTILITY.search(goal):
             # P0-4A: date/time/weather not supported — honest specific response via the
             # existing CLARIFICATION route (no new route literal).
             route = ConversationRoute.CLARIFICATION
             response_text = self._composer.compose_unsupported_utility()
         elif intent is IntentName.CODE_REVIEW_REQUEST:
+            # P0-7K xfail-burndown P2: bug/test/review request, no code sent yet.
             route = ConversationRoute.CLARIFICATION
-            response_text = self._composer.compose_clarification(intent)
+            response_text = self._composer.compose_code_task_clarification()
         elif intent in _LLM_RESPONSE_INTENTS:
             route = ConversationRoute.LLM_RESPONSE
             response_text = None
