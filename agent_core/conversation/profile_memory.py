@@ -658,8 +658,8 @@ _RE_WANTS_BUILD_Q = re.compile(
 # "tôi có muốn làm X nữa không?", "tôi có build X nữa không?". Answered against active
 # occupations and active goals (current-state).
 _RE_SELF_DO_YESNO_Q = re.compile(
-    r'^(?:tôi|mình)\s+có\s+(?:còn\s+)?(?:muốn\s+)?(?:làm|build)\s+'
-    r'(.+?)(?:\s+nữa)?\s+(?:không|ko|hông|hong)\s*[?？]?\s*$',
+    r'^(?:tôi|mình)\s+có\s+(còn\s+)?(?:muốn\s+|định\s+|dự\s+định\s+|sẽ\s+)?(?:làm|build)\s+'
+    r'(.+?)(\s+nữa)?\s+(?:không|ko|hông|hong)\s*[?？]?\s*$',
     re.IGNORECASE,
 )
 
@@ -1392,12 +1392,15 @@ def detect_profile_query(text: str) -> ProfileQuery | None:
     if _RE_SELF_AI_YESNO_Q.match(stripped):
         return ProfileQuery(kind="self_ai_yesno", value="AI")
 
-    # 6c. P0-7J-FIX1: self do/goal yes-no ("tôi có làm LLM nữa không?").
+    # 6c. P0-7J-FIX1: self do/goal yes-no ("tôi có làm LLM nữa không?"). P0-7K-FIX8 D: a
+    # "còn"/"nữa" marker presupposes prior activity ("do you STILL do X?"), so an absent
+    # match answers "no"; a plain "có muốn làm X không?" answers "chưa thấy" when unknown.
     m = _RE_SELF_DO_YESNO_Q.match(stripped)
     if m:
-        value = re.sub(r"\s+", " ", m.group(1).strip().rstrip("?？")).strip()
+        value = re.sub(r"\s+", " ", m.group(2).strip().rstrip("?？")).strip()
+        still = "still" if (m.group(1) or m.group(3)) else ""
         if value:
-            return ProfileQuery(kind="self_do_yesno", value=value)
+            return ProfileQuery(kind="self_do_yesno", value=value, object_value=still)
 
     # 6d. P0-7K-FIX1 G: memory-challenge / reminder ("bạn không nhớ tôi sẽ làm X à?").
     m = _RE_GOAL_CHALLENGE_Q.match(stripped)
@@ -1781,7 +1784,12 @@ def build_followup_response(has_context: bool) -> str:
     """Answer for a "gì nữa?" follow-up after a profile query (session-local, no memory)."""
     if has_context:
         return "Hiện tại mình chỉ thấy các thông tin đó trong hồ sơ của bạn."
-    return "Bạn muốn hỏi tiếp về thông tin nào trong hồ sơ của bạn?"
+    # P0-7K-FIX8-FIX2: echo the literal "gì nữa" the user asked, so the reply reads as a
+    # direct answer to their question rather than a generic prompt.
+    return (
+        'Bạn muốn hỏi "gì nữa" về hồ sơ của bạn? Ví dụ: sở thích, mục tiêu, kế hoạch hôm '
+        "nay, hoặc quan hệ."
+    )
 
 
 def build_negation_no_affection_response() -> str:
@@ -2330,6 +2338,44 @@ def save_temporal_today_fact(
         tags=["user_profile", "self", "temporal_today"],
         original_text=original_text,
         extra_metadata={"date_scope": date.today().isoformat()},
+    )
+
+
+def save_intention_goal_fact(
+    value: str, store: "MemoryStoreProtocol", session_id: str, *, original_text: str = ""
+) -> bool:
+    """P0-7K-FIX8 C: record a durable intention ("tôi định làm Chatbox") as an active goal.
+
+    "định làm"/"dự định làm"/"sẽ làm" map to the same intention family as "muốn làm", so a
+    later "tôi có muốn/định làm X không?" resolves against the active goal set. Clears any
+    prior negative-goal record for the same value so a re-stated intention answers "yes".
+    """
+    _delete_profile_records(store, subject="self", relation="negative_goal", value=value)
+    return _save_profile_v2_fact(
+        store, session_id,
+        subject="self", relation="goal", value=value,
+        content=f"bạn định/muốn {value}",
+        tags=["user_profile", "self", "goal"],
+        original_text=original_text,
+    )
+
+
+def save_negative_goal_fact(
+    value: str, store: "MemoryStoreProtocol", session_id: str, *, original_text: str = ""
+) -> bool:
+    """P0-7K-FIX8 D: record a retracted intention ("tôi không muốn làm Agent nữa").
+
+    Supersedes any active goal for the same value so the yes/no query answers "no" (explicit
+    negative evidence), not "unknown".
+    """
+    _delete_profile_records(store, subject="self", relation="goal", value=value)
+    _delete_profile_records(store, subject="self", relation="goal_focus", value=value)
+    return _save_profile_v2_fact(
+        store, session_id,
+        subject="self", relation="negative_goal", value=value,
+        content=f"bạn không còn muốn/định {value}",
+        tags=["user_profile", "self", "goal"],
+        original_text=original_text,
     )
 
 
@@ -3033,6 +3079,9 @@ class ProfileSnapshot:
     previous_names: list[str] = field(default_factory=list)
     # P0-7K-FIX1: abilities the user has said they do NOT have ("tôi không biết bơi")
     negative_skills: list[str] = field(default_factory=list)
+    # P0-7K-FIX8 D: intentions the user has retracted ("tôi không muốn làm Agent nữa").
+    # Distinguishes explicit negative evidence from mere absence (unknown != no).
+    negative_goals: list[str] = field(default_factory=list)
     # P0-7K-FIX1: the user's stated main goal focus ("mục tiêu chính của tôi là X")
     current_focus: str | None = None
     # P0-7K-FIX2: favorites ("tôi thích X nhất") — latest wins per domain
@@ -3440,6 +3489,8 @@ def collect_profile_snapshot(store: "MemoryStoreProtocol") -> ProfileSnapshot:
             _add(snap.learning, val)
         elif subject == "self" and rel == "goal":
             _add(snap.goals, val)
+        elif subject == "self" and rel == "negative_goal":
+            _add(snap.negative_goals, val)
         elif subject == "self" and rel == "wants_to_marry":
             _add(snap.marry_targets, val)
         elif subject == "self" and rel == "wants_to_eat":
@@ -3930,9 +3981,24 @@ def answer_profile_query(
                 goal_tokens = set(goal_key.split())
                 if target_tokens <= goal_tokens or goal_tokens <= target_tokens:
                     return f"Có, mình đang nhớ bạn đang muốn {goal}."
-        return (
-            f"Không, hiện tại mình không thấy bạn còn làm hay dự định làm {query.value}."
-        )
+            # P0-7K-FIX8 D: unknown != negative. Only answer "Không" with explicit negative
+            # evidence (a retracted intention); otherwise say the info is simply not known.
+            for neg in snap.negative_goals:
+                neg_key = _norm_cmp(neg)
+                for verb in ("làm ", "build "):
+                    if neg_key.startswith(verb):
+                        neg_key = neg_key[len(verb):].strip()
+                neg_tokens = set(neg_key.split())
+                if target_tokens <= neg_tokens or neg_tokens <= target_tokens:
+                    return f"Không, hiện tại bạn không muốn làm {query.value}."
+        # A "còn"/"nữa" phrasing ("tôi có làm X NỮA không?") presupposes prior activity, so a
+        # non-match is a genuine "no longer". A plain "có muốn làm X không?" that never
+        # matched is simply unknown (P0-7K-FIX8 D: unknown != negative).
+        if query.object_value == "still":
+            return (
+                f"Không, hiện tại mình không thấy bạn còn làm hay dự định làm {query.value}."
+            )
+        return f"Mình chưa thấy thông tin rằng bạn muốn làm {query.value}."
 
     # --- P0-7J: old_name_confirm ("Bắc là tên cũ của tôi, bạn còn nhớ không?") ---
     elif query.kind == "old_name_confirm":

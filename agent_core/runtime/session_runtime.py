@@ -90,6 +90,8 @@ from agent_core.conversation.profile_memory import (
     save_relation_update,
     save_self_name_update,
     save_temporal_today_fact,
+    save_intention_goal_fact,
+    save_negative_goal_fact,
     delete_temporal_today_fact,
     delete_wants_to_eat_fact,
 )
@@ -234,6 +236,106 @@ _RE_TEMPORAL_TODAY_REMOVE = re.compile(
 # CONV-P0 P0-7K-FIX7-LITE C: eating-desire retraction ("tôi không muốn ăn kem nữa").
 _RE_STOP_EAT = re.compile(
     r'^(?:tôi|mình)\s+không\s+muốn\s+ăn\s+(.+?)(?:\s+nữa)?\s*[.!]*\s*$',
+    re.IGNORECASE,
+)
+
+# CONV-P0 P0-7K-FIX8 A: today-scoped intention understood in prefix OR suffix position and
+# across intention verbs (muốn/sẽ/định/dự định). The "hôm nay" gate is applied by the
+# handler; these patterns capture the raw plan (which may still carry a "hôm nay" token to
+# be stripped) so a dirty generic goal ("làm LLM hôm nay") is never stored.
+_FIX8_INTENT_VERBS = r'(?:muốn|sẽ|định|dự\s+định)'
+_RE_FIX8_TODAY_REMOVE = re.compile(
+    r'^(?:hôm\s+nay\s+)?(?:tôi|mình)\s+không\s+' + _FIX8_INTENT_VERBS + r'\s+(.+?)\s*[.!?]*\s*$',
+    re.IGNORECASE,
+)
+_RE_FIX8_TODAY_WRITE = re.compile(
+    r'^(?:hôm\s+nay\s+)?(?:tôi|mình)\s+(?:đang\s+)?' + _FIX8_INTENT_VERBS + r'\s+(.+?)\s*[.!?]*\s*$',
+    re.IGNORECASE,
+)
+
+# CONV-P0 P0-7K-FIX8 C/D: durable intention alias ("tôi định/dự định làm X") and its
+# retraction ("tôi không định/muốn làm X nữa"). Requires an explicit "làm|build" head so
+# eating/affection desires are untouched. "hôm nay" forms are handled by the temporal lane;
+# the bare "sẽ làm"/"muốn làm" writes already flow through the existing goal pipeline (which
+# owns dedup / goal-switch / AI-taxonomy split), so they are deliberately NOT matched here.
+_RE_FIX8_INTENT_WRITE = re.compile(
+    r'^(?:tôi|mình)\s+(?:đang\s+)?(?:định|dự\s+định)\s+((?:làm|build)\s+.+?)\s*[.!?]*\s*$',
+    re.IGNORECASE,
+)
+_RE_FIX8_INTENT_REMOVE = re.compile(
+    r'^(?:tôi|mình)\s+không\s+(?:muốn|định|dự\s+định)\s+((?:làm|build)\s+.+?)'
+    r'(?:\s+nữa)?\s*[.!?]*\s*$',
+    re.IGNORECASE,
+)
+
+# CONV-P0 P0-7K-FIX8 E: yes/no query about today's plan, tolerant of the narrow "cps" typo
+# for "có" ("tôi cps muốn làm LLM hôm nay không?").
+_RE_FIX8_TODAY_YESNO = re.compile(
+    r'^(?:tôi|mình)\s+(?:có|cps)\s+(?:muốn\s+|định\s+|sẽ\s+)?(?:làm|build)\s+(.+?)\s+'
+    r'hôm\s+nay\s+(?:không|ko|hông|hong)\s*[?？]*\s*$',
+    re.IGNORECASE,
+)
+
+# CONV-P0 P0-7K-FIX8 G: historical preference query ("tôi có/đã từng thích ăn kem không/chưa?").
+_RE_FIX8_HISTORICAL_LIKE = re.compile(
+    r'^(?:tôi|mình)\s+(?:có|đã)\s+từng\s+thích\s+(.+?)\s+(?:không|ko|chưa|chua)\s*[?？]*\s*$',
+    re.IGNORECASE,
+)
+
+# CONV-P0 P0-7K-FIX8 H: mutual-affection factual query ("tôi và quý có thích nhau không?").
+_RE_FIX8_MUTUAL_LIKE = re.compile(
+    r'^(?:tôi|mình)\s+(?:và|với)\s+(.+?)\s+có\s+(?:thích|yêu|quý\s+mến)\s+nhau\s+'
+    r'(?:không|ko|hông|hong)\s*[?？]*\s*$',
+    re.IGNORECASE,
+)
+
+# CONV-P0 P0-7K-FIX8 M: relationship ADVICE ("tôi với quý có nên yêu nhau không?"). "nên"
+# marks advice (not a factual mutual query); answered as a bounded limitation.
+_RE_FIX8_RELATION_ADVICE = re.compile(
+    r'^(?:tôi|mình)\s+(?:và|với)\s+(.+?)\s+có\s+nên\s+(?:yêu|cưới|hẹn\s+hò|quen)\s+'
+    r'(?:nhau)?\s*(?:không|ko|hông|hong)\s*[?？]*\s*$',
+    re.IGNORECASE,
+)
+
+# CONV-P0 P0-7K-FIX8 K: double affection query ("ai đang thích tôi và tôi đang thích ai?").
+_RE_FIX8_DOUBLE_AFFECTION_Q = re.compile(
+    r'^ai\s+(?:đang\s+)?th[íi]ch\s+(?:tôi|mình)\s+và\s+(?:tôi|mình)\s+(?:đang\s+)?'
+    r'th[íi]ch\s+ai\s*[?？]*\s*$',
+    re.IGNORECASE,
+)
+
+# CONV-P0 P0-7K-FIX8 I: compound relation write ("may cũng thích tôi và tôi cũng thích may").
+# Two clauses joined by "và"; one incoming (person→USER), one outgoing (USER→person).
+_RE_FIX8_COMPOUND_RELATION = re.compile(
+    r'^(.+?)\s+và\s+(.+?)\s*[.!]*\s*$',
+    re.IGNORECASE,
+)
+_RE_FIX8_INCOMING_CLAUSE = re.compile(
+    r'^(\S+(?:\s+\S+)?)\s+(?:cũng\s+|vẫn\s+|đang\s+)?(?:thích|yêu|thương|quý\s+mến)\s+'
+    r'(tôi|mình|tao|ta)\s*$',
+    re.IGNORECASE,
+)
+_RE_FIX8_OUTGOING_CLAUSE = re.compile(
+    r'^(?:tôi|mình|tao|ta)\s+(?:cũng\s+|vẫn\s+|đang\s+)?(?:thích|yêu|thương|quý\s+mến)\s+'
+    r'(\S+(?:\s+\S+)?)\s*$',
+    re.IGNORECASE,
+)
+
+# CONV-P0 P0-7K-FIX8 J: continuation adding an admirer ("cả may nữa"/"may nữa"/"thêm may
+# nữa"). With incoming-affection context it stores the admirer; without it, it asks a named
+# clarification (P0-7K-FIX8-FIX1). The negative lookahead excludes a "và ..." lead-in, which
+# is the generic skill/preference/goal continuation marker (_RE_CONTINUATION) and must stay
+# on that lane untouched (e.g. "và ML nữa" after "tôi biết về AI").
+_RE_FIX8_CONTINUATION_ADMIRER = re.compile(
+    r'^(?:cả\s+|thêm\s+)?(?!và\s)(\S+(?:\s+\S+)?)\s+nữa\s*[.!?]*\s*$',
+    re.IGNORECASE,
+)
+
+# CONV-P0 P0-7K-FIX8 N: future-date plan query ("ngày mai tôi muốn làm gì?"). Only "hôm nay"
+# is supported; a bounded limitation is returned for other dates.
+_RE_FIX8_FUTURE_DATE_Q = re.compile(
+    r'^(ngày\s+mai|mai|ngày\s+kia|tuần\s+sau|tháng\s+sau)\s+(?:tôi|mình)\s+'
+    r'(?:muốn|sẽ|định)\s+làm\s+g[ìi]\s*[?？]*\s*$',
     re.IGNORECASE,
 )
 
@@ -445,6 +547,9 @@ class SessionRuntime:
         # pending confirmation. Session-local only, never persisted.
         self._last_memory_write_kind: str | None = None
         self._pending_delete_all: bool = False
+        # P0-7K-FIX8 L: set after the repair-choice prompt ("... sửa phần nào: ... quan hệ?")
+        # so a bare choice ("quan hệ") gets a sub-clarification instead of a fallback.
+        self._pending_repair_choice: bool = False
         if session is not None:
             self._session = session
         else:
@@ -517,6 +622,20 @@ class SessionRuntime:
         if stray_confirm is not None:
             return stray_confirm
 
+        # CONV-P0 P0-7K-FIX8 L priority 1.52: resolve a pending repair-choice ("quan hệ")
+        # after the "... sửa phần nào?" prompt with a bounded follow-up, never a fallback.
+        repair_choice = self._maybe_handle_repair_choice(user_message, state)
+        if repair_choice is not None:
+            return repair_choice
+
+        # CONV-P0 P0-7K-FIX8 F priority 1.55: embedded self-correction ("... có nghĩa là tôi
+        # muốn làm Chatbox") — extract only the trailing intended fact. Before the
+        # reminder/repair lane, which would otherwise re-dispatch the meta wrapper into the
+        # near-miss clarifier and store a dirty object.
+        fix8_correction = self._maybe_handle_fix8_embedded_correction(user_message, state)
+        if fix8_correction is not None:
+            return fix8_correction
+
         # CONV-P0 P0-7K-FIX3 priority 1.6: reminder/correction with an inner memory clause
         # → re-dispatch the inner clause; standalone repair → clarification. Prevents the
         # raw reminder sentence from being saved as memory.
@@ -528,6 +647,13 @@ class SessionRuntime:
         multi = self._maybe_handle_multi_query(user_message, state)
         if multi is not None:
             return multi
+
+        # CONV-P0 P0-7K-FIX8 J priority 1.78: continuation adding an admirer ("cả may nữa")
+        # right after an incoming-affection query. Gated on the last answered query kind, so
+        # it never fires without that context; before the generic continuation clarifier.
+        fix8_admirer = self._maybe_handle_fix8_continuation_admirer(user_message, state)
+        if fix8_admirer is not None:
+            return fix8_admirer
 
         # CONV-P0 P0-7K-FIX3 priority 1.8: bounded continuation ("và ML nữa") using the
         # last successful memory-write context.
@@ -580,6 +706,13 @@ class SessionRuntime:
         if feedback is not None:
             return feedback
 
+        # CONV-P0 P0-7K-FIX8 E/G/H/K/M/N priority 3.98: bounded relation/temporal factual
+        # queries (today yes/no, historical like, mutual, double, advice limitation, future
+        # date). Before profile query so they are not misread as generic yes/no or fallback.
+        fix8_query = self._maybe_handle_fix8_relation_queries(user_message, state)
+        if fix8_query is not None:
+            return fix8_query
+
         # CONV-P0 P0-7B priority 4: profile query — answer from confirmed facts before router.
         profile_answer = self._maybe_answer_profile_query(user_message, state)
         if profile_answer is not None:
@@ -591,6 +724,14 @@ class SessionRuntime:
         temporal = self._maybe_handle_temporal_today(user_message, state)
         if temporal is not None:
             return temporal
+
+        # CONV-P0 P0-7K-FIX8 C/D priority 4.025: durable intention alias ("tôi định làm
+        # Chatbox") and its retraction ("tôi không định làm Agent nữa"). After the temporal
+        # (today) lane, before the general desire writers/semantic layer.
+        fix8_intention = self._maybe_handle_fix8_intention_goal(user_message, state)
+        if fix8_intention is not None:
+            return fix8_intention
+
         stop_eat = self._maybe_handle_stop_eat(user_message, state)
         if stop_eat is not None:
             return stop_eat
@@ -607,6 +748,14 @@ class SessionRuntime:
         typo = self._maybe_clarify_relationship_typo(user_message, state)
         if typo is not None:
             return typo
+
+        # CONV-P0 P0-7K-FIX8 I priority 4.105: compound relation write ("may cũng thích tôi
+        # và tôi cũng thích may") → both a person→USER and a USER→person edge. Before the
+        # semantic extractor, which otherwise stores "tôi" as a liked person and drops the
+        # incoming edge.
+        fix8_compound = self._maybe_handle_fix8_compound_relation(user_message, state)
+        if fix8_compound is not None:
+            return fix8_compound
 
         # CONV-P0 P0-7K priority 4.11: hybrid semantic extraction — complex/multi-fact/
         # correction utterances route through the semantic extractor, which PROPOSES
@@ -1622,10 +1771,39 @@ class SessionRuntime:
                 build_generic_reminder_repair(reminder_answer),
             )
         if detect_repair_intent(user_message.strip()):
+            self._pending_repair_choice = True
             return self._complete_conv(
                 state, "conv:repair_clarify", build_repair_clarification()
             )
         return None
+
+    def _maybe_handle_repair_choice(
+        self, user_message: str, state: AgentState
+    ) -> AgentState | None:
+        """P0-7K-FIX8 L: resolve the repair-choice prompt. A bare choice ("quan hệ") after
+        the "... sửa phần nào?" question asks a bounded follow-up instead of falling back."""
+        if not self._pending_repair_choice:
+            return None
+        # One-shot: the pending choice is consumed this turn whether or not it matches, so a
+        # stale flag never mis-fires on a later unrelated "quan hệ".
+        self._pending_repair_choice = False
+        choice = re.sub(r"\s+", " ", user_message.strip().lower()).strip(" .!?？")
+        prompts = {
+            "quan hệ": 'Bạn muốn sửa quan hệ nào? Ví dụ: "tôi thích Quý", "Quý thích tôi", '
+                       'hoặc "tôi và Quý thích nhau".',
+            "sở thích": "Bạn muốn sửa sở thích nào? Hãy nói rõ giá trị đúng, "
+                        'ví dụ: "tôi thích ML".',
+            "kỹ năng": "Bạn muốn sửa kỹ năng nào? Hãy nói rõ giá trị đúng, "
+                       'ví dụ: "tôi biết Python".',
+            "mục tiêu": "Bạn muốn sửa mục tiêu nào? Hãy nói rõ giá trị đúng, "
+                        'ví dụ: "tôi muốn làm LLM".',
+            "tên": 'Bạn muốn sửa tên thành gì? Hãy nói rõ, ví dụ: "tên tôi là Bắc".',
+        }
+        prompt = prompts.get(choice)
+        if prompt is None:
+            return None
+        self._pending_repair_choice = False
+        return self._complete_conv(state, "conv:repair_choice_clarify", prompt)
 
     def _answer_single_memory_query(self, part: str) -> str | None:
         """Answer one memory query (profile query or yes/no), else None."""
@@ -2121,30 +2299,33 @@ class SessionRuntime:
     def _maybe_handle_temporal_today(
         self, user_message: str, state: AgentState
     ) -> AgentState | None:
-        """P0-7K-FIX7-LITE D: "hôm nay tôi muốn <action>" (write) / "hôm nay tôi không muốn
-        <action> nữa" (retract) — a today-scoped intention. Not a scheduler."""
+        """P0-7K-FIX7-LITE D / P0-7K-FIX8 A: today-scoped intention, understood in prefix OR
+        suffix position and across intention verbs (muốn/sẽ/định/dự định). Not a scheduler.
+
+        The "hôm nay" token is stripped from the stored plan so a dirty generic goal
+        ("làm LLM hôm nay") is never persisted — only the clean plan ("làm LLM")."""
         text = user_message.strip()
-        m = _RE_TEMPORAL_TODAY_REMOVE.match(text)
+        if "hôm nay" not in text.lower():
+            return None
+        m = _RE_FIX8_TODAY_REMOVE.match(text)
         if m:
-            plan = re.sub(r"\s+", " ", m.group(1).strip())
-            removed = delete_temporal_today_fact(plan, self._store)
-            if removed is not None:
+            plan = self._fix8_clean_today_plan(m.group(1))
+            if plan and not self._fix8_is_query_tail(plan):
+                removed = delete_temporal_today_fact(plan, self._store)
+                if removed is not None:
+                    return self._complete_conv(
+                        state, "conv:temporal_today_removed",
+                        f"Đã bỏ kế hoạch hôm nay: {removed}.",
+                    )
                 return self._complete_conv(
-                    state, "conv:temporal_today_removed",
-                    f"Đã bỏ kế hoạch hôm nay: {removed}.",
+                    state, "conv:temporal_today_remove_noop",
+                    f"Hôm nay mình chưa thấy kế hoạch {plan} nào để bỏ.",
                 )
-            return self._complete_conv(
-                state, "conv:temporal_today_remove_noop",
-                f"Hôm nay mình chưa thấy kế hoạch {plan} nào để bỏ.",
-            )
-        m = _RE_TEMPORAL_TODAY_WRITE.match(text)
+        m = _RE_FIX8_TODAY_WRITE.match(text)
         if m:
-            plan = re.sub(r"\s+", " ", m.group(1).strip())
+            plan = self._fix8_clean_today_plan(m.group(1))
             # A trailing question pronoun ("làm gì") is a query, already answered above.
-            # "ai" is checked case-sensitively so the tech token "AI" ("build AI") writes.
-            tokens = plan.rstrip("?？ ").split()
-            last = tokens[-1] if tokens else ""
-            if not tokens or last.lower() in ("gì", "gi") or last == "ai":
+            if not plan or self._fix8_is_query_tail(plan):
                 return None
             if not save_temporal_today_fact(
                 plan, self._store, state.session_id, original_text=text
@@ -2156,6 +2337,335 @@ class SessionRuntime:
                 f"Đã nhớ kế hoạch hôm nay của bạn: {plan}.",
             )
         return None
+
+    @staticmethod
+    def _fix8_clean_today_plan(raw: str) -> str:
+        """Strip a leading/trailing 'hôm nay' and a trailing 'nữa' from a plan phrase."""
+        cleaned = re.sub(r"\s+", " ", raw.strip())
+        cleaned = re.sub(r"(?:^hôm\s+nay\s+|\s+hôm\s+nay\b)", " ", cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(r"\s+nữa\b", "", cleaned, flags=re.IGNORECASE)
+        return re.sub(r"\s+", " ", cleaned).strip(" .!?？")
+
+    @staticmethod
+    def _fix8_is_query_tail(plan: str) -> bool:
+        """True if the plan ends in a question pronoun ("làm gì"/"làm ai") — a query, not a
+        write. "ai" is checked case-sensitively so the tech token "AI" still writes."""
+        tokens = plan.rstrip("?？ ").split()
+        if not tokens:
+            return True
+        last = tokens[-1]
+        return last.lower() in ("gì", "gi") or last == "ai"
+
+    def _maybe_handle_fix8_intention_goal(
+        self, user_message: str, state: AgentState
+    ) -> AgentState | None:
+        """P0-7K-FIX8 C/D: durable intention alias ("tôi định làm Chatbox") and its
+        retraction ("tôi không định/muốn làm Agent nữa"). "hôm nay" forms are owned by the
+        temporal lane and are skipped here."""
+        text = user_message.strip()
+        if "hôm nay" in text.lower():
+            return None
+        # A compound goal-switch ("... không muốn build LLM NỮA TÔI MUỐN build AI Agent") is
+        # owned by the existing goal pipeline (remove + add in one turn); do not intercept it.
+        if re.search(r'\bnữa\s+(?:tôi|mình)\s+(?:muốn|định|sẽ|dự\s+định)\b', text, re.IGNORECASE):
+            return None
+        m = _RE_FIX8_INTENT_REMOVE.match(text)
+        if m:
+            plan = re.sub(r"\s+", " ", m.group(1).strip()).strip(" .!?？")
+            if not plan or self._fix8_is_query_tail(plan):
+                return None
+            if not save_negative_goal_fact(
+                plan, self._store, state.session_id, original_text=text
+            ):
+                return None
+            self._confirmed_profile_fact_count += 1
+            self._last_memory_write_kind = None
+            return self._complete_conv(
+                state, "conv:fix8_intention_retracted",
+                f"Đã ghi nhận: hiện tại bạn không còn muốn {plan}.",
+            )
+        m = _RE_FIX8_INTENT_WRITE.match(text)
+        if m:
+            plan = re.sub(r"\s+", " ", m.group(1).strip()).strip(" .!?？")
+            if not plan or self._fix8_is_query_tail(plan):
+                return None
+            if not save_intention_goal_fact(
+                plan, self._store, state.session_id, original_text=text
+            ):
+                return None
+            self._confirmed_profile_fact_count += 1
+            self._last_memory_write_kind = "goal"
+            return self._complete_conv(
+                state, "conv:fix8_intention_saved",
+                f"Đã nhớ là bạn định {plan}.",
+            )
+        return None
+
+    @staticmethod
+    def _fix8_person_match(needle: str, haystack: list[str]) -> str | None:
+        """Return the stored spelling of a person from ``haystack`` matching ``needle``
+        case-insensitively, else None."""
+        key = re.sub(r"\s+", " ", needle.strip().lower())
+        for item in haystack:
+            if re.sub(r"\s+", " ", item.strip().lower()) == key:
+                return item
+        return None
+
+    def _maybe_handle_fix8_embedded_correction(
+        self, user_message: str, state: AgentState
+    ) -> AgentState | None:
+        """P0-7K-FIX8 F: an embedded self-correction ("tôi nói là tôi định làm CÓ NGHĨA LÀ
+        tôi muốn làm Chatbox") — extract only the trailing intended fact, never the meta
+        wrapper, and record it as an intention."""
+        text = user_message.strip()
+        m = re.search(
+            r'(?:có\s+nghĩa\s+là|nghĩa\s+là|ý\s+(?:tôi\s+)?là)\s+(?:tôi|mình)\s+'
+            r'(?:muốn|định|sẽ|dự\s+định)\s+((?:làm|build)\s+.+?)\s*[.!?]*\s*$',
+            text, flags=re.IGNORECASE,
+        )
+        if m is None:
+            return None
+        plan = re.sub(r"\s+", " ", m.group(1).strip()).strip(" .!?？")
+        if not plan or self._fix8_is_query_tail(plan):
+            return None
+        if not save_intention_goal_fact(
+            plan, self._store, state.session_id, original_text=text
+        ):
+            return None
+        self._confirmed_profile_fact_count += 1
+        self._last_memory_write_kind = "goal"
+        return self._complete_conv(
+            state, "conv:fix8_embedded_correction",
+            f"Mình hiểu. Mình sẽ ghi nhận {plan} là việc bạn muốn/định làm.",
+        )
+
+    def _maybe_handle_fix8_compound_relation(
+        self, user_message: str, state: AgentState
+    ) -> AgentState | None:
+        """P0-7K-FIX8 I: a compound relation write joining an incoming clause (person→USER)
+        and an outgoing clause (USER→person) with "và" ("may cũng thích tôi và tôi cũng
+        thích may"). Stores both edges; never stores "tôi" as a liked person."""
+        m = _RE_FIX8_COMPOUND_RELATION.match(user_message.strip())
+        if m is None:
+            return None
+        clauses = [m.group(1).strip(), m.group(2).strip()]
+        admirer: str | None = None
+        liked: str | None = None
+        for clause in clauses:
+            mi = _RE_FIX8_INCOMING_CLAUSE.match(clause)
+            if mi is not None:
+                admirer = mi.group(1).strip()
+                continue
+            mo = _RE_FIX8_OUTGOING_CLAUSE.match(clause)
+            if mo is not None:
+                liked = mo.group(1).strip()
+                continue
+            # An unrecognized clause → not a clean compound relation; let other lanes try.
+            return None
+        if admirer is None or liked is None:
+            return None
+        if admirer.lower() in _EXTERNAL_AFFECTION_SELF_WORDS or liked.lower() in _EXTERNAL_AFFECTION_SELF_WORDS:
+            return None
+        saved = False
+        if save_external_affection_fact(
+            admirer, self._store, state.session_id, original_text=user_message.strip()
+        ):
+            self._confirmed_profile_fact_count += 1
+            saved = True
+        if save_affection_fact(
+            liked, self._store, state.session_id, original_text=user_message.strip()
+        ):
+            self._confirmed_profile_fact_count += 1
+            saved = True
+        if not saved:
+            return None
+        return self._complete_conv(
+            state, "conv:fix8_compound_relation",
+            f"Đã nhớ: {admirer} thích bạn, và bạn cũng thích {liked}.",
+        )
+
+    def _maybe_handle_fix8_continuation_admirer(
+        self, user_message: str, state: AgentState
+    ) -> AgentState | None:
+        """P0-7K-FIX8 J: after an incoming-affection query ("ai đang thích tôi"), a bare
+        continuation ("cả may nữa") adds one more admirer. Only fires when the previous
+        answered query was the incoming-affection set.
+
+        P0-7K-FIX8-FIX1: WITHOUT that context, the same shape ("cả may nữa"/"may
+        nữa"/"thêm may nữa") is genuinely ambiguous — it could mean "X likes me", "I like
+        X", or something else entirely. Ask a named, context-specific clarification instead
+        of the generic continuation prompt, and never store an admirer without context."""
+        m = _RE_FIX8_CONTINUATION_ADMIRER.match(user_message.strip())
+        if m is None:
+            return None
+        admirer = re.sub(r"\s+", " ", m.group(1).strip())
+        # "gì"/"ai" are question words ("gì nữa?", "ai nữa?"), not a name — leave those to
+        # the existing goal/preference follow-up lane. "ai" is checked case-sensitively so
+        # the tech token "AI" ("cả AI nữa") is still treated as a real admirer candidate.
+        if not admirer or admirer.lower() in _EXTERNAL_AFFECTION_SELF_WORDS:
+            return None
+        if admirer.lower() in ("gì", "gi") or admirer == "ai":
+            return None
+        if self._last_profile_query_kind != "incoming_affection_set":
+            return self._complete_conv(
+                state, "conv:fix8_continuation_no_context",
+                f'Mình chưa có ngữ cảnh rõ cho "{admirer} nữa". Bạn muốn nói cụ thể là '
+                f"{admirer} thích bạn, bạn thích {admirer}, hay {admirer} cũng thuộc danh "
+                "sách nào?",
+            )
+        if not save_external_affection_fact(
+            admirer, self._store, state.session_id, original_text=user_message.strip()
+        ):
+            return None
+        self._confirmed_profile_fact_count += 1
+        return self._complete_conv(
+            state, "conv:fix8_continuation_admirer",
+            f"Đã nhớ thêm: {admirer} cũng thích bạn.",
+        )
+
+    def _maybe_handle_fix8_relation_queries(
+        self, user_message: str, state: AgentState
+    ) -> AgentState | None:
+        """P0-7K-FIX8 E/G/H/K/M/N: bounded factual relation/temporal queries that otherwise
+        fall to the generic fallback. No inference beyond stored edges."""
+        text = user_message.strip()
+
+        # N: future-date plan query — only "hôm nay" is supported.
+        m = _RE_FIX8_FUTURE_DATE_Q.match(text)
+        if m is not None:
+            when = re.sub(r"\s+", " ", m.group(1).strip().lower())
+            return self._complete_conv(
+                state, "conv:fix8_future_date_limit",
+                f'Hiện tại mình mới hỗ trợ kế hoạch "hôm nay", chưa hỗ trợ kế hoạch cho {when}.',
+            )
+
+        # E: yes/no about today's plan (tolerant of the "cps" typo for "có").
+        m = _RE_FIX8_TODAY_YESNO.match(text)
+        if m is not None:
+            plan = self._fix8_clean_today_plan(m.group(1))
+            snap = collect_profile_snapshot(self._store)
+            target = set(re.sub(r"\s+", " ", plan.lower()).split())
+            for intent in snap.today_intentions:
+                key = re.sub(r"^(?:làm|build)\s+", "", intent.lower())
+                if target and (target <= set(key.split()) or set(key.split()) <= target):
+                    return self._complete_conv(
+                        state, "conv:fix8_today_yesno_yes",
+                        f"Có, hôm nay bạn muốn {intent}.",
+                    )
+            return self._complete_conv(
+                state, "conv:fix8_today_yesno_no",
+                f"Hôm nay mình chưa thấy kế hoạch {plan} nào của bạn.",
+            )
+
+        # M: relationship advice — bounded limitation + known memory summary (NOT a factual
+        # mutual answer). Checked before the mutual query ("nên" marks advice).
+        m = _RE_FIX8_RELATION_ADVICE.match(text)
+        if m is not None:
+            person = re.sub(r"\s+", " ", m.group(1).strip())
+            snap = collect_profile_snapshot(self._store)
+            liked = self._fix8_person_match(person, snap.affections)
+            admired = self._fix8_person_match(person, snap.external_affections)
+            display = liked or admired or person
+            summary = self._fix8_relation_summary(display, bool(liked), bool(admired))
+            return self._complete_conv(
+                state, "conv:fix8_relationship_advice",
+                "Mình chưa có module tư vấn quan hệ trong MVP rule-based. " + summary,
+            )
+
+        # H: factual mutual-affection query.
+        m = _RE_FIX8_MUTUAL_LIKE.match(text)
+        if m is not None:
+            person = re.sub(r"\s+", " ", m.group(1).strip())
+            snap = collect_profile_snapshot(self._store)
+            liked = self._fix8_person_match(person, snap.affections)
+            admired = self._fix8_person_match(person, snap.external_affections)
+            display = liked or admired or person
+            if liked and admired:
+                return self._complete_conv(
+                    state, "conv:fix8_mutual_yes",
+                    f"Có, theo thông tin hiện tại: bạn thích {display} và {display} "
+                    "cũng thích bạn.",
+                )
+            if liked and not admired:
+                return self._complete_conv(
+                    state, "conv:fix8_mutual_one_side",
+                    f"Bạn thích {display}, nhưng mình chưa thấy thông tin rằng {display} "
+                    "thích bạn.",
+                )
+            if admired and not liked:
+                return self._complete_conv(
+                    state, "conv:fix8_mutual_one_side",
+                    f"{display} thích bạn, nhưng mình chưa thấy thông tin rằng bạn thích "
+                    f"{display}.",
+                )
+            return self._complete_conv(
+                state, "conv:fix8_mutual_unknown",
+                "Mình chưa thấy thông tin về việc này.",
+            )
+
+        # K: double affection query ("ai đang thích tôi và tôi đang thích ai?").
+        if _RE_FIX8_DOUBLE_AFFECTION_Q.match(text) is not None:
+            snap = collect_profile_snapshot(self._store)
+            incoming = list(snap.external_affections)
+            outgoing = list(snap.affections)
+            in_text = ", ".join(incoming) if incoming else "chưa có ai"
+            out_text = ", ".join(outgoing) if outgoing else "chưa có ai"
+            return self._complete_conv(
+                state, "conv:fix8_double_affection",
+                f"Người đang thích bạn: {in_text}.\nNgười bạn đang thích: {out_text}.",
+            )
+
+        # G: historical preference query ("tôi có từng thích ăn kem không?").
+        m = _RE_FIX8_HISTORICAL_LIKE.match(text)
+        if m is not None:
+            obj = re.sub(r"\s+", " ", m.group(1).strip().rstrip("?？"))
+            snap = collect_profile_snapshot(self._store)
+            actives = snap.preferences_personal + snap.preferences_professional
+            if self._fix8_pref_contains(obj, actives):
+                return self._complete_conv(
+                    state, "conv:fix8_historical_active",
+                    f"Có, hiện tại bạn vẫn thích {obj}.",
+                )
+            if self._fix8_pref_contains(obj, snap.dislikes):
+                return self._complete_conv(
+                    state, "conv:fix8_historical_retracted",
+                    f"Có, trước đây bạn từng thích {obj}, nhưng hiện tại bạn không "
+                    f"thích {obj}.",
+                )
+            return self._complete_conv(
+                state, "conv:fix8_historical_unknown",
+                f"Mình chưa thấy thông tin rằng bạn từng thích {obj}.",
+            )
+
+        return None
+
+    @staticmethod
+    def _fix8_pref_contains(needle: str, prefs: list[str]) -> bool:
+        """Token-subset match of a preference object against a stored preference list, so
+        "ăn kem" matches a stored "kem"/"ăn kem" and vice versa."""
+        target = set(re.sub(r"\s+", " ", needle.lower()).split())
+        if not target:
+            return False
+        for pref in prefs:
+            tokens = set(re.sub(r"\s+", " ", pref.lower()).split())
+            if target <= tokens or tokens <= target:
+                return True
+        return False
+
+    @staticmethod
+    def _fix8_relation_summary(person: str, liked: bool, admired: bool) -> str:
+        if liked and admired:
+            return (
+                f"Theo memory hiện tại, bạn thích {person} và {person} cũng thích bạn "
+                "theo thông tin bạn cung cấp."
+            )
+        if liked:
+            return f"Theo memory hiện tại, bạn thích {person}."
+        if admired:
+            return (
+                f"Theo memory hiện tại, {person} thích bạn theo thông tin bạn cung cấp."
+            )
+        return f"Theo memory hiện tại, mình chưa thấy quan hệ tình cảm nào với {person}."
 
     def _maybe_handle_stop_eat(
         self, user_message: str, state: AgentState
