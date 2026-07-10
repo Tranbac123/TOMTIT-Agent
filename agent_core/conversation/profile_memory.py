@@ -1784,7 +1784,12 @@ def build_followup_response(has_context: bool) -> str:
     """Answer for a "gì nữa?" follow-up after a profile query (session-local, no memory)."""
     if has_context:
         return "Hiện tại mình chỉ thấy các thông tin đó trong hồ sơ của bạn."
-    return "Bạn muốn hỏi tiếp về thông tin nào trong hồ sơ của bạn?"
+    # P0-7K-FIX8-FIX2: echo the literal "gì nữa" the user asked, so the reply reads as a
+    # direct answer to their question rather than a generic prompt.
+    return (
+        'Bạn muốn hỏi "gì nữa" về hồ sơ của bạn? Ví dụ: sở thích, mục tiêu, kế hoạch hôm '
+        "nay, hoặc quan hệ."
+    )
 
 
 def build_negation_no_affection_response() -> str:

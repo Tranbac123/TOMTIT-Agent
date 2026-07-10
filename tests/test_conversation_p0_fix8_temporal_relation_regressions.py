@@ -217,6 +217,17 @@ def test_fix8_continuation_without_incoming_context_asks_named_clarification():
     assert "may" not in incoming, incoming
 
 
+def test_fix8_question_word_followup_echoes_literal_gi_and_does_not_store():
+    sr = _make_sr()
+    _ans(sr, "tôi thích ăn kem")
+    ans = _low(sr, "gì nữa?")
+    assert _no_generic(ans), ans
+    assert "gì" in ans, ans
+    # "gì" is never stored as a person/admirer/preference object.
+    incoming = _low(sr, "ai đang thích tôi")
+    assert "gì" not in incoming, incoming
+
+
 # ---------------------------------------------------------------------------
 # 11. Double query split (K)
 # ---------------------------------------------------------------------------
