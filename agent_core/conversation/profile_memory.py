@@ -2835,6 +2835,34 @@ def detect_delete_all_confirmation(text: str) -> bool:
     return bool(_RE_DELETE_CONFIRM.match(text.strip()))
 
 
+# P0-7K-FIX8-R1 D: broader confirmation allowlist accepted ONLY while a delete-all is already
+# pending. Bare "ok"/"yes"/"y"/"đồng ý"/"xác nhận" carry no delete verb, so they must never
+# match the strict detector above (which also guards the no-pending "stray confirmation"
+# lane) — they only confirm in a context where the user was explicitly asked to confirm.
+_RE_DELETE_CONFIRM_PENDING = re.compile(
+    r'^(?:'
+    r'ok|okay|oke|okie'
+    r'|yes|y|confirm'
+    r'|đồng\s+ý'
+    r'|xác\s+nhận(?:\s+' + _XOA + r'(?:\s+ký\s+ức)?)?'
+    r'|' + _XOA + r'\s+(?:đi|luôn|ngay)'
+    r')\s*[.!]*\s*$',
+    re.IGNORECASE,
+)
+
+
+def detect_delete_all_confirmation_pending(text: str) -> bool:
+    """Confirmation matcher used ONLY when a delete-all is already pending (P0-7K-FIX8-R1 D).
+
+    Superset of the strict detector: adds bare "ok/okay/oke/yes/y/confirm/đồng ý/xác nhận".
+    """
+    stripped = text.strip()
+    return bool(
+        _RE_DELETE_CONFIRM.match(stripped)
+        or _RE_DELETE_CONFIRM_PENDING.match(stripped)
+    )
+
+
 def delete_all_profile_memory(store: "MemoryStoreProtocol") -> int:
     """Delete every confirmed user-profile record. Returns the count removed."""
     records = list(store.search(MemoryQuery(
@@ -3093,6 +3121,29 @@ class ProfileSnapshot:
 
 def _norm_cmp(value: str) -> str:
     return re.sub(r"\s+", " ", value.strip().lower())
+
+
+# P0-7K-FIX8-R1 B: discourse modifiers that a relation clause may leave attached to a person
+# entity ("may cũng", "cả may", "may nữa", "linh cũng đang"). They are never part of a real
+# name, so they are stripped from either end before a person is stored/queried/displayed.
+_PERSON_DISCOURSE_MODIFIERS: frozenset[str] = frozenset(
+    {"cũng", "vẫn", "đều", "cả", "thêm", "nữa", "đang"}
+)
+
+
+def canonical_person_name(name: str) -> str:
+    """Strip leading/trailing discourse modifiers from a person entity.
+
+    "may cũng" -> "may", "cả may nữa" -> "may", "linh cũng đang" -> "linh". A genuine
+    multi-word name ("Quỳnh Anh") is preserved because only known modifier tokens are
+    removed. Never returns empty: an all-modifier input falls back to the trimmed original.
+    """
+    tokens = re.sub(r"\s+", " ", name.strip()).split()
+    while tokens and tokens[0].lower() in _PERSON_DISCOURSE_MODIFIERS:
+        tokens.pop(0)
+    while tokens and tokens[-1].lower() in _PERSON_DISCOURSE_MODIFIERS:
+        tokens.pop()
+    return " ".join(tokens) if tokens else re.sub(r"\s+", " ", name.strip())
 
 
 def _split_skill_query_items(value: str) -> list[str]:
@@ -3472,13 +3523,16 @@ def collect_profile_snapshot(store: "MemoryStoreProtocol") -> ProfileSnapshot:
         elif subject == "self" and rel == "negative_preference":
             _add(snap.dislikes, val)
         elif subject == "self" and rel == "affection":
-            _add(snap.affections, val)
+            # P0-7K-FIX8-R1 B/C: canonicalize the person and dedupe at the snapshot choke
+            # point so a legacy dirty record ("may cũng") and repeated writes collapse to a
+            # single clean entry in every display/query lane — no migration required.
+            _add(snap.affections, canonical_person_name(val))
         elif subject == "self" and rel == "negative_affection":
-            _add(snap.negative_affections, val)
+            _add(snap.negative_affections, canonical_person_name(val))
         elif subject == "external" and rel == "affection_to_user":
-            _add(snap.external_affections, val)
+            _add(snap.external_affections, canonical_person_name(val))
         elif subject == "external" and rel == "affection_to_user_negative":
-            _add(snap.negative_external_affections, val)
+            _add(snap.negative_external_affections, canonical_person_name(val))
         elif subject == "self" and rel == "occupation":
             _add(snap.occupation, val)
         elif subject == "self" and rel == "skill":
