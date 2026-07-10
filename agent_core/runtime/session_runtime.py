@@ -62,7 +62,9 @@ from agent_core.conversation.profile_memory import (
     detect_profile_fact_candidate,
     detect_profile_query,
     delete_all_profile_memory,
+    canonical_person_name,
     detect_delete_all_confirmation,
+    detect_delete_all_confirmation_pending,
     detect_delete_all_memory_request,
     detect_reminder_inner_clause,
     detect_answer_feedback,
@@ -282,9 +284,14 @@ _RE_FIX8_HISTORICAL_LIKE = re.compile(
     re.IGNORECASE,
 )
 
-# CONV-P0 P0-7K-FIX8 H: mutual-affection factual query ("tôi và quý có thích nhau không?").
+# CONV-P0 P0-7K-FIX8 H / P0-7K-FIX8-R1 A: mutual-affection factual query, symmetric in the
+# USER/person order — "tôi và X", "X và tôi", "tôi với X", "X với tôi" all resolve to the
+# same USER<->X mutual question. The person is captured by whichever named group matched.
 _RE_FIX8_MUTUAL_LIKE = re.compile(
-    r'^(?:tôi|mình)\s+(?:và|với)\s+(.+?)\s+có\s+(?:thích|yêu|quý\s+mến)\s+nhau\s+'
+    r'^(?:'
+    r'(?:tôi|mình)\s+(?:và|với)\s+(?P<a>.+?)'
+    r'|(?P<b>.+?)\s+(?:và|với)\s+(?:tôi|mình)'
+    r')\s+có\s+(?:thích|yêu|quý\s+mến)\s+nhau\s+'
     r'(?:không|ko|hông|hong)\s*[?？]*\s*$',
     re.IGNORECASE,
 )
@@ -1684,7 +1691,10 @@ class SessionRuntime:
            confirmation) and fall through to normal routing.
         """
         text = user_message.strip()
-        if detect_delete_all_confirmation(text):
+        # P0-7K-FIX8-R1 D: while a delete is pending, accept the broader confirmation set
+        # (bare "ok"/"yes"/"đồng ý"/"xác nhận"). The strict detector still guards the
+        # no-pending stray-confirmation lane, so a random "ok" elsewhere never claims a wipe.
+        if detect_delete_all_confirmation_pending(text):
             self._pending_delete_all = False
             delete_all_profile_memory(self._store)
             self._confirmed_profile_fact_count = 0
@@ -2454,11 +2464,13 @@ class SessionRuntime:
         for clause in clauses:
             mi = _RE_FIX8_INCOMING_CLAUSE.match(clause)
             if mi is not None:
-                admirer = mi.group(1).strip()
+                # R1 B: the subject group can greedily swallow a discourse modifier
+                # ("may cũng"); canonicalize so only the real name is stored.
+                admirer = canonical_person_name(mi.group(1).strip())
                 continue
             mo = _RE_FIX8_OUTGOING_CLAUSE.match(clause)
             if mo is not None:
-                liked = mo.group(1).strip()
+                liked = canonical_person_name(mo.group(1).strip())
                 continue
             # An unrecognized clause → not a clean compound relation; let other lanes try.
             return None
@@ -2505,6 +2517,10 @@ class SessionRuntime:
         if not admirer or admirer.lower() in _EXTERNAL_AFFECTION_SELF_WORDS:
             return None
         if admirer.lower() in ("gì", "gi") or admirer == "ai":
+            return None
+        # R1 B: strip any residual discourse modifier ("may cũng") before storing.
+        admirer = canonical_person_name(admirer)
+        if not admirer or admirer.lower() in _EXTERNAL_AFFECTION_SELF_WORDS:
             return None
         if self._last_profile_query_kind != "incoming_affection_set":
             return self._complete_conv(
@@ -2572,10 +2588,11 @@ class SessionRuntime:
                 "Mình chưa có module tư vấn quan hệ trong MVP rule-based. " + summary,
             )
 
-        # H: factual mutual-affection query.
+        # H: factual mutual-affection query (symmetric in USER/person order — R1 A).
         m = _RE_FIX8_MUTUAL_LIKE.match(text)
         if m is not None:
-            person = re.sub(r"\s+", " ", m.group(1).strip())
+            raw_person = m.group("a") or m.group("b") or ""
+            person = canonical_person_name(re.sub(r"\s+", " ", raw_person.strip()))
             snap = collect_profile_snapshot(self._store)
             liked = self._fix8_person_match(person, snap.affections)
             admired = self._fix8_person_match(person, snap.external_affections)
