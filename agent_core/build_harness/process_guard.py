@@ -18,7 +18,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import StrEnum
 
-from agent_core.build_harness.change_gate import ChangeGateDecision
+from agent_core.build_harness.change_gate import (
+    ChangeGateDecision,
+    validate_change_gate_decision,
+)
 from agent_core.build_harness.contracts import TaskContract
 from agent_core.build_harness.reports import AgentReport, is_allowed_status_result
 from agent_core.build_harness.state import TaskState
@@ -151,6 +154,13 @@ def evaluate_process_guard(guard_input: ProcessGuardInput) -> ProcessGuardDecisi
             reason="verifier returned NEEDS_FIX",
         )
 
+    # R3: a ChangeGateDecision is only trusted when it is PASS AND internally consistent.
+    gate = guard_input.changegate_decision
+    gate_integrity_errors: list[str] = []
+    gate_is_pass = gate is not None and getattr(gate, "decision", None) == "PASS"
+    if gate_is_pass:
+        gate_integrity_errors = validate_change_gate_decision(contract, gate)
+
     shipping = action in _SHIP_ACTIONS
     missing: list[str] = []
     if shipping:
@@ -161,15 +171,22 @@ def evaluate_process_guard(guard_input: ProcessGuardInput) -> ProcessGuardDecisi
             missing.append("implementer_report_pass")
         if verifier_result != "PASS":
             missing.append("verifier_report_pass")
-        if guard_input.changegate_decision is None or guard_input.changegate_decision.decision != "PASS":
+        if gate is None or getattr(gate, "decision", None) != "PASS":
             missing.append("changegate_pass")
+        elif gate_integrity_errors:
+            missing.append("valid_changegate_decision")
         if missing:
+            reason = (
+                f"cannot ship from task_state={guard_input.task_state.value}: "
+                "missing " + ", ".join(missing)
+            )
+            if "valid_changegate_decision" in missing:
+                reason += (
+                    "; ChangeGateDecision marked PASS is internally inconsistent: "
+                    + "; ".join(gate_integrity_errors)
+                )
             return ProcessGuardDecision(
-                decision="BLOCK", missing_steps=missing,
-                reason=(
-                    f"cannot ship from task_state={guard_input.task_state.value}: "
-                    "missing " + ", ".join(missing)
-                ),
+                decision="BLOCK", missing_steps=missing, reason=reason,
             )
         if action in _APPROVAL_HARD_ACTIONS and not guard_input.human_approved:
             return ProcessGuardDecision(
@@ -191,8 +208,10 @@ def evaluate_process_guard(guard_input: ProcessGuardInput) -> ProcessGuardDecisi
         missing.append("implementer_report_pass")
     if verifier_result != "PASS":
         missing.append("verifier_report_pass")
-    if guard_input.changegate_decision is None or guard_input.changegate_decision.decision != "PASS":
+    if gate is None or getattr(gate, "decision", None) != "PASS":
         missing.append("changegate_pass")
+    elif gate_integrity_errors:
+        missing.append("valid_changegate_decision")
     if not guard_input.human_approved:
         missing.append("human_approval")
     if missing:

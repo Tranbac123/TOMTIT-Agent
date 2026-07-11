@@ -20,6 +20,7 @@ from pathlib import Path
 from agent_core.build_harness.change_gate import (
     ChangeGateInput,
     CommandEvidence,
+    InvalidCommandEvidenceError,
     evaluate_change_gate,
 )
 from agent_core.build_harness.contracts import (
@@ -42,6 +43,66 @@ def _load_contract_or_exit(path: str):
     except (ContractValidationError, OSError) as exc:
         _print_json({"ok": False, "error": str(exc)})
         raise SystemExit(1)
+
+
+_EVIDENCE_REQUIRED_KEYS = frozenset({
+    "evidence_id", "command", "exit_code", "completed", "commit_sha",
+})
+_EVIDENCE_ALLOWED_KEYS = _EVIDENCE_REQUIRED_KEYS | {"completed_at", "artifact_digest"}
+
+
+def _load_evidence_file(path: str) -> tuple[list[CommandEvidence], list[str]]:
+    """Strictly parse a changegate evidence file.
+
+    Returns ``(evidence, errors)``. When ``errors`` is non-empty the evidence must not be
+    trusted. NO coercion: each field must already have the exact JSON type CommandEvidence
+    requires (its ``__post_init__`` enforces this; we surface a clean error, not a
+    traceback).
+    """
+    errors: list[str] = []
+    try:
+        raw = json.loads(Path(path).read_text(encoding="utf-8"))
+    except OSError as exc:
+        return [], [f"cannot read evidence file: {exc}"]
+    except json.JSONDecodeError as exc:
+        return [], [f"evidence file is not valid JSON: {exc}"]
+
+    if not isinstance(raw, dict):
+        return [], ["evidence file root must be a JSON object"]
+    unknown_root = sorted(set(raw) - {"evidence"})
+    if unknown_root:
+        errors.append(f"unknown root key(s): {unknown_root}")
+    entries = raw.get("evidence")
+    if not isinstance(entries, list):
+        errors.append('"evidence" must be a list')
+        return [], errors
+
+    evidence: list[CommandEvidence] = []
+    for index, entry in enumerate(entries):
+        if not isinstance(entry, dict):
+            errors.append(f"evidence[{index}] must be a JSON object")
+            continue
+        missing = sorted(_EVIDENCE_REQUIRED_KEYS - set(entry))
+        if missing:
+            errors.append(f"evidence[{index}] missing field(s): {missing}")
+        unknown = sorted(set(entry) - _EVIDENCE_ALLOWED_KEYS)
+        if unknown:
+            errors.append(f"evidence[{index}] has unknown field(s): {unknown}")
+        if missing or unknown:
+            continue
+        try:
+            evidence.append(CommandEvidence(
+                command=entry["command"],
+                exit_code=entry["exit_code"],
+                completed=entry["completed"],
+                commit_sha=entry["commit_sha"],
+                evidence_id=entry["evidence_id"],
+                completed_at=entry.get("completed_at"),
+                artifact_digest=entry.get("artifact_digest"),
+            ))
+        except InvalidCommandEvidenceError as exc:
+            errors.append(f"evidence[{index}] invalid: {exc}")
+    return evidence, errors
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -139,23 +200,16 @@ def main(argv: list[str] | None = None) -> int:
         contract = _load_contract_or_exit(args.contract)
         evidence: list[CommandEvidence] = []
         if args.evidence_file:
-            try:
-                raw = json.loads(Path(args.evidence_file).read_text(encoding="utf-8"))
-                entries = raw.get("evidence")
-                if not isinstance(entries, list):
-                    raise ValueError('evidence file must contain an "evidence" list')
-                for entry in entries:
-                    evidence.append(CommandEvidence(
-                        command=str(entry["command"]),
-                        exit_code=int(entry["exit_code"]),
-                        completed=bool(entry["completed"]),
-                        commit_sha=str(entry["commit_sha"]),
-                        evidence_id=str(entry["evidence_id"]),
-                        completed_at=entry.get("completed_at"),
-                        artifact_digest=entry.get("artifact_digest"),
-                    ))
-            except (OSError, ValueError, KeyError, TypeError) as exc:
-                _print_json({"ok": False, "error": f"invalid evidence file: {exc}"})
+            evidence, load_errors = _load_evidence_file(args.evidence_file)
+            if load_errors:
+                # R3: input validation errors are machine-readable, never a traceback.
+                _print_json({
+                    "accepted": False,
+                    "decision": "BLOCK",
+                    "rejected_evidence": [],
+                    "validation_errors": load_errors,
+                    "error": "; ".join(load_errors),
+                })
                 return 1
         decision = evaluate_change_gate(ChangeGateInput(
             contract=contract,
@@ -164,8 +218,10 @@ def main(argv: list[str] | None = None) -> int:
             expected_commit_sha=args.expected_commit,
             test_evidence=evidence,
         ))
-        _print_json(decision.to_dict())
-        # P0-9A-R2 fail-closed exit semantics: only PASS is a success.
+        out = decision.to_dict()
+        out["accepted"] = decision.decision == "PASS"
+        _print_json(out)
+        # P0-9A-R2/R3 fail-closed exit semantics: only PASS is a success.
         return 0 if decision.decision == "PASS" else 1
 
     if args.command == "next-action":

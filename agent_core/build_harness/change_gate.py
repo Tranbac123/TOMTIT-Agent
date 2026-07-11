@@ -24,6 +24,7 @@ from pathlib import PurePosixPath
 from agent_core.build_harness.contracts import TaskContract
 from agent_core.build_harness.validation import (
     InvalidRepoPathError,
+    is_valid_evidence_id,
     normalize_repo_path,
 )
 
@@ -31,6 +32,19 @@ DEPENDENCY_FILES = frozenset({
     "requirements.txt", "pyproject.toml", "poetry.lock",
     "package.json", "package-lock.json", "pnpm-lock.yaml", "yarn.lock",
 })
+
+# Valid finding severities/types. An unknown severity fails closed (treated as BLOCK by
+# the decision-integrity validator) so a hand-forged decision cannot smuggle a PASS.
+_VALID_SEVERITIES = frozenset({"info", "warning", "block"})
+_BLOCKING_FINDING_TYPES = frozenset({
+    "invalid_changed_path", "forbidden_path", "out_of_scope", "outside_allowed_path",
+    "no_changed_files", "dependency_change", "missing_evidence", "no_evidence",
+    "duplicate_evidence_id", "invalid_evidence",
+})
+
+
+class InvalidCommandEvidenceError(ValueError):
+    """A CommandEvidence field failed strict type/value validation (no coercion)."""
 
 
 @dataclass(frozen=True)
@@ -42,9 +56,44 @@ class Finding:
     evidence: str | None = None
 
 
+def _command_evidence_error(obj: object) -> str | None:
+    """Return a rejection reason if ``obj`` is not a well-formed evidence record, else None.
+
+    Strict types with NO coercion: bool is not an int; "0"/"false" are not accepted.
+    Used by both ``CommandEvidence.__post_init__`` (fail at construction) and the gate
+    (defensive re-check so a bypass-constructed object can never crash or PASS).
+    """
+    command = getattr(obj, "command", None)
+    if type(command) is not str or not command.strip():
+        return f"command must be a non-empty string, got {command!r}"
+    exit_code = getattr(obj, "exit_code", None)
+    if type(exit_code) is not int:  # bool is a subclass — type() is exactly int only
+        return f"exit_code must be an int (not bool/str/float), got {exit_code!r}"
+    completed = getattr(obj, "completed", None)
+    if type(completed) is not bool:
+        return f"completed must be a bool, got {completed!r}"
+    commit_sha = getattr(obj, "commit_sha", None)
+    if type(commit_sha) is not str or not commit_sha.strip():
+        return f"commit_sha must be a non-empty string, got {commit_sha!r}"
+    evidence_id = getattr(obj, "evidence_id", None)
+    if type(evidence_id) is not str or not evidence_id.strip():
+        return f"evidence_id must be a non-empty string, got {evidence_id!r}"
+    if not is_valid_evidence_id(evidence_id):
+        return f"evidence_id {evidence_id!r} is not a valid identifier"
+    for opt_name in ("completed_at", "artifact_digest"):
+        opt = getattr(obj, opt_name, None)
+        if opt is not None and (type(opt) is not str or not opt.strip()):
+            return f"{opt_name} must be None or a non-empty string, got {opt!r}"
+    return None
+
+
 @dataclass(frozen=True)
 class CommandEvidence:
-    """Proof that one evidence command actually ran to completion at a known commit."""
+    """Proof that one evidence command actually ran to completion at a known commit.
+
+    Fields are validated strictly on construction (P0-9A-R3): no bool/str/float is
+    coerced into exit_code/completed, and the evidence_id must be a real identifier.
+    """
     command: str
     exit_code: int
     completed: bool
@@ -52,6 +101,11 @@ class CommandEvidence:
     evidence_id: str
     completed_at: str | None = None
     artifact_digest: str | None = None
+
+    def __post_init__(self) -> None:
+        error = _command_evidence_error(self)
+        if error is not None:
+            raise InvalidCommandEvidenceError(error)
 
 
 @dataclass(frozen=True)
@@ -178,10 +232,49 @@ def evaluate_change_gate(gate_input: ChangeGateInput) -> ChangeGateDecision:
     matched: list[str] = []
     missing: list[str] = []
     rejected: list[dict] = []
+
+    # R3 defensive validation: re-check every evidence object even if it was constructed
+    # bypassing __post_init__. Malformed evidence is recorded + excluded (never crashes).
+    usable_evidence: list[CommandEvidence] = []
+    for index, ev in enumerate(gate_input.test_evidence):
+        malformed = _command_evidence_error(ev)
+        if malformed is not None:
+            rejected.append({
+                "evidence_id": getattr(ev, "evidence_id", f"<index {index}>"),
+                "command": str(getattr(ev, "command", "<unknown>"))[:200],
+                "reason": f"malformed evidence: {malformed}",
+            })
+            findings.append(Finding(
+                type="invalid_evidence", severity="block", file=None,
+                reason=f"malformed evidence at index {index}: {malformed}",
+            ))
+            continue
+        usable_evidence.append(ev)
+
+    # R3 duplicate evidence identity: any evidence_id used more than once is ambiguous.
+    # Every record sharing a duplicated id is rejected and cannot satisfy a requirement.
+    id_counts: dict[str, int] = {}
+    for ev in usable_evidence:
+        id_counts[ev.evidence_id] = id_counts.get(ev.evidence_id, 0) + 1
+    duplicate_ids = {eid for eid, count in id_counts.items() if count > 1}
+    for eid in sorted(duplicate_ids):
+        findings.append(Finding(
+            type="duplicate_evidence_id", severity="block", file=None,
+            reason=f"evidence_id {eid!r} appears {id_counts[eid]} times; evidence "
+                   "identity is ambiguous",
+            evidence=eid,
+        ))
+        rejected.append({
+            "evidence_id": eid, "command": "<multiple>",
+            "reason": f"duplicate evidence_id used {id_counts[eid]} times",
+        })
+
     for required in contract.required_evidence:
         required_norm = _normalize_command(required)
         satisfied = False
-        for ev in gate_input.test_evidence:
+        for ev in usable_evidence:
+            if ev.evidence_id in duplicate_ids:
+                continue  # ambiguous identity can never satisfy a requirement
             if _normalize_command(ev.command) != required_norm:
                 continue
             reason = _evidence_verdict(ev, gate_input.expected_commit_sha)
@@ -231,3 +324,65 @@ def evaluate_change_gate(gate_input: ChangeGateInput) -> ChangeGateDecision:
         rejected_evidence=rejected,
         expected_commit_sha=gate_input.expected_commit_sha,
     )
+
+
+def validate_change_gate_decision(
+    contract: TaskContract, decision: object
+) -> list[str]:
+    """P0-9A-R3: independently verify a PASS ChangeGateDecision is internally consistent.
+
+    A hand-constructed decision object marked ``PASS`` must not authorize release when it
+    contains blocking findings, unresolved required evidence, malformed collections, or an
+    unknown severity. Returns a list of integrity errors (empty ⇒ the decision may be
+    trusted). Only a ``PASS`` decision is checked for authorization; other decisions are
+    correctly non-authorizing already and return their own single reason.
+    """
+    errors: list[str] = []
+
+    dec = getattr(decision, "decision", None)
+    if dec not in ("PASS", "REVIEW_REQUIRED", "BLOCK"):
+        return [f"unknown decision value {dec!r}"]
+    if dec != "PASS":
+        return [f"decision is {dec}, not PASS"]
+
+    findings = getattr(decision, "findings", None)
+    matched = getattr(decision, "matched_required_evidence", None)
+    missing = getattr(decision, "missing_required_evidence", None)
+
+    # 7. Collection type sanity — malformed shapes fail closed.
+    if not isinstance(findings, list):
+        errors.append("findings is not a list")
+        findings = []
+    if not isinstance(matched, list):
+        errors.append("matched_required_evidence is not a list")
+        matched = []
+    if not isinstance(missing, list):
+        errors.append("missing_required_evidence is not a list")
+        missing = ["<unknown>"]
+
+    # 1./2. Every required evidence item must be covered; nothing may be missing.
+    if missing:
+        errors.append(f"missing_required_evidence is non-empty: {missing}")
+    for required in contract.required_evidence:
+        if required not in matched:
+            errors.append(f"required evidence not in matched set: {required}")
+
+    # 3. A contract WITH required evidence cannot PASS on an empty matched set.
+    if contract.required_evidence and not matched:
+        errors.append("contract has required evidence but matched set is empty")
+
+    # 4./5./8. No blocking finding, no review/blocking finding type, no unknown severity.
+    for finding in findings:
+        severity = getattr(finding, "severity", None)
+        ftype = getattr(finding, "type", None)
+        if severity not in _VALID_SEVERITIES:
+            errors.append(f"finding has unknown severity {severity!r}")
+            continue
+        if severity == "block":
+            errors.append(f"PASS decision contains a blocking finding: {ftype!r}")
+        elif severity == "warning" and ftype in _BLOCKING_FINDING_TYPES:
+            errors.append(
+                f"PASS decision contains an unresolved review finding: {ftype!r}"
+            )
+
+    return errors

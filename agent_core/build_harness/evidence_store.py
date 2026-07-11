@@ -36,6 +36,7 @@ __all__ = [
     "EvidenceStore",
     "EvidenceConflictError",
     "EvidenceCorruptionError",
+    "EvidenceStructureError",
     "EvidencePathEscapeError",
     "InvalidEvidenceIdentifierError",
 ]
@@ -53,6 +54,14 @@ class EvidenceConflictError(RuntimeError):
 
 class EvidenceCorruptionError(RuntimeError):
     """A stored JSON artifact could not be parsed; evidence must not be trusted."""
+
+
+class EvidenceStructureError(EvidenceCorruptionError):
+    """A stored artifact is syntactically valid JSON but structurally invalid.
+
+    Subclasses EvidenceCorruptionError so callers catching corruption also catch structural
+    problems — both mean the artifact must not be trusted as authoritative evidence.
+    """
 
 
 class EvidenceStore:
@@ -169,13 +178,30 @@ class EvidenceStore:
                          "reports": {}, "gates": {}, "events": []}
         contract_path = task_dir / "contract.json"
         if contract_path.exists():
-            summary["contract"] = self._read_json(contract_path)
+            contract = self._read_json(contract_path)
+            if not isinstance(contract, dict):
+                raise EvidenceStructureError(
+                    f"contract.json must be a JSON object, got {type(contract).__name__}"
+                )
+            stored_task_id = contract.get("task_id")
+            if stored_task_id != task_id:
+                raise EvidenceStructureError(
+                    f"contract.json task_id {stored_task_id!r} does not match the "
+                    f"requested namespace {task_id!r}"
+                )
+            summary["contract"] = contract
         for prompt_path in sorted((task_dir / "prompts").glob("*.md")):
             summary["prompts"][prompt_path.stem] = prompt_path.read_text(encoding="utf-8")
         for report_path in sorted((task_dir / "reports").glob("*.md")):
             summary["reports"][report_path.stem] = report_path.read_text(encoding="utf-8")
         for gate_path in sorted((task_dir / "gate").glob("*.json")):
-            summary["gates"][gate_path.stem] = self._read_json(gate_path)
+            gate_payload = self._read_json(gate_path)
+            if not isinstance(gate_payload, dict):
+                raise EvidenceStructureError(
+                    f"{gate_path.name} must be a JSON object, got "
+                    f"{type(gate_payload).__name__}"
+                )
+            summary["gates"][gate_path.stem] = gate_payload
         events_path = task_dir / "events.jsonl"
         if events_path.exists():
             events = []
@@ -185,10 +211,37 @@ class EvidenceStore:
                 if not line.strip():
                     continue
                 try:
-                    events.append(json.loads(line))
+                    event = json.loads(line)
                 except json.JSONDecodeError as exc:
                     raise EvidenceCorruptionError(
                         f"corrupt event at {events_path}:{line_number}: {exc}"
                     ) from exc
+                self._validate_event_structure(event, events_path, line_number, task_id)
+                events.append(event)
             summary["events"] = events
         return summary
+
+    @staticmethod
+    def _validate_event_structure(
+        event: object, path: Path, line_number: int, task_id: str
+    ) -> None:
+        loc = f"{path}:{line_number}"
+        if not isinstance(event, dict):
+            raise EvidenceStructureError(
+                f"event at {loc} must be a JSON object, got {type(event).__name__}"
+            )
+        for key in ("task_id", "event_type", "timestamp"):
+            value = event.get(key)
+            if not isinstance(value, str) or not value.strip():
+                raise EvidenceStructureError(
+                    f"event at {loc} field {key!r} must be a non-empty string"
+                )
+        if event["task_id"] != task_id:
+            raise EvidenceStructureError(
+                f"event at {loc} task_id {event['task_id']!r} does not match the "
+                f"requested namespace {task_id!r}"
+            )
+        if not isinstance(event.get("payload"), dict):
+            raise EvidenceStructureError(
+                f"event at {loc} payload must be a JSON object"
+            )

@@ -326,8 +326,11 @@ class TestBHA05Evidence:
         assert any("commit_sha mismatch" in r["reason"] for r in decision.rejected_evidence)
 
     def test_empty_evidence_id_rejected(self):
-        decision = _gate(self.ALLOWED, evidence=[_evidence(evidence_id=" ")])
-        assert decision.decision == "REVIEW_REQUIRED"
+        # R3: an empty evidence_id is now rejected at CommandEvidence construction — it can
+        # never even reach the gate, which is strictly stronger than the R2 behavior.
+        from agent_core.build_harness.change_gate import InvalidCommandEvidenceError
+        with pytest.raises(InvalidCommandEvidenceError):
+            _evidence(evidence_id=" ")
 
     def test_legacy_strings_alone_never_pass(self):
         decision = _gate(self.ALLOWED, evidence=[], tests_run=[REQUIRED_CMD])

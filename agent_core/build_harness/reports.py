@@ -47,6 +47,9 @@ ALLOWED_STATUS_RESULT_BY_ROLE: dict[str, frozenset[tuple[str, str]]] = {
 _REQUIRED_FIELDS = (
     "task_id", "role", "status", "result", "files_changed", "tests_run", "blockers",
 )
+_OPTIONAL_FIELDS = ("next_recommended_action", "commit_sha")
+# P0-9A-R3: the machine_summary schema is exact — unknown keys are rejected.
+_ALLOWED_FIELDS = frozenset(_REQUIRED_FIELDS) | frozenset(_OPTIONAL_FIELDS)
 
 
 @dataclass(frozen=True)
@@ -144,6 +147,10 @@ def _from_summary_dict(summary: dict[str, Any], raw_text: str) -> AgentReport:
     for key in _REQUIRED_FIELDS:
         if key not in summary:
             raise _SummaryError(f"machine_summary is missing required field {key!r}")
+    # R3: exact schema — reject any key outside the allowed set.
+    unknown = sorted(set(summary) - _ALLOWED_FIELDS)
+    if unknown:
+        raise _SummaryError(f"machine_summary has unknown field(s): {unknown}")
 
     task_id = _require_str(summary, "task_id")
     if not is_valid_task_id(task_id):

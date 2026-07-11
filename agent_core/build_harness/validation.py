@@ -47,6 +47,13 @@ def validate_artifact_name(value: object, *, kind: str = "artifact name") -> str
     return value
 
 
+# Evidence ids appear in evidence records/audit and must be stable, printable single
+# tokens. The artifact grammar (letters/digits/underscore/hyphen) covers ids like
+# "pytest-focused-1" while rejecting whitespace, separators, and control characters.
+def is_valid_evidence_id(value: object) -> bool:
+    return isinstance(value, str) and bool(_RE_ARTIFACT_NAME.match(value))
+
+
 def normalize_repo_path(path: object) -> str:
     """Canonicalize a repository-relative file path or raise InvalidRepoPathError.
 
