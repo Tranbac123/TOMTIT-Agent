@@ -2863,6 +2863,36 @@ def detect_delete_all_confirmation_pending(text: str) -> bool:
     )
 
 
+def delete_profile_memory_for_session(
+    store: "MemoryStoreProtocol", session_id: str
+) -> int:
+    """P0-8B: delete confirmed user-profile records written BY one session only.
+
+    Records carry the writing session's id (``MemoryRecord.session_id``), so a debug
+    reset scoped to one web session never touches facts another session wrote into the
+    same shared local store. Returns the count removed.
+    """
+    records = list(store.search(MemoryQuery(
+        text="", types=[MemoryType.FACT], tags=["user_profile"], limit=500,
+    ))) + list(store.search(MemoryQuery(
+        text="", types=[MemoryType.PREFERENCE], tags=["user_profile"], limit=500,
+    )))
+    removed = 0
+    seen: set[str] = set()
+    for rec in records:
+        if rec.id in seen:
+            continue
+        seen.add(rec.id)
+        if rec.session_id != session_id:
+            continue
+        if rec.metadata.get("profile_schema") in (
+            "user_profile_fact_v1", "user_profile_fact_v2"
+        ):
+            store.delete(rec.id, reason="debug_session_memory_reset")
+            removed += 1
+    return removed
+
+
 def delete_all_profile_memory(store: "MemoryStoreProtocol") -> int:
     """Delete every confirmed user-profile record. Returns the count removed."""
     records = list(store.search(MemoryQuery(

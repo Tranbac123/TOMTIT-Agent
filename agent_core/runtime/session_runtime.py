@@ -624,8 +624,15 @@ class SessionRuntime:
         )
         route = self._turn_route
         if route is None:
-            # Derive the route from the conversation markers the handlers already record.
+            # Derive the route from the conversation markers the handlers already record,
+            # preferring the specific handler marker over the terminal state_finalized one.
             route = next(
+                (
+                    h for h in reversed(state.history)
+                    if h.startswith("conv:") and h != "conv:state_finalized"
+                ),
+                None,
+            ) or next(
                 (h for h in reversed(state.history) if h.startswith("conv:")), None
             )
         self.last_trace = TurnTrace(

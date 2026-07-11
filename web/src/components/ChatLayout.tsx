@@ -5,6 +5,7 @@ import { Composer } from './Composer';
 import { LandingChatState } from './LandingChatState';
 import { MemoryRecallPanel } from './MemoryRecallPanel';
 import { SettingsPanel } from './SettingsPanel';
+import { DebugPanel } from './DebugPanel';
 import type { ActiveView } from '../App';
 
 interface ChatLayoutProps {
@@ -107,6 +108,10 @@ export function ChatLayout({
             <Composer
               disabled={sending || selectedSessionId === null}
               onSend={onSendMessage}
+            />
+            <DebugPanel
+              sessionId={selectedSessionId}
+              apiBaseUrl={settings.api_base_url}
             />
           </>
         )}
