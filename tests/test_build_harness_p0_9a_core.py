@@ -274,8 +274,9 @@ def test_processguard_blocks_merge_without_verifier():
 
 
 def test_processguard_blocks_push_without_human_approval():
+    # APPROVED is the only valid push state (R1), so this isolates the approval check.
     decision = evaluate_process_guard(ProcessGuardInput(
-        task_state=TaskState.VERIFIED_PASS,
+        task_state=TaskState.APPROVED,
         implementer_report=_pass_report("implementer"),
         verifier_report=_pass_report("verifier"),
         changegate_decision=_pass_gate(),
@@ -303,7 +304,7 @@ def test_processguard_blocks_verifier_needs_fix():
 
 def test_processguard_review_when_only_approval_missing():
     decision = evaluate_process_guard(ProcessGuardInput(
-        task_state=TaskState.VERIFIED_PASS,
+        task_state=TaskState.READY_FOR_MERGE,
         implementer_report=_pass_report("implementer"),
         verifier_report=_pass_report("verifier"),
         changegate_decision=_pass_gate(),
@@ -312,6 +313,97 @@ def test_processguard_review_when_only_approval_missing():
     ))
     assert decision.decision == "REVIEW_REQUIRED"
     assert decision.missing_steps == ["human_approval"]
+
+
+# ---------------------------------------------------------------------------
+# P0-9A-R1 — fail-closed state enforcement for shipping actions
+# ---------------------------------------------------------------------------
+
+def _all_green_guard_input(task_state: TaskState, intended_action: str,
+                           human_approved: bool = True) -> ProcessGuardInput:
+    return ProcessGuardInput(
+        task_state=task_state,
+        implementer_report=_pass_report("implementer"),
+        verifier_report=_pass_report("verifier"),
+        changegate_decision=_pass_gate(),
+        human_approved=human_approved,
+        intended_action=intended_action,
+    )
+
+
+@pytest.mark.parametrize("bad_state", [
+    TaskState.DRAFT, TaskState.READY_FOR_IMPLEMENTATION, TaskState.IMPLEMENTING,
+    TaskState.IMPLEMENTED, TaskState.READY_FOR_VERIFICATION, TaskState.NEEDS_FIX,
+    TaskState.BLOCKED, TaskState.VERIFIED_PASS,
+])
+def test_r1_processguard_blocks_merge_from_invalid_state(bad_state):
+    decision = evaluate_process_guard(_all_green_guard_input(bad_state, "merge"))
+    assert decision.decision == "BLOCK", (bad_state, decision)
+    assert "valid_task_state_for_merge" in decision.missing_steps
+    assert bad_state.value in decision.reason
+
+
+def test_r1_processguard_blocks_push_from_draft():
+    decision = evaluate_process_guard(_all_green_guard_input(TaskState.DRAFT, "push"))
+    assert decision.decision == "BLOCK"
+    assert "valid_task_state_for_push" in decision.missing_steps
+
+
+def test_r1_processguard_push_only_from_approved():
+    # READY_FOR_MERGE is valid for merge but NOT for push.
+    decision = evaluate_process_guard(
+        _all_green_guard_input(TaskState.READY_FOR_MERGE, "push")
+    )
+    assert decision.decision == "BLOCK"
+    assert "valid_task_state_for_push" in decision.missing_steps
+    approved = evaluate_process_guard(_all_green_guard_input(TaskState.APPROVED, "push"))
+    assert approved.decision == "PASS"
+
+
+def test_r1_processguard_merge_passes_from_ready_for_merge_and_approved():
+    for state in (TaskState.READY_FOR_MERGE, TaskState.APPROVED):
+        decision = evaluate_process_guard(_all_green_guard_input(state, "merge"))
+        assert decision.decision == "PASS", (state, decision)
+
+
+def test_r1_processguard_done_only_from_approved_or_done():
+    for state in (TaskState.APPROVED, TaskState.DONE):
+        decision = evaluate_process_guard(_all_green_guard_input(state, "done"))
+        assert decision.decision == "PASS", (state, decision)
+    blocked = evaluate_process_guard(_all_green_guard_input(TaskState.IMPLEMENTED, "done"))
+    assert blocked.decision == "BLOCK"
+    assert "valid_task_state_for_done" in blocked.missing_steps
+
+
+def test_r1_processguard_needs_fix_still_blocks_regardless_of_state():
+    needs_fix = AgentReport(task_id="BH-P0-A", role="verifier",
+                            status="VERIFIED", result="NEEDS_FIX")
+    for state in (TaskState.APPROVED, TaskState.READY_FOR_MERGE, TaskState.DRAFT):
+        decision = evaluate_process_guard(ProcessGuardInput(
+            task_state=state,
+            implementer_report=_pass_report("implementer"),
+            verifier_report=needs_fix,
+            changegate_decision=_pass_gate(),
+            human_approved=True,
+            intended_action="merge",
+        ))
+        assert decision.decision == "BLOCK", state
+        assert "NEEDS_FIX" in decision.reason
+
+
+def test_r1_processguard_state_block_reports_other_missing_steps_too():
+    # Merge from IMPLEMENTED with a missing verifier: both problems are surfaced.
+    decision = evaluate_process_guard(ProcessGuardInput(
+        task_state=TaskState.IMPLEMENTED,
+        implementer_report=_pass_report("implementer"),
+        verifier_report=None,
+        changegate_decision=_pass_gate(),
+        human_approved=True,
+        intended_action="merge",
+    ))
+    assert decision.decision == "BLOCK"
+    assert "valid_task_state_for_merge" in decision.missing_steps
+    assert "verifier_report_pass" in decision.missing_steps
 
 
 def test_processguard_blocks_unparseable_report():
@@ -358,7 +450,7 @@ def test_next_action_requests_human_approval_when_gates_pass():
     verifier = parse_agent_report(CODEX_REPORT_PATH.read_text(encoding="utf-8"))
     gate = _pass_gate()
     guard = evaluate_process_guard(ProcessGuardInput(
-        task_state=TaskState.VERIFIED_PASS,
+        task_state=TaskState.READY_FOR_MERGE,
         implementer_report=implementer, verifier_report=verifier,
         changegate_decision=gate, human_approved=False, intended_action="merge",
     ))
@@ -484,7 +576,78 @@ def test_cli_ingest_report(capsys):
     ])
     out = json.loads(capsys.readouterr().out)
     assert rc == 0 and out["ok"] is True
-    assert out["task_id_matches_contract"] is True and out["role_matches"] is True
+    assert out["parse_ok"] is True and out["result"] == "PASS"
+    assert out["task_matches"] is True and out["role_matches"] is True
+    assert out["requested_role"] == "implementer"
+
+
+# ---------------------------------------------------------------------------
+# P0-9A-R1 — fail-closed ingest-report exit codes
+# ---------------------------------------------------------------------------
+
+def _write_report(tmp_path: Path, task_id: str, role: str, result: str) -> Path:
+    path = tmp_path / f"{role}_{result.lower()}.md"
+    path.write_text(
+        "machine_summary:\n"
+        f"  task_id: {task_id}\n"
+        f"  role: {role}\n"
+        "  status: IMPLEMENTED\n"
+        f"  result: {result}\n"
+        "  files_changed: []\n"
+        "  tests_run: []\n"
+        "  blockers: []\n"
+        "  next_recommended_action: human_review\n",
+        encoding="utf-8",
+    )
+    return path
+
+
+def test_r1_cli_ingest_blocked_report_exits_nonzero(tmp_path, capsys):
+    report = _write_report(tmp_path, "BH-P0-A", "implementer", "BLOCKED")
+    rc = cli_main(["ingest-report", "--contract", str(CONTRACT_PATH),
+                   "--report", str(report), "--role", "implementer"])
+    out = json.loads(capsys.readouterr().out)
+    assert rc != 0 and out["ok"] is False
+    assert out["parse_ok"] is True and out["result"] == "BLOCKED"
+    assert any("BLOCKED" in r for r in out["rejection_reasons"])
+
+
+def test_r1_cli_ingest_role_mismatch_exits_nonzero(capsys):
+    # The codex fixture is a verifier report — submitting it as implementer must fail.
+    rc = cli_main(["ingest-report", "--contract", str(CONTRACT_PATH),
+                   "--report", str(CODEX_REPORT_PATH), "--role", "implementer"])
+    out = json.loads(capsys.readouterr().out)
+    assert rc != 0 and out["ok"] is False
+    assert out["role_matches"] is False and out["task_matches"] is True
+    assert any("role mismatch" in r for r in out["rejection_reasons"])
+
+
+def test_r1_cli_ingest_task_mismatch_exits_nonzero(tmp_path, capsys):
+    report = _write_report(tmp_path, "WRONG-TASK", "implementer", "PASS")
+    rc = cli_main(["ingest-report", "--contract", str(CONTRACT_PATH),
+                   "--report", str(report), "--role", "implementer"])
+    out = json.loads(capsys.readouterr().out)
+    assert rc != 0 and out["ok"] is False
+    assert out["task_matches"] is False
+    assert any("task mismatch" in r for r in out["rejection_reasons"])
+
+
+def test_r1_cli_ingest_unparseable_report_exits_nonzero(tmp_path, capsys):
+    report = tmp_path / "prose.md"
+    report.write_text("No machine summary here.", encoding="utf-8")
+    rc = cli_main(["ingest-report", "--contract", str(CONTRACT_PATH),
+                   "--report", str(report), "--role", "implementer"])
+    out = json.loads(capsys.readouterr().out)
+    assert rc != 0 and out["ok"] is False and out["parse_ok"] is False
+
+
+def test_r1_cli_ingest_needs_fix_with_matches_exits_zero(tmp_path, capsys):
+    # NEEDS_FIX ingests fine — the verdict is ProcessGuard/NextAction's job.
+    report = _write_report(tmp_path, "BH-P0-A", "implementer", "NEEDS_FIX")
+    rc = cli_main(["ingest-report", "--contract", str(CONTRACT_PATH),
+                   "--report", str(report), "--role", "implementer"])
+    out = json.loads(capsys.readouterr().out)
+    assert rc == 0 and out["ok"] is True and out["result"] == "NEEDS_FIX"
 
 
 def test_cli_next_action_with_reports(capsys):
@@ -529,14 +692,15 @@ def test_eval_scenario_cases(case):
         assert action.action == case["expected_action"], action
         return
 
-    # next_action_full: run both gates first.
+    # next_action_full: run both gates first. R1: the gates-passed shipping stage is
+    # READY_FOR_MERGE (VERIFIED_PASS is no longer a legal merge state).
     gate = evaluate_change_gate(ChangeGateInput(
         contract=contract,
         changed_files=case["changed_files"],
         tests_run=case["tests_run"],
     ))
     guard = evaluate_process_guard(ProcessGuardInput(
-        task_state=TaskState.VERIFIED_PASS,
+        task_state=TaskState.READY_FOR_MERGE,
         implementer_report=implementer,
         verifier_report=verifier,
         changegate_decision=gate,

@@ -83,25 +83,47 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "ingest-report":
         contract = _load_contract_or_exit(args.contract)
         report = parse_agent_report(Path(args.report).read_text(encoding="utf-8"))
+        # P0-9A-R1 fail-closed ingestion: a report is accepted (exit 0) ONLY when it
+        # parsed, is not BLOCKED, and matches both the contract's task and the requested
+        # role. NEEDS_FIX still ingests fine — ProcessGuard/NextAction own that verdict.
+        task_matches = report.parse_ok and report.task_id == contract.task_id
+        role_matches = report.parse_ok and report.role == args.role
+        blocked = report.result.upper() == "BLOCKED"
+        accepted = report.parse_ok and not blocked and task_matches and role_matches
+        rejection_reasons = []
+        if not report.parse_ok:
+            rejection_reasons.append(f"unparseable report: {report.parse_error}")
+        if blocked:
+            rejection_reasons.append("report result is BLOCKED")
+        if report.parse_ok and not task_matches:
+            rejection_reasons.append(
+                f"task mismatch: report={report.task_id!r} contract={contract.task_id!r}"
+            )
+        if report.parse_ok and not role_matches:
+            rejection_reasons.append(
+                f"role mismatch: report={report.role!r} requested={args.role!r}"
+            )
         payload = {
-            "ok": report.parse_ok,
+            "ok": accepted,
+            "parse_ok": report.parse_ok,
+            "result": report.result,
+            "task_matches": task_matches,
+            "role_matches": role_matches,
+            "task_id": report.task_id,
+            "role": report.role,
+            "requested_role": args.role,
+            "rejection_reasons": rejection_reasons,
             "report": {
-                "task_id": report.task_id,
-                "role": report.role,
                 "status": report.status,
-                "result": report.result,
                 "files_changed": report.files_changed,
                 "tests_run": report.tests_run,
                 "blockers": report.blockers,
                 "next_recommended_action": report.next_recommended_action,
-                "parse_ok": report.parse_ok,
                 "parse_error": report.parse_error,
             },
-            "task_id_matches_contract": report.task_id == contract.task_id,
-            "role_matches": (report.role == args.role),
         }
         _print_json(payload)
-        return 0 if report.parse_ok else 1
+        return 0 if accepted else 1
 
     if args.command == "changegate":
         contract = _load_contract_or_exit(args.contract)

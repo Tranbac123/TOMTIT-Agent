@@ -14,6 +14,15 @@ from agent_core.build_harness.state import TaskState
 
 _SHIP_ACTIONS = ("merge", "push", "done")
 
+# P0-9A-R1: shipping actions are only legal from these task states. Green reports and
+# gates are NOT enough — a merge attempted from DRAFT/IMPLEMENTED means the workflow
+# itself was skipped, so the guard fails closed regardless of artifact quality.
+_VALID_SHIP_STATES: dict[str, frozenset[TaskState]] = {
+    "merge": frozenset({TaskState.READY_FOR_MERGE, TaskState.APPROVED}),
+    "push": frozenset({TaskState.APPROVED}),
+    "done": frozenset({TaskState.APPROVED, TaskState.DONE}),
+}
+
 
 @dataclass(frozen=True)
 class ProcessGuardInput:
@@ -66,6 +75,11 @@ def evaluate_process_guard(guard_input: ProcessGuardInput) -> ProcessGuardDecisi
 
     shipping = guard_input.intended_action in _SHIP_ACTIONS
     if shipping:
+        # P0-9A-R1: state gate first — shipping from an invalid state is a skipped
+        # workflow, and it blocks even when every artifact below is green.
+        valid_states = _VALID_SHIP_STATES[guard_input.intended_action]
+        if guard_input.task_state not in valid_states:
+            missing.append(f"valid_task_state_for_{guard_input.intended_action}")
         if impl_result != "PASS":
             missing.append("implementer_report_pass")
         if verifier_result != "PASS":
@@ -75,7 +89,10 @@ def evaluate_process_guard(guard_input: ProcessGuardInput) -> ProcessGuardDecisi
         if missing:
             return ProcessGuardDecision(
                 decision="BLOCK", missing_steps=missing,
-                reason="cannot ship without: " + ", ".join(missing),
+                reason=(
+                    f"cannot ship from task_state={guard_input.task_state.value}: "
+                    "missing " + ", ".join(missing)
+                ),
             )
         if guard_input.intended_action == "push" and not guard_input.human_approved:
             return ProcessGuardDecision(
