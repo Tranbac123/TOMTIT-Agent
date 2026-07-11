@@ -64,6 +64,7 @@ class RuntimeAdapter:
         session_state: SessionState,
         user_id: str | None = None,
     ) -> None:
+        self._store = store
         self._session_runtime = SessionRuntime(
             agent,
             store,
@@ -74,6 +75,16 @@ class RuntimeAdapter:
     @property
     def session_id(self) -> str:
         return self._session_runtime.session_id
+
+    # P0-8B debug accessors — read-only views for the debug endpoints.
+    @property
+    def store(self) -> MemoryStoreProtocol:
+        return self._store
+
+    @property
+    def last_trace(self):
+        """The SessionRuntime's last TurnTrace (None before the first turn)."""
+        return self._session_runtime.last_trace
 
     async def send_chat(
         self,

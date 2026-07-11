@@ -13,8 +13,18 @@ from agent_core.web_api.errors import (
     ProjectIdRejectedError,
     WebSessionNotFoundError,
 )
+from agent_core.conversation.profile_memory import delete_profile_memory_for_session
+from agent_core.web_api.debug import (
+    build_memory_debug_facts,
+    build_memory_debug_summary,
+    trace_to_dict,
+)
 from agent_core.web_api.models import (
     ChatResponse,
+    DebugMemoryFact,
+    DebugMemoryResponse,
+    DebugResetResponse,
+    DebugTraceResponse,
     MemoryRecallResponse,
     MessageRecord,
     RecallResult,
@@ -163,6 +173,51 @@ class SessionManager:
         self._web_store.append_message(session_id, assistant_msg)
 
         return ChatResponse(session_id=session_id, assistant_message=assistant_msg)
+
+    # ------------------------------------------------------------------
+    # P0-8B — debug/eval services (additive; read-only except reset)
+    # ------------------------------------------------------------------
+
+    def debug_memory(self, session_id: str) -> DebugMemoryResponse:
+        """Safe projection of the confirmed profile memory visible to a session.
+
+        In local mode all sessions share one store, so the fact list reflects the
+        store-wide confirmed profile — the same memory the session's answers use.
+        """
+        adapter = self._adapters.get(session_id)
+        if adapter is None or self._web_store.get(session_id) is None:
+            raise WebSessionNotFoundError(session_id)
+        facts = build_memory_debug_facts(adapter.store)
+        return DebugMemoryResponse(
+            session_id=session_id,
+            summary=build_memory_debug_summary(facts),
+            facts=[DebugMemoryFact(**f) for f in facts],
+        )
+
+    def reset_memory(self, session_id: str) -> DebugResetResponse:
+        """Delete only the confirmed profile records WRITTEN BY this session.
+
+        Facts written by other sessions into the shared store are untouched
+        (records carry the writing session's id).
+        """
+        adapter = self._adapters.get(session_id)
+        if adapter is None or self._web_store.get(session_id) is None:
+            raise WebSessionNotFoundError(session_id)
+        removed = delete_profile_memory_for_session(adapter.store, session_id)
+        return DebugResetResponse(
+            ok=True,
+            session_id=session_id,
+            message=f"memory reset ({removed} record(s) removed)",
+        )
+
+    def get_last_trace(self, session_id: str) -> DebugTraceResponse:
+        adapter = self._adapters.get(session_id)
+        if adapter is None or self._web_store.get(session_id) is None:
+            raise WebSessionNotFoundError(session_id)
+        return DebugTraceResponse(
+            session_id=session_id,
+            trace=trace_to_dict(adapter.last_trace),
+        )
 
     async def recall_memory(
         self,

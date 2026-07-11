@@ -83,3 +83,32 @@ class ErrorResponse(BaseModel):
     message: str
     request_id: str | None = None
     session_id: str | None = None
+
+
+# --- P0-8B debug endpoints -------------------------------------------------
+
+class DebugMemoryFact(BaseModel):
+    kind: str
+    value: str
+    active: bool = True
+
+
+class DebugMemoryResponse(BaseModel):
+    session_id: str
+    summary: str
+    facts: list[DebugMemoryFact] = []
+
+
+class DebugResetRequest(BaseModel):
+    session_id: str
+
+
+class DebugResetResponse(BaseModel):
+    ok: bool
+    session_id: str
+    message: str
+
+
+class DebugTraceResponse(BaseModel):
+    session_id: str
+    trace: dict[str, Any] | None = None

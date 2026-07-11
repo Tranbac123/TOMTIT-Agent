@@ -16,6 +16,10 @@ from agent_core.web_api.models import (
     ChatRequest,
     ChatResponse,
     CreateSessionRequest,
+    DebugMemoryResponse,
+    DebugResetRequest,
+    DebugResetResponse,
+    DebugTraceResponse,
     HealthResponse,
     MemoryRecallRequest,
     MemoryRecallResponse,
@@ -186,4 +190,57 @@ async def memory_recall(
             status_code=500,
             request_id=request_id,
             session_id=body.session_id,
+        )
+
+
+# --- P0-8B debug endpoints (additive; local debug console + eval tooling) ---
+
+@router.get("/api/debug/memory", response_model=DebugMemoryResponse)
+async def debug_memory(
+    session_id: str,
+    request: Request,
+) -> DebugMemoryResponse | JSONResponse:
+    sm: SessionManager = _get_session_manager(request)
+    try:
+        return sm.debug_memory(session_id)
+    except WebSessionNotFoundError as exc:
+        return safe_error_response(
+            error_code="SESSION_NOT_FOUND",
+            message="Session not found.",
+            status_code=404,
+            session_id=exc.session_id,
+        )
+
+
+@router.post("/api/debug/reset-memory", response_model=DebugResetResponse)
+async def debug_reset_memory(
+    body: DebugResetRequest,
+    request: Request,
+) -> DebugResetResponse | JSONResponse:
+    sm: SessionManager = _get_session_manager(request)
+    try:
+        return sm.reset_memory(body.session_id)
+    except WebSessionNotFoundError as exc:
+        return safe_error_response(
+            error_code="SESSION_NOT_FOUND",
+            message="Session not found.",
+            status_code=404,
+            session_id=exc.session_id,
+        )
+
+
+@router.get("/api/debug/last-trace", response_model=DebugTraceResponse)
+async def debug_last_trace(
+    session_id: str,
+    request: Request,
+) -> DebugTraceResponse | JSONResponse:
+    sm: SessionManager = _get_session_manager(request)
+    try:
+        return sm.get_last_trace(session_id)
+    except WebSessionNotFoundError as exc:
+        return safe_error_response(
+            error_code="SESSION_NOT_FOUND",
+            message="Session not found.",
+            status_code=404,
+            session_id=exc.session_id,
         )

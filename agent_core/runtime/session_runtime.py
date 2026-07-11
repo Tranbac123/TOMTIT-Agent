@@ -8,7 +8,18 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
-from agent_core.conversation.llm_responder import LLMResponderRequest, TextLLMResponder
+from agent_core.conversation.capabilities import (
+    Capability,
+    CapabilityRouter,
+)
+from agent_core.conversation.llm_responder import (
+    BoundedLLMResponder,
+    LLMResponderRequest,
+    LLMResponse,
+    LLMResponseRequest,
+    RuleBasedLLMResponder,
+    TextLLMResponder,
+)
 from agent_core.conversation.models import ConversationRoute
 from agent_core.conversation.pending_state import PendingConversationState
 from agent_core.conversation.profile_memory import (
@@ -119,6 +130,9 @@ from agent_core.conversation.response_composer import ResponseComposer
 from agent_core.conversation.router import ConversationRouter
 from agent_core.memory.base import MemoryStoreProtocol
 from agent_core.memory.memory_agent import MemoryAgent
+from agent_core.runtime.turn_trace import TurnTrace
+from agent_core.safety.capability_gate import ActionRisk, CapabilitySafetyGate
+from agent_core.tools.runtime import ToolRuntime, ToolRuntimeRequest
 from agent_core.planning.intent_parser import RuleBasedIntentParser
 from agent_core.planning.intents import IntentName
 from agent_core.planning.slot_validator import SlotValidator
@@ -508,6 +522,7 @@ class SessionRuntime:
         conversation_router: ConversationRouter | None = None,
         llm_responder: TextLLMResponder | None = None,
         semantic_extractor: SemanticOperationExtractorProtocol | None = None,
+        bounded_responder: BoundedLLMResponder | None = None,
     ) -> None:
         if session is None and session_store is not None:
             raise ValueError(
@@ -528,6 +543,16 @@ class SessionRuntime:
         self._conversation_router = conversation_router or ConversationRouter()
         self._response_composer = ResponseComposer()
         self._llm_responder = llm_responder
+        # CONV-P0 P0-8A: capability backbone. Deterministic router + bounded responder +
+        # safety gate + tool-runtime scaffold. The bounded responder is response-only by
+        # construction (it receives only the user text/payload — never memory, tools, or
+        # state) and is injectable for tests.
+        self._capability_router = CapabilityRouter()
+        self._bounded_responder: BoundedLLMResponder = (
+            bounded_responder if bounded_responder is not None else RuleBasedLLMResponder()
+        )
+        self._capability_safety_gate = CapabilitySafetyGate()
+        self._capability_tool_runtime = ToolRuntime(gate=self._capability_safety_gate)
         # CONV-P0 P0-7K: hybrid semantic memory extractor. Injectable (tests use the
         # fake fixture extractor); the default is the deterministic rule-based backend —
         # provider-free, no LLM/network. An LLM adapter would slot in behind the same
@@ -557,6 +582,14 @@ class SessionRuntime:
         # P0-7K-FIX8 L: set after the repair-choice prompt ("... sửa phần nào: ... quan hệ?")
         # so a bare choice ("quan hệ") gets a sub-clarification instead of a fallback.
         self._pending_repair_choice: bool = False
+        # P0-8A: per-turn observability. handle_turn() resets these, the capability/safety
+        # handlers fill them, and the wrapper publishes an immutable TurnTrace snapshot.
+        self.last_trace: TurnTrace | None = None
+        self._turn_capability: str | None = None
+        self._turn_route: str | None = None
+        self._turn_safety: str | None = None
+        self._turn_tool_name: str | None = None
+        self._turn_tool_ok: bool | None = None
         if session is not None:
             self._session = session
         else:
@@ -572,6 +605,50 @@ class SessionRuntime:
         return self._session.session_id
 
     def handle_turn(self, user_message: str) -> AgentState:
+        """Public turn entrypoint (unchanged contract) + P0-8A trace publication.
+
+        Resets the per-turn trace fields, dispatches to the existing handler chain, then
+        publishes an immutable ``TurnTrace`` on ``self.last_trace``. Behavior and the
+        returned ``AgentState`` are identical to the pre-P0-8A implementation.
+        """
+        self._turn_capability = None
+        self._turn_route = None
+        self._turn_safety = None
+        self._turn_tool_name = None
+        self._turn_tool_ok = None
+        facts_before = self._confirmed_profile_fact_count
+        state = self._handle_turn_impl(user_message)
+        facts_delta = self._confirmed_profile_fact_count - facts_before
+        memory_diff = (
+            [f"confirmed_profile_facts:{facts_delta:+d}"] if facts_delta else []
+        )
+        route = self._turn_route
+        if route is None:
+            # Derive the route from the conversation markers the handlers already record,
+            # preferring the specific handler marker over the terminal state_finalized one.
+            route = next(
+                (
+                    h for h in reversed(state.history)
+                    if h.startswith("conv:") and h != "conv:state_finalized"
+                ),
+                None,
+            ) or next(
+                (h for h in reversed(state.history) if h.startswith("conv:")), None
+            )
+        self.last_trace = TurnTrace(
+            user_text=user_message,
+            normalized_text=user_message.strip(),
+            capability=self._turn_capability,
+            route=route,
+            safety_decision=self._turn_safety,
+            memory_diff=memory_diff,
+            tool_name=self._turn_tool_name,
+            tool_ok=self._turn_tool_ok,
+            final_answer=state.final_answer or "",
+        )
+        return state
+
+    def _handle_turn_impl(self, user_message: str) -> AgentState:
         state = AgentState(
             goal=user_message,
             memory=self._store,
@@ -607,6 +684,24 @@ class SessionRuntime:
         memory_edge = self._maybe_handle_memory_edge(user_message, state)
         if memory_edge is not None:
             return memory_edge
+
+        # CONV-P0 P0-8A priority 1.452: external tool-action requests (send email / create
+        # calendar event / delete file) → safety gate. Nothing executes in MVP; the answer
+        # is a bounded confirmation-needed/limitation response. Before the profile writers
+        # so an imperative like "gửi email cho Nam là hello" is never misread as a memory
+        # write.
+        external_action = self._maybe_handle_external_action_request(user_message, state)
+        if external_action is not None:
+            return external_action
+
+        # CONV-P0 P0-8A priority 1.455: response-only capability requests (translation /
+        # technical explanation / checklist / prioritization / rewrite / summary) → bounded
+        # LLMResponder. Placed before the P4 limitation lane so a payload-carrying request
+        # gets a bounded answer instead of the ask-for-input limitation; payload-less
+        # checklist/prioritization forms fall through to the existing clarification lanes.
+        capability_response = self._maybe_handle_capability_response(user_message, state)
+        if capability_response is not None:
+            return capability_response
 
         # CONV-P0 P0-7K xfail-burndown P4 priority 1.46: LLM-forbidden requests (full plan /
         # translation / technical design) → truthful current-MVP limitation. Placed before
@@ -1570,6 +1665,102 @@ class SessionRuntime:
             if result is not None:
                 return result
         return None
+
+    # ------------------------------------------------------------------
+    # CONV-P0 P0-8A — capability backbone handlers
+    # ------------------------------------------------------------------
+
+    _EXTERNAL_ACTION_RESPONSES: dict[str, str] = {
+        "send_email": (
+            "Mình chưa hỗ trợ gửi email trong MVP này — hành động external cần xác nhận "
+            "và tool chưa được bật, nên mình không gửi gì cả (không có email nào được gửi)."
+        ),
+        "send_message": (
+            "Mình chưa hỗ trợ gửi tin nhắn trong MVP này — hành động external cần xác "
+            "nhận và tool chưa được bật, nên mình không gửi gì cả."
+        ),
+        "create_calendar_event": (
+            "Mình chưa hỗ trợ đặt lịch/calendar trong MVP này, nên mình không tạo sự "
+            "kiện hay lời nhắc nào."
+        ),
+        "delete_file": (
+            "Mình không thể xoá file — đây là hành động không thể hoàn tác, chưa hỗ trợ "
+            "trong MVP này, và mình sẽ không thực hiện."
+        ),
+    }
+
+    def _maybe_handle_external_action_request(
+        self, user_message: str, state: AgentState
+    ) -> AgentState | None:
+        """P0-8A: external tool-action requests (email/message/calendar/file deletion).
+
+        The request is run through the safety-gated tool runtime, which blocks it before
+        any execution (the stubs also have no implementation). The user gets a bounded
+        confirmation-needed/limitation answer; nothing is sent, created, or deleted.
+        """
+        match = self._capability_router.classify(user_message)
+        if match.capability is not Capability.TOOL_ACTION_REQUEST or match.tool_name is None:
+            return None
+        result = self._capability_tool_runtime.run(
+            ToolRuntimeRequest(tool_name=match.tool_name)
+        )
+        # The scaffold must never execute an external action; fail closed if it somehow did.
+        assert not result.executed, "external action must not execute in MVP"
+        decision = result.decision
+        self._turn_capability = Capability.TOOL_ACTION_REQUEST.value
+        self._turn_route = "safety_gate"
+        self._turn_safety = (
+            f"{decision.risk.value}:blocked" if decision is not None else "blocked"
+        )
+        self._turn_tool_name = match.tool_name
+        self._turn_tool_ok = None  # requested but never executed
+        response = self._EXTERNAL_ACTION_RESPONSES[match.tool_name]
+        return self._complete_conv(
+            state, f"conv:external_action_blocked_{match.tool_name}", response
+        )
+
+    # The "tôi nên làm task nào trước" shape has no existing clarification lane, so its
+    # payload-less form is answered by the bounded responder's ask-for-tasks. The other
+    # payload-less checklist/prioritization forms are owned by the existing P2 lanes.
+    _RE_P8A_WHICH_TASK_FIRST = re.compile(
+        r'^(?:tôi|mình)\s+nên\s+làm\s+task\s+nào\s+trước\b', re.IGNORECASE,
+    )
+
+    def _maybe_handle_capability_response(
+        self, user_message: str, state: AgentState
+    ) -> AgentState | None:
+        """P0-8A: response-only capability requests → bounded LLMResponder.
+
+        Translation/explanation are owned fully by this lane. Checklist/prioritization/
+        rewrite/summary answer here only when a payload is present, so every existing
+        payload-less clarification contract (P2 lanes, acceptance dataset) is preserved.
+        The responder receives ONLY the user text and extracted payload — never memory,
+        tools, or runtime state — and its output never overrides a deterministic answer
+        (those lanes all run before this one).
+        """
+        match = self._capability_router.classify(user_message)
+        capability = match.capability
+        if capability in (Capability.TOOL_ACTION_REQUEST, Capability.UNKNOWN):
+            return None
+        if capability in (Capability.CHECKLIST, Capability.PRIORITIZATION) and not match.payload:
+            if not (
+                capability is Capability.PRIORITIZATION
+                and self._RE_P8A_WHICH_TASK_FIRST.match(user_message.strip())
+            ):
+                return None  # existing clarification lanes own these forms
+        response: LLMResponse = self._bounded_responder.respond(
+            LLMResponseRequest(
+                capability=capability,
+                user_text=user_message.strip(),
+                context={"payload": match.payload} if match.payload else None,
+            )
+        )
+        self._turn_capability = capability.value
+        self._turn_route = "bounded_responder"
+        self._turn_safety = f"{ActionRisk.READ_ONLY.value}:allowed"
+        return self._complete_conv(
+            state, f"conv:capability_{capability.value}", response.text
+        )
 
     def _maybe_handle_llm_forbidden_limitation(
         self, user_message: str, state: AgentState
