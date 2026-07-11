@@ -1,0 +1,25 @@
+{
+  "task_id": "BH-P0-A",
+  "title": "Build DependencyScanner",
+  "goal": "Implement a DependencyScanner that lists declared dependencies from requirements/pyproject manifests and reports undeclared imports, with focused tests.",
+  "allowed_paths": [
+    "agent_core/build_harness/**",
+    "tests/test_build_harness_p0_9a_core.py"
+  ],
+  "forbidden_paths": [
+    "agent_core/conversation/**",
+    "agent_core/runtime/session_runtime.py",
+    "web/**",
+    ".github/workflows/**"
+  ],
+  "acceptance_criteria": [
+    "DependencyScanner lists declared dependencies from supported manifest files",
+    "DependencyScanner reports imports that are not declared",
+    "All new behavior is covered by tests in tests/test_build_harness_p0_9a_core.py"
+  ],
+  "required_evidence": [
+    "pytest tests/test_build_harness_p0_9a_core.py"
+  ],
+  "risk_level": "medium",
+  "requires_human_approval_for": ["merge", "push", "deploy", "dependency_change"]
+}

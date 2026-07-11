@@ -1,0 +1,90 @@
+{
+  "suite_id": "p0_9a_build_harness_cases",
+  "description": "Scenario fixtures for the Build Harness core. Each case describes gate inputs against the BH-P0-A dependency-scanner contract and the expected decision/next action. Consumed by tests/test_build_harness_p0_9a_core.py.",
+  "contract_path": "examples/build_harness/task_contract_dependency_scanner.json",
+  "cases": [
+    {
+      "id": "implementer_pass_verifier_missing",
+      "kind": "next_action",
+      "implementer_report_path": "examples/build_harness/claude_report.md",
+      "verifier_report_path": null,
+      "expected_action": "SEND_TO_VERIFIER"
+    },
+    {
+      "id": "no_reports_yet",
+      "kind": "next_action",
+      "implementer_report_path": null,
+      "verifier_report_path": null,
+      "expected_action": "SEND_TO_IMPLEMENTER"
+    },
+    {
+      "id": "changegate_pass_allowed_files",
+      "kind": "changegate",
+      "changed_files": [
+        "agent_core/build_harness/dependency_scanner.py",
+        "tests/test_build_harness_p0_9a_core.py"
+      ],
+      "tests_run": ["pytest tests/test_build_harness_p0_9a_core.py"],
+      "expected_decision": "PASS"
+    },
+    {
+      "id": "changegate_block_forbidden_path",
+      "kind": "changegate",
+      "changed_files": ["agent_core/conversation/profile_memory.py"],
+      "tests_run": ["pytest tests/test_build_harness_p0_9a_core.py"],
+      "expected_decision": "BLOCK"
+    },
+    {
+      "id": "changegate_review_outside_scope",
+      "kind": "changegate",
+      "changed_files": ["agent_core/eval/conversation_eval.py"],
+      "tests_run": ["pytest tests/test_build_harness_p0_9a_core.py"],
+      "expected_decision": "REVIEW_REQUIRED"
+    },
+    {
+      "id": "changegate_review_dependency_file",
+      "kind": "changegate",
+      "changed_files": [
+        "agent_core/build_harness/dependency_scanner.py",
+        "pyproject.toml"
+      ],
+      "tests_run": ["pytest tests/test_build_harness_p0_9a_core.py"],
+      "expected_decision": "REVIEW_REQUIRED"
+    },
+    {
+      "id": "changegate_review_missing_evidence",
+      "kind": "changegate",
+      "changed_files": ["agent_core/build_harness/dependency_scanner.py"],
+      "tests_run": [],
+      "expected_decision": "REVIEW_REQUIRED"
+    },
+    {
+      "id": "all_pass_no_approval_requests_human",
+      "kind": "next_action_full",
+      "implementer_report_path": "examples/build_harness/claude_report.md",
+      "verifier_report_path": "examples/build_harness/codex_report.md",
+      "changed_files": [
+        "agent_core/build_harness/dependency_scanner.py",
+        "tests/test_build_harness_p0_9a_core.py"
+      ],
+      "tests_run": ["pytest tests/test_build_harness_p0_9a_core.py"],
+      "human_approved": false,
+      "intended_action": "merge",
+      "expected_action": "REQUEST_HUMAN_APPROVAL"
+    },
+    {
+      "id": "all_pass_with_approval_ready_to_ship",
+      "kind": "next_action_full",
+      "implementer_report_path": "examples/build_harness/claude_report.md",
+      "verifier_report_path": "examples/build_harness/codex_report.md",
+      "changed_files": [
+        "agent_core/build_harness/dependency_scanner.py",
+        "tests/test_build_harness_p0_9a_core.py"
+      ],
+      "tests_run": ["pytest tests/test_build_harness_p0_9a_core.py"],
+      "human_approved": true,
+      "intended_action": "merge",
+      "expected_action": "READY_FOR_MERGE_OR_PUSH"
+    }
+  ]
+}
