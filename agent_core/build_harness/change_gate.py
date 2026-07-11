@@ -33,14 +33,40 @@ DEPENDENCY_FILES = frozenset({
     "package.json", "package-lock.json", "pnpm-lock.yaml", "yarn.lock",
 })
 
-# Valid finding severities/types. An unknown severity fails closed (treated as BLOCK by
-# the decision-integrity validator) so a hand-forged decision cannot smuggle a PASS.
+# P0-9A-R4 — closed finding vocabulary. Exactly the finding types emitted by
+# evaluate_change_gate(), each classified into exactly one bucket. The severity a producer
+# assigns to a type is fixed by its bucket; a decision claiming otherwise (e.g. a
+# forbidden_path relabeled "info") is internally inconsistent and cannot authorize release.
 _VALID_SEVERITIES = frozenset({"info", "warning", "block"})
-_BLOCKING_FINDING_TYPES = frozenset({
-    "invalid_changed_path", "forbidden_path", "out_of_scope", "outside_allowed_path",
-    "no_changed_files", "dependency_change", "missing_evidence", "no_evidence",
-    "duplicate_evidence_id", "invalid_evidence",
+
+# Findings compatible with a PASS. The producer currently emits NONE — a genuine PASS has
+# no findings. This set is intentionally empty (do not add fake info types).
+INFO_FINDING_TYPES: frozenset[str] = frozenset()
+
+# Findings that force REVIEW_REQUIRED (never PASS). Emitted at severity "warning".
+REVIEW_FINDING_TYPES = frozenset({
+    "no_changed_files", "out_of_scope", "dependency_change",
+    "missing_evidence", "no_evidence",
 })
+
+# Findings that force BLOCK. Emitted at severity "block".
+BLOCK_FINDING_TYPES = frozenset({
+    "invalid_changed_path", "forbidden_path", "invalid_evidence", "duplicate_evidence_id",
+})
+
+# The single severity each known finding type is allowed to carry.
+_EXPECTED_SEVERITY_BY_TYPE: dict[str, str] = {
+    **{t: "info" for t in INFO_FINDING_TYPES},
+    **{t: "warning" for t in REVIEW_FINDING_TYPES},
+    **{t: "block" for t in BLOCK_FINDING_TYPES},
+}
+_CLASSIFIED_FINDING_TYPES = (
+    INFO_FINDING_TYPES | REVIEW_FINDING_TYPES | BLOCK_FINDING_TYPES
+)
+
+
+class InvalidCommandEvidenceError(ValueError):
+    """A CommandEvidence field failed strict type/value validation (no coercion)."""
 
 
 class InvalidCommandEvidenceError(ValueError):
@@ -233,8 +259,20 @@ def evaluate_change_gate(gate_input: ChangeGateInput) -> ChangeGateDecision:
     missing: list[str] = []
     rejected: list[dict] = []
 
-    # R3 defensive validation: re-check every evidence object even if it was constructed
-    # bypassing __post_init__. Malformed evidence is recorded + excluded (never crashes).
+    # R4 pass 1 — reserve identities BEFORE body validation. Read evidence_id defensively
+    # (do not trust the other fields); count it only when it is an exactly-valid identifier
+    # string. This is done even when another field on the same record is malformed, so a
+    # malformed record sharing a valid id with a good record is still seen as a duplicate.
+    id_counts: dict[str, int] = {}
+    for ev in gate_input.test_evidence:
+        eid = getattr(ev, "evidence_id", None)
+        if is_valid_evidence_id(eid):
+            id_counts[eid] = id_counts.get(eid, 0) + 1
+    # R4 pass 2 — any valid identity counted more than once is a duplicate.
+    duplicate_ids = {eid for eid, count in id_counts.items() if count > 1}
+
+    # R4 pass 3 — validate every record body (bypass-constructed malformed objects still
+    # cannot crash or match). Malformed → invalid_evidence + rejected + excluded.
     usable_evidence: list[CommandEvidence] = []
     for index, ev in enumerate(gate_input.test_evidence):
         malformed = _command_evidence_error(ev)
@@ -251,12 +289,8 @@ def evaluate_change_gate(gate_input: ChangeGateInput) -> ChangeGateDecision:
             continue
         usable_evidence.append(ev)
 
-    # R3 duplicate evidence identity: any evidence_id used more than once is ambiguous.
-    # Every record sharing a duplicated id is rejected and cannot satisfy a requirement.
-    id_counts: dict[str, int] = {}
-    for ev in usable_evidence:
-        id_counts[ev.evidence_id] = id_counts.get(ev.evidence_id, 0) + 1
-    duplicate_ids = {eid for eid, count in id_counts.items() if count > 1}
+    # R4: emit a duplicate finding for every ambiguous identity (counted in pass 1, so it
+    # fires even if one of the sharing records was later rejected as malformed).
     for eid in sorted(duplicate_ids):
         findings.append(Finding(
             type="duplicate_evidence_id", severity="block", file=None,
@@ -269,6 +303,7 @@ def evaluate_change_gate(gate_input: ChangeGateInput) -> ChangeGateDecision:
             "reason": f"duplicate evidence_id used {id_counts[eid]} times",
         })
 
+    # R4 pass 4 — matching. Exclude any record whose valid id is duplicated.
     for required in contract.required_evidence:
         required_norm = _normalize_command(required)
         satisfied = False
@@ -326,16 +361,43 @@ def evaluate_change_gate(gate_input: ChangeGateInput) -> ChangeGateDecision:
     )
 
 
+def _finding_shape_error(finding: object) -> str | None:
+    """P0-9A-R4: None if ``finding`` is a well-formed Finding-shaped object, else why not.
+
+    Defensive: never trusts the entry to be a real Finding. type/severity/reason are
+    non-empty exact strings; file/evidence are str or None; severity is an allowed value.
+    """
+    ftype = getattr(finding, "type", "__missing__")
+    if type(ftype) is not str or not ftype.strip():
+        return f"finding.type must be a non-empty string, got {ftype!r}"
+    severity = getattr(finding, "severity", "__missing__")
+    if type(severity) is not str or severity not in _VALID_SEVERITIES:
+        return f"finding.severity must be one of {sorted(_VALID_SEVERITIES)}, got {severity!r}"
+    reason = getattr(finding, "reason", "__missing__")
+    if type(reason) is not str or not reason.strip():
+        return f"finding.reason must be a non-empty string, got {reason!r}"
+    file = getattr(finding, "file", None)
+    if file is not None and type(file) is not str:
+        return f"finding.file must be a string or None, got {file!r}"
+    evidence = getattr(finding, "evidence", None)
+    if evidence is not None and type(evidence) is not str:
+        return f"finding.evidence must be a string or None, got {evidence!r}"
+    return None
+
+
 def validate_change_gate_decision(
     contract: TaskContract, decision: object
 ) -> list[str]:
-    """P0-9A-R3: independently verify a PASS ChangeGateDecision is internally consistent.
+    """Independently verify a PASS ChangeGateDecision is internally consistent (R3/R4).
 
-    A hand-constructed decision object marked ``PASS`` must not authorize release when it
-    contains blocking findings, unresolved required evidence, malformed collections, or an
-    unknown severity. Returns a list of integrity errors (empty ⇒ the decision may be
-    trusted). Only a ``PASS`` decision is checked for authorization; other decisions are
-    correctly non-authorizing already and return their own single reason.
+    A hand-constructed decision marked ``PASS`` must not authorize release unless it is
+    exactly what a genuine PASS from ``evaluate_change_gate`` looks like: every required
+    evidence item matched, nothing missing, and NO finding that is not an explicitly
+    allowed informational finding. Because the producer emits no informational findings,
+    a real PASS has an empty findings list. Any warning/block finding, any known non-PASS
+    finding type relabeled ``info``, any unknown type, any unknown severity, and any
+    malformed finding object all invalidate the PASS. Returns a list of integrity errors
+    (empty ⇒ the decision may be trusted).
     """
     errors: list[str] = []
 
@@ -349,9 +411,9 @@ def validate_change_gate_decision(
     matched = getattr(decision, "matched_required_evidence", None)
     missing = getattr(decision, "missing_required_evidence", None)
 
-    # 7. Collection type sanity — malformed shapes fail closed.
+    # Collection type sanity — malformed shapes fail closed.
     if not isinstance(findings, list):
-        errors.append("findings is not a list")
+        errors.append(f"findings is not a list: {findings!r}")
         findings = []
     if not isinstance(matched, list):
         errors.append("matched_required_evidence is not a list")
@@ -360,29 +422,57 @@ def validate_change_gate_decision(
         errors.append("missing_required_evidence is not a list")
         missing = ["<unknown>"]
 
-    # 1./2. Every required evidence item must be covered; nothing may be missing.
+    # Every required evidence item must be covered; nothing may be missing.
     if missing:
         errors.append(f"missing_required_evidence is non-empty: {missing}")
     for required in contract.required_evidence:
         if required not in matched:
             errors.append(f"required evidence not in matched set: {required}")
-
-    # 3. A contract WITH required evidence cannot PASS on an empty matched set.
     if contract.required_evidence and not matched:
         errors.append("contract has required evidence but matched set is empty")
 
-    # 4./5./8. No blocking finding, no review/blocking finding type, no unknown severity.
+    # The fundamental PASS finding rule (R4): every finding must be a well-formed,
+    # info-severity, explicitly-allowed informational finding — otherwise PASS is invalid.
     for finding in findings:
-        severity = getattr(finding, "severity", None)
-        ftype = getattr(finding, "type", None)
-        if severity not in _VALID_SEVERITIES:
-            errors.append(f"finding has unknown severity {severity!r}")
+        shape_error = _finding_shape_error(finding)
+        if shape_error is not None:
+            errors.append(f"malformed finding in PASS decision: {shape_error}")
             continue
+        ftype = finding.type
+        severity = finding.severity
         if severity == "block":
-            errors.append(f"PASS decision contains a blocking finding: {ftype!r}")
-        elif severity == "warning" and ftype in _BLOCKING_FINDING_TYPES:
+            errors.append(f"PASS decision contains a block-severity finding: {ftype!r}")
+            continue
+        if severity == "warning":
+            errors.append(f"PASS decision contains a warning-severity finding: {ftype!r}")
+            continue
+        # severity == "info": only explicitly-allowed informational types may pass.
+        if ftype not in INFO_FINDING_TYPES:
+            if ftype in BLOCK_FINDING_TYPES:
+                errors.append(
+                    f"PASS decision contains a block finding type relabeled 'info': {ftype!r}"
+                )
+            elif ftype in REVIEW_FINDING_TYPES:
+                errors.append(
+                    f"PASS decision contains a review finding type relabeled 'info': {ftype!r}"
+                )
+            else:
+                errors.append(
+                    f"PASS decision contains an unknown finding type at 'info': {ftype!r}"
+                )
+        elif _EXPECTED_SEVERITY_BY_TYPE.get(ftype) != severity:
             errors.append(
-                f"PASS decision contains an unresolved review finding: {ftype!r}"
+                f"finding {ftype!r} has severity {severity!r} inconsistent with its "
+                f"classification ({_EXPECTED_SEVERITY_BY_TYPE.get(ftype)!r})"
             )
 
     return errors
+
+
+def producer_finding_types() -> frozenset[str]:
+    """The exact finding types evaluate_change_gate() can emit (for classification tests)."""
+    return frozenset({
+        "invalid_changed_path", "no_changed_files", "forbidden_path", "out_of_scope",
+        "dependency_change", "invalid_evidence", "duplicate_evidence_id",
+        "missing_evidence", "no_evidence",
+    })
