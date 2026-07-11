@@ -25,6 +25,22 @@ class NextAction:
         return {"action": self.action, "reason": self.reason, "prompt": self.prompt}
 
 
+def _identity_error(
+    report: AgentReport | None, contract: TaskContract, expected_role: str
+) -> str | None:
+    """P0-9A-R2: a report with the wrong task/role identity can never drive a handoff."""
+    if report is None or not report.parse_ok:
+        return None  # parse failures are handled by the dedicated branches below
+    if report.task_id != contract.task_id:
+        return (
+            f"{expected_role} report belongs to task {report.task_id!r}, "
+            f"contract is {contract.task_id!r}"
+        )
+    if report.role != expected_role:
+        return f"report in the {expected_role} slot has role {report.role!r}"
+    return None
+
+
 def recommend_next_action(
     contract: TaskContract,
     implementer_report: AgentReport | None,
@@ -32,6 +48,18 @@ def recommend_next_action(
     changegate_decision: ChangeGateDecision | None,
     processguard_decision: ProcessGuardDecision | None,
 ) -> NextAction:
+    # 0. P0-9A-R2 severity-first: invalid report identity is a hard stop for any
+    # recommendation beyond a human look — and can never lead to the release branch.
+    for report, slot in (
+        (implementer_report, "implementer"), (verifier_report, "verifier"),
+    ):
+        identity_error = _identity_error(report, contract, slot)
+        if identity_error is not None:
+            return NextAction(
+                action="ESCALATE_TO_HUMAN",
+                reason=f"report identity is invalid: {identity_error}",
+            )
+
     # 1. Nothing implemented yet → send to implementer.
     if implementer_report is None:
         return NextAction(
@@ -85,7 +113,14 @@ def recommend_next_action(
                    + "; ".join(f.reason for f in changegate_decision.findings) ,
         )
 
-    # 6. Everything passing but approval outstanding.
+    # 6. P0-9A-R2: a ProcessGuard BLOCK is a hard stop — release is never recommended.
+    if processguard_decision is not None and processguard_decision.decision == "BLOCK":
+        return NextAction(
+            action="REQUEST_HUMAN_REVIEW",
+            reason="ProcessGuard blocked the workflow: " + processguard_decision.reason,
+        )
+
+    # 7. Everything passing but approval outstanding.
     if processguard_decision is not None and processguard_decision.decision == "REVIEW_REQUIRED" \
             and "human_approval" in processguard_decision.missing_steps:
         return NextAction(
@@ -93,7 +128,8 @@ def recommend_next_action(
             reason="all gates pass but human approval is missing",
         )
 
-    # 7. Fully green.
+    # 8. Fully green — the ONLY branch that recommends release, and it is reachable only
+    # with a ProcessGuard PASS (which itself revalidated report identity and state).
     if processguard_decision is not None and processguard_decision.decision == "PASS":
         return NextAction(
             action="READY_FOR_MERGE_OR_PUSH",

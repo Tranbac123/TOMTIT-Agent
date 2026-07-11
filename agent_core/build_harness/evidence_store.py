@@ -1,5 +1,14 @@
 """P0-9A — local JSON/JSONL evidence store. No database, no network, no secrets.
 
+P0-9A-R2 hardening (fail-closed):
+- every identifier used in a path passes the strict grammar (rejected, never sanitized);
+- every resolved write target must stay under the resolved task directory (symlink
+  escapes rejected);
+- artifact writes are atomic (temp file + fsync + os.replace) and never silently
+  overwrite: an existing artifact with different bytes raises EvidenceConflictError
+  (byte-identical rewrites are idempotent no-ops);
+- corrupt JSON surfaces as EvidenceCorruptionError, never as empty/PASS evidence.
+
 Layout under the store root:
     <task_id>/contract.json
     <task_id>/prompts/<role>.md
@@ -10,12 +19,40 @@ Layout under the store root:
 from __future__ import annotations
 
 import json
+import os
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
 from agent_core.build_harness.contracts import TaskContract, contract_to_dict
+from agent_core.build_harness.validation import (
+    InvalidEvidenceIdentifierError,
+    validate_artifact_name,
+    validate_task_id,
+)
+
+__all__ = [
+    "DEFAULT_EVIDENCE_ROOT",
+    "EvidenceStore",
+    "EvidenceConflictError",
+    "EvidenceCorruptionError",
+    "EvidencePathEscapeError",
+    "InvalidEvidenceIdentifierError",
+]
 
 DEFAULT_EVIDENCE_ROOT = Path(".artifacts/build_harness")
+
+
+class EvidencePathEscapeError(ValueError):
+    """A resolved write target escaped the task directory (traversal/symlink)."""
+
+
+class EvidenceConflictError(RuntimeError):
+    """An authoritative artifact already exists with different content."""
+
+
+class EvidenceCorruptionError(RuntimeError):
+    """A stored JSON artifact could not be parsed; evidence must not be trusted."""
 
 
 class EvidenceStore:
@@ -23,43 +60,89 @@ class EvidenceStore:
         self._root = Path(root)
 
     def _task_dir(self, task_id: str) -> Path:
-        safe = task_id.strip().replace("/", "_")
-        if not safe:
-            raise ValueError("task_id must be non-empty")
-        path = self._root / safe
+        validate_task_id(task_id)
+        path = self._root / task_id
         path.mkdir(parents=True, exist_ok=True)
+        resolved_root = self._root.resolve()
+        resolved = path.resolve()
+        if resolved != resolved_root / task_id or not resolved.is_relative_to(resolved_root):
+            raise EvidencePathEscapeError(
+                f"task directory escaped the store root: {task_id!r} -> {resolved}"
+            )
         return path
 
-    def _write_json(self, path: Path, payload: dict) -> Path:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(
-            json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    def _target(self, task_id: str, *parts: str) -> Path:
+        """Build and containment-check a write target under the task directory."""
+        task_dir = self._task_dir(task_id)
+        target = task_dir.joinpath(*parts)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        resolved_task_dir = task_dir.resolve()
+        resolved_parent = target.parent.resolve()
+        if not resolved_parent.is_relative_to(resolved_task_dir):
+            raise EvidencePathEscapeError(
+                f"artifact parent escaped the task directory: {target}"
+            )
+        if target.is_symlink():
+            raise EvidencePathEscapeError(f"artifact target is a symlink: {target}")
+        return target
+
+    @staticmethod
+    def _write_atomic(target: Path, data: str) -> Path:
+        """Atomic create: temp file in the same directory, fsync, os.replace.
+
+        No silent overwrite: an existing target with identical bytes is an idempotent
+        no-op; different bytes raise EvidenceConflictError.
+        """
+        encoded = data.encode("utf-8")
+        if target.exists():
+            existing = target.read_bytes()
+            if existing == encoded:
+                return target  # idempotent rewrite of identical content
+            raise EvidenceConflictError(
+                f"artifact already exists with different content: {target}"
+            )
+        fd, tmp_name = tempfile.mkstemp(dir=target.parent, prefix=".tmp-evidence-")
+        try:
+            with os.fdopen(fd, "wb") as handle:
+                handle.write(encoded)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(tmp_name, target)
+        except BaseException:
+            try:
+                os.unlink(tmp_name)
+            except OSError:
+                pass
+            raise
+        return target
+
+    def _write_json(self, target: Path, payload: dict) -> Path:
+        return self._write_atomic(
+            target, json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
         )
-        return path
 
     def save_contract(self, contract: TaskContract) -> Path:
-        return self._write_json(
-            self._task_dir(contract.task_id) / "contract.json",
-            contract_to_dict(contract),
-        )
+        target = self._target(contract.task_id, "contract.json")
+        return self._write_json(target, contract_to_dict(contract))
 
     def save_prompt(self, task_id: str, role: str, prompt: str) -> Path:
-        path = self._task_dir(task_id) / "prompts" / f"{role}.md"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(prompt, encoding="utf-8")
-        return path
+        validate_artifact_name(role, kind="prompt role")
+        target = self._target(task_id, "prompts", f"{role}.md")
+        return self._write_atomic(target, prompt)
 
     def save_report(self, task_id: str, role: str, text: str) -> Path:
-        path = self._task_dir(task_id) / "reports" / f"{role}.md"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(text, encoding="utf-8")
-        return path
+        validate_artifact_name(role, kind="report role")
+        target = self._target(task_id, "reports", f"{role}.md")
+        return self._write_atomic(target, text)
 
     def save_gate_result(self, task_id: str, name: str, payload: dict) -> Path:
-        return self._write_json(self._task_dir(task_id) / "gate" / f"{name}.json", payload)
+        validate_artifact_name(name, kind="gate name")
+        target = self._target(task_id, "gate", f"{name}.json")
+        return self._write_json(target, payload)
 
     def append_event(self, task_id: str, event_type: str, payload: dict) -> Path:
-        path = self._task_dir(task_id) / "events.jsonl"
+        validate_artifact_name(event_type, kind="event type")
+        path = self._target(task_id, "events.jsonl")
         event = {
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "task_id": task_id,
@@ -68,7 +151,17 @@ class EvidenceStore:
         }
         with path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(event, ensure_ascii=False) + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
         return path
+
+    def _read_json(self, path: Path) -> dict:
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+            raise EvidenceCorruptionError(
+                f"corrupt evidence artifact {path}: {exc}"
+            ) from exc
 
     def load_task_summary(self, task_id: str) -> dict:
         task_dir = self._task_dir(task_id)
@@ -76,20 +169,26 @@ class EvidenceStore:
                          "reports": {}, "gates": {}, "events": []}
         contract_path = task_dir / "contract.json"
         if contract_path.exists():
-            summary["contract"] = json.loads(contract_path.read_text(encoding="utf-8"))
+            summary["contract"] = self._read_json(contract_path)
         for prompt_path in sorted((task_dir / "prompts").glob("*.md")):
             summary["prompts"][prompt_path.stem] = prompt_path.read_text(encoding="utf-8")
         for report_path in sorted((task_dir / "reports").glob("*.md")):
             summary["reports"][report_path.stem] = report_path.read_text(encoding="utf-8")
         for gate_path in sorted((task_dir / "gate").glob("*.json")):
-            summary["gates"][gate_path.stem] = json.loads(
-                gate_path.read_text(encoding="utf-8")
-            )
+            summary["gates"][gate_path.stem] = self._read_json(gate_path)
         events_path = task_dir / "events.jsonl"
         if events_path.exists():
-            summary["events"] = [
-                json.loads(line)
-                for line in events_path.read_text(encoding="utf-8").splitlines()
-                if line.strip()
-            ]
+            events = []
+            for line_number, line in enumerate(
+                events_path.read_text(encoding="utf-8").splitlines(), start=1
+            ):
+                if not line.strip():
+                    continue
+                try:
+                    events.append(json.loads(line))
+                except json.JSONDecodeError as exc:
+                    raise EvidenceCorruptionError(
+                        f"corrupt event at {events_path}:{line_number}: {exc}"
+                    ) from exc
+            summary["events"] = events
         return summary

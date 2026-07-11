@@ -15,7 +15,7 @@ committed, merged, or pushed.
 machine_summary:
   task_id: BH-P0-A
   role: verifier
-  status: VERIFIED
+  status: VERIFIED_PASS
   result: PASS
   files_changed: []
   tests_run:

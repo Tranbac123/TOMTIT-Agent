@@ -12,6 +12,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from agent_core.build_harness.validation import is_valid_task_id
+
 _VALID_RISK_LEVELS = ("low", "medium", "high")
 _DEFAULT_HUMAN_APPROVAL_ACTIONS = ["merge", "push", "deploy", "dependency_change"]
 
@@ -37,12 +39,23 @@ class TaskContract:
 
 
 def _as_str_list(value: Any, field_name: str, errors: list[str]) -> list[str]:
+    """Strict: a list whose every item is a non-empty string. No silent filtering —
+    a non-string or empty item is an error (P0-9A-R2)."""
     if value is None:
         return []
-    if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
+    if not isinstance(value, list):
         errors.append(f"{field_name} must be a list of strings")
         return []
-    return [v.strip() for v in value if v.strip()]
+    items: list[str] = []
+    for index, item in enumerate(value):
+        # bool is an int subclass; reject it explicitly as a non-string.
+        if not isinstance(item, str) or isinstance(item, bool) or not item.strip():
+            errors.append(
+                f"{field_name}[{index}] must be a non-empty string, got {item!r}"
+            )
+            continue
+        items.append(item.strip())
+    return items
 
 
 def validate_contract_dict(data: dict[str, Any]) -> TaskContract:
@@ -63,6 +76,13 @@ def validate_contract_dict(data: dict[str, Any]) -> TaskContract:
     title = _req_str("title")
     goal = _req_str("goal")
 
+    # P0-9A-R2: the task_id is used as a filesystem namespace by the evidence store, so
+    # it must satisfy the strict identifier grammar (no separators/traversal/control).
+    if task_id and not is_valid_task_id(task_id):
+        errors.append(
+            f"task_id {task_id!r} must match [A-Za-z0-9][A-Za-z0-9._-]{{0,127}}"
+        )
+
     allowed_paths = _as_str_list(data.get("allowed_paths"), "allowed_paths", errors)
     forbidden_paths = _as_str_list(data.get("forbidden_paths"), "forbidden_paths", errors)
     acceptance = _as_str_list(
@@ -79,7 +99,17 @@ def validate_contract_dict(data: dict[str, Any]) -> TaskContract:
         errors.append(f"risk_level must be one of {_VALID_RISK_LEVELS}")
         risk_level = "medium"
 
-    broad_scope_allowed = bool(data.get("broad_scope_allowed", False))
+    # P0-9A-R2: broad_scope_allowed must be a REAL boolean. "false"/"true"/0/1/null/[]/{}
+    # are rejected — a truthy string must never silently grant broad scope.
+    broad_raw = data.get("broad_scope_allowed", False)
+    if type(broad_raw) is not bool:
+        errors.append(
+            f"broad_scope_allowed must be a JSON boolean, got {type(broad_raw).__name__}: "
+            f"{broad_raw!r}"
+        )
+        broad_scope_allowed = False
+    else:
+        broad_scope_allowed = broad_raw
     if not allowed_paths and not broad_scope_allowed:
         errors.append(
             "allowed_paths may be empty only when broad_scope_allowed is true"

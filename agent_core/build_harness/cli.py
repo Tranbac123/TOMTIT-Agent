@@ -17,7 +17,11 @@ import json
 import sys
 from pathlib import Path
 
-from agent_core.build_harness.change_gate import ChangeGateInput, evaluate_change_gate
+from agent_core.build_harness.change_gate import (
+    ChangeGateInput,
+    CommandEvidence,
+    evaluate_change_gate,
+)
 from agent_core.build_harness.contracts import (
     ContractValidationError,
     contract_to_dict,
@@ -60,7 +64,13 @@ def main(argv: list[str] | None = None) -> int:
     p_gate = sub.add_parser("changegate")
     p_gate.add_argument("--contract", required=True)
     p_gate.add_argument("--changed-files", nargs="+", default=[])
-    p_gate.add_argument("--tests-run", nargs="+", default=[])
+    p_gate.add_argument("--tests-run", nargs="+", default=[],
+                        help="legacy display-only command strings (unverified)")
+    p_gate.add_argument("--expected-commit", default="",
+                        help="commit SHA the structured evidence must be bound to")
+    p_gate.add_argument("--evidence-file", default=None,
+                        help='JSON file: {"evidence": [{evidence_id, command, exit_code, '
+                             "completed, commit_sha}, ...]}")
 
     p_next = sub.add_parser("next-action")
     p_next.add_argument("--contract", required=True)
@@ -127,13 +137,36 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "changegate":
         contract = _load_contract_or_exit(args.contract)
+        evidence: list[CommandEvidence] = []
+        if args.evidence_file:
+            try:
+                raw = json.loads(Path(args.evidence_file).read_text(encoding="utf-8"))
+                entries = raw.get("evidence")
+                if not isinstance(entries, list):
+                    raise ValueError('evidence file must contain an "evidence" list')
+                for entry in entries:
+                    evidence.append(CommandEvidence(
+                        command=str(entry["command"]),
+                        exit_code=int(entry["exit_code"]),
+                        completed=bool(entry["completed"]),
+                        commit_sha=str(entry["commit_sha"]),
+                        evidence_id=str(entry["evidence_id"]),
+                        completed_at=entry.get("completed_at"),
+                        artifact_digest=entry.get("artifact_digest"),
+                    ))
+            except (OSError, ValueError, KeyError, TypeError) as exc:
+                _print_json({"ok": False, "error": f"invalid evidence file: {exc}"})
+                return 1
         decision = evaluate_change_gate(ChangeGateInput(
             contract=contract,
             changed_files=list(args.changed_files),
             tests_run=list(args.tests_run),
+            expected_commit_sha=args.expected_commit,
+            test_evidence=evidence,
         ))
         _print_json(decision.to_dict())
-        return 0 if decision.decision != "BLOCK" else 1
+        # P0-9A-R2 fail-closed exit semantics: only PASS is a success.
+        return 0 if decision.decision == "PASS" else 1
 
     if args.command == "next-action":
         contract = _load_contract_or_exit(args.contract)

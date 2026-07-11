@@ -14,6 +14,7 @@ import pytest
 
 from agent_core.build_harness.change_gate import (
     ChangeGateInput,
+    CommandEvidence,
     evaluate_change_gate,
 )
 from agent_core.build_harness.cli import main as cli_main
@@ -49,15 +50,32 @@ def _contract() -> TaskContract:
     return load_task_contract(CONTRACT_PATH)
 
 
+EXPECTED_SHA = "0737577a2d2351947f412ed29d73722f18491c89"
+
+_PASS_STATUS_BY_ROLE = {"implementer": "IMPLEMENTED", "verifier": "VERIFIED_PASS"}
+
+
 def _pass_report(role: str) -> AgentReport:
-    return AgentReport(task_id="BH-P0-A", role=role, status="X", result="PASS")
+    return AgentReport(
+        task_id="BH-P0-A", role=role,
+        status=_PASS_STATUS_BY_ROLE[role], result="PASS",
+    )
+
+
+def _valid_evidence(command: str = "pytest tests/test_build_harness_p0_9a_core.py",
+                    sha: str = EXPECTED_SHA) -> CommandEvidence:
+    return CommandEvidence(
+        command=command, exit_code=0, completed=True,
+        commit_sha=sha, evidence_id="ev-1",
+    )
 
 
 def _pass_gate():
     return evaluate_change_gate(ChangeGateInput(
         contract=_contract(),
         changed_files=["agent_core/build_harness/dependency_scanner.py"],
-        tests_run=["pytest tests/test_build_harness_p0_9a_core.py"],
+        expected_commit_sha=EXPECTED_SHA,
+        test_evidence=[_valid_evidence()],
     ))
 
 
@@ -217,7 +235,8 @@ def test_changegate_blocks_forbidden_path():
     decision = evaluate_change_gate(ChangeGateInput(
         contract=_contract(),
         changed_files=["agent_core/conversation/profile_memory.py"],
-        tests_run=["pytest tests/test_build_harness_p0_9a_core.py"],
+        expected_commit_sha=EXPECTED_SHA,
+        test_evidence=[_valid_evidence()],
     ))
     assert decision.decision == "BLOCK"
     assert any(f.type == "forbidden_path" and f.severity == "block"
@@ -228,7 +247,8 @@ def test_changegate_review_for_out_of_scope():
     decision = evaluate_change_gate(ChangeGateInput(
         contract=_contract(),
         changed_files=["agent_core/eval/conversation_eval.py"],
-        tests_run=["pytest tests/test_build_harness_p0_9a_core.py"],
+        expected_commit_sha=EXPECTED_SHA,
+        test_evidence=[_valid_evidence()],
     ))
     assert decision.decision == "REVIEW_REQUIRED"
     assert any(f.type == "out_of_scope" for f in decision.findings)
@@ -238,7 +258,8 @@ def test_changegate_review_for_dependency_file_change():
     decision = evaluate_change_gate(ChangeGateInput(
         contract=_contract(),
         changed_files=["agent_core/build_harness/x.py", "pyproject.toml"],
-        tests_run=["pytest tests/test_build_harness_p0_9a_core.py"],
+        expected_commit_sha=EXPECTED_SHA,
+        test_evidence=[_valid_evidence()],
     ))
     assert decision.decision == "REVIEW_REQUIRED"
     assert any(f.type == "dependency_change" for f in decision.findings)
@@ -248,7 +269,8 @@ def test_changegate_review_for_missing_evidence():
     decision = evaluate_change_gate(ChangeGateInput(
         contract=_contract(),
         changed_files=["agent_core/build_harness/x.py"],
-        tests_run=[],
+        expected_commit_sha=EXPECTED_SHA,
+        test_evidence=[],
     ))
     assert decision.decision == "REVIEW_REQUIRED"
     assert decision.missing_required_evidence == [
@@ -262,6 +284,7 @@ def test_changegate_review_for_missing_evidence():
 
 def test_processguard_blocks_merge_without_verifier():
     decision = evaluate_process_guard(ProcessGuardInput(
+        contract=_contract(),
         task_state=TaskState.IMPLEMENTED,
         implementer_report=_pass_report("implementer"),
         verifier_report=None,
@@ -276,6 +299,7 @@ def test_processguard_blocks_merge_without_verifier():
 def test_processguard_blocks_push_without_human_approval():
     # APPROVED is the only valid push state (R1), so this isolates the approval check.
     decision = evaluate_process_guard(ProcessGuardInput(
+        contract=_contract(),
         task_state=TaskState.APPROVED,
         implementer_report=_pass_report("implementer"),
         verifier_report=_pass_report("verifier"),
@@ -289,8 +313,9 @@ def test_processguard_blocks_push_without_human_approval():
 
 def test_processguard_blocks_verifier_needs_fix():
     needs_fix = AgentReport(task_id="BH-P0-A", role="verifier",
-                            status="VERIFIED", result="NEEDS_FIX")
+                            status="NEEDS_FIX", result="NEEDS_FIX")
     decision = evaluate_process_guard(ProcessGuardInput(
+        contract=_contract(),
         task_state=TaskState.READY_FOR_VERIFICATION,
         implementer_report=_pass_report("implementer"),
         verifier_report=needs_fix,
@@ -304,6 +329,7 @@ def test_processguard_blocks_verifier_needs_fix():
 
 def test_processguard_review_when_only_approval_missing():
     decision = evaluate_process_guard(ProcessGuardInput(
+        contract=_contract(),
         task_state=TaskState.READY_FOR_MERGE,
         implementer_report=_pass_report("implementer"),
         verifier_report=_pass_report("verifier"),
@@ -322,6 +348,7 @@ def test_processguard_review_when_only_approval_missing():
 def _all_green_guard_input(task_state: TaskState, intended_action: str,
                            human_approved: bool = True) -> ProcessGuardInput:
     return ProcessGuardInput(
+        contract=_contract(),
         task_state=task_state,
         implementer_report=_pass_report("implementer"),
         verifier_report=_pass_report("verifier"),
@@ -377,9 +404,10 @@ def test_r1_processguard_done_only_from_approved_or_done():
 
 def test_r1_processguard_needs_fix_still_blocks_regardless_of_state():
     needs_fix = AgentReport(task_id="BH-P0-A", role="verifier",
-                            status="VERIFIED", result="NEEDS_FIX")
+                            status="NEEDS_FIX", result="NEEDS_FIX")
     for state in (TaskState.APPROVED, TaskState.READY_FOR_MERGE, TaskState.DRAFT):
         decision = evaluate_process_guard(ProcessGuardInput(
+            contract=_contract(),
             task_state=state,
             implementer_report=_pass_report("implementer"),
             verifier_report=needs_fix,
@@ -394,6 +422,7 @@ def test_r1_processguard_needs_fix_still_blocks_regardless_of_state():
 def test_r1_processguard_state_block_reports_other_missing_steps_too():
     # Merge from IMPLEMENTED with a missing verifier: both problems are surfaced.
     decision = evaluate_process_guard(ProcessGuardInput(
+        contract=_contract(),
         task_state=TaskState.IMPLEMENTED,
         implementer_report=_pass_report("implementer"),
         verifier_report=None,
@@ -409,6 +438,7 @@ def test_r1_processguard_state_block_reports_other_missing_steps_too():
 def test_processguard_blocks_unparseable_report():
     broken = parse_agent_report("prose only, no summary")
     decision = evaluate_process_guard(ProcessGuardInput(
+        contract=_contract(),
         task_state=TaskState.IMPLEMENTED,
         implementer_report=broken,
         verifier_report=None,
@@ -438,7 +468,7 @@ def test_next_action_verifier_after_implementer_pass():
 
 def test_next_action_fix_prompt_on_needs_fix():
     implementer = parse_agent_report(CLAUDE_REPORT_PATH.read_text(encoding="utf-8"))
-    needs_fix = AgentReport(task_id="BH-P0-A", role="verifier", status="VERIFIED",
+    needs_fix = AgentReport(task_id="BH-P0-A", role="verifier", status="NEEDS_FIX",
                             result="NEEDS_FIX", blockers=["missing tests"])
     action = recommend_next_action(_contract(), implementer, needs_fix, None, None)
     assert action.action == "SEND_FIX_PROMPT_TO_IMPLEMENTER"
@@ -450,6 +480,7 @@ def test_next_action_requests_human_approval_when_gates_pass():
     verifier = parse_agent_report(CODEX_REPORT_PATH.read_text(encoding="utf-8"))
     gate = _pass_gate()
     guard = evaluate_process_guard(ProcessGuardInput(
+        contract=_contract(),
         task_state=TaskState.READY_FOR_MERGE,
         implementer_report=implementer, verifier_report=verifier,
         changegate_decision=gate, human_approved=False, intended_action="merge",
@@ -463,6 +494,7 @@ def test_next_action_ready_when_approved():
     verifier = parse_agent_report(CODEX_REPORT_PATH.read_text(encoding="utf-8"))
     gate = _pass_gate()
     guard = evaluate_process_guard(ProcessGuardInput(
+        contract=_contract(),
         task_state=TaskState.APPROVED,
         implementer_report=implementer, verifier_report=verifier,
         changegate_decision=gate, human_approved=True, intended_action="merge",
@@ -478,7 +510,8 @@ def test_next_action_review_on_changegate_review():
     review_gate = evaluate_change_gate(ChangeGateInput(
         contract=_contract(),
         changed_files=["pyproject.toml"],
-        tests_run=["pytest tests/test_build_harness_p0_9a_core.py"],
+        expected_commit_sha=EXPECTED_SHA,
+        test_evidence=[_valid_evidence()],
     ))
     action = recommend_next_action(_contract(), implementer, verifier, review_gate, None)
     assert action.action == "REQUEST_HUMAN_REVIEW"
@@ -558,15 +591,30 @@ def test_cli_generate_prompt(capsys):
     assert "machine_summary" in out
 
 
-def test_cli_changegate(capsys):
+def test_cli_changegate_pass_with_structured_evidence(capsys):
     rc = cli_main([
         "changegate", "--contract", str(CONTRACT_PATH),
         "--changed-files", "agent_core/build_harness/contracts.py",
         "tests/test_build_harness_p0_9a_core.py",
-        "--tests-run", "pytest tests/test_build_harness_p0_9a_core.py",
+        "--expected-commit", EXPECTED_SHA,
+        "--evidence-file", str(ROOT / "examples/build_harness/evidence.json"),
     ])
     out = json.loads(capsys.readouterr().out)
     assert rc == 0 and out["decision"] == "PASS"
+    assert out["expected_commit_sha"] == EXPECTED_SHA
+    assert out["matched_required_evidence"] and not out["missing_required_evidence"]
+
+
+def test_cli_changegate_legacy_strings_review_exits_nonzero(capsys):
+    # R2: a bare --tests-run string is unverified legacy evidence — never PASS/exit 0.
+    rc = cli_main([
+        "changegate", "--contract", str(CONTRACT_PATH),
+        "--changed-files", "agent_core/build_harness/contracts.py",
+        "--tests-run", "pytest tests/test_build_harness_p0_9a_core.py",
+    ])
+    out = json.loads(capsys.readouterr().out)
+    assert rc != 0 and out["decision"] == "REVIEW_REQUIRED"
+    assert out["missing_required_evidence"]
 
 
 def test_cli_ingest_report(capsys):
@@ -585,13 +633,17 @@ def test_cli_ingest_report(capsys):
 # P0-9A-R1 — fail-closed ingest-report exit codes
 # ---------------------------------------------------------------------------
 
-def _write_report(tmp_path: Path, task_id: str, role: str, result: str) -> Path:
+def _write_report(tmp_path: Path, task_id: str, role: str, result: str,
+                  status: str | None = None) -> Path:
+    if status is None:
+        status = {"PASS": _PASS_STATUS_BY_ROLE.get(role, "IMPLEMENTED"),
+                  "NEEDS_FIX": "NEEDS_FIX", "BLOCKED": "BLOCKED"}[result]
     path = tmp_path / f"{role}_{result.lower()}.md"
     path.write_text(
         "machine_summary:\n"
         f"  task_id: {task_id}\n"
         f"  role: {role}\n"
-        "  status: IMPLEMENTED\n"
+        f"  status: {status}\n"
         f"  result: {result}\n"
         "  files_changed: []\n"
         "  tests_run: []\n"
@@ -642,10 +694,11 @@ def test_r1_cli_ingest_unparseable_report_exits_nonzero(tmp_path, capsys):
 
 
 def test_r1_cli_ingest_needs_fix_with_matches_exits_zero(tmp_path, capsys):
-    # NEEDS_FIX ingests fine — the verdict is ProcessGuard/NextAction's job.
-    report = _write_report(tmp_path, "BH-P0-A", "implementer", "NEEDS_FIX")
+    # NEEDS_FIX ingests fine — the verdict is ProcessGuard/NextAction's job. R2: the
+    # NEEDS_FIX vocabulary belongs to the verifier role.
+    report = _write_report(tmp_path, "BH-P0-A", "verifier", "NEEDS_FIX")
     rc = cli_main(["ingest-report", "--contract", str(CONTRACT_PATH),
-                   "--report", str(report), "--role", "implementer"])
+                   "--report", str(report), "--role", "verifier"])
     out = json.loads(capsys.readouterr().out)
     assert rc == 0 and out["ok"] is True and out["result"] == "NEEDS_FIX"
 
@@ -663,18 +716,30 @@ def test_cli_next_action_with_reports(capsys):
 # Scenario fixtures (data/evals/p0_9a_build_harness_cases.json)
 # ---------------------------------------------------------------------------
 
-def _load_eval_cases() -> list[dict]:
-    return json.loads(EVAL_CASES_PATH.read_text(encoding="utf-8"))["cases"]
+def _load_eval_suite() -> dict:
+    return json.loads(EVAL_CASES_PATH.read_text(encoding="utf-8"))
 
 
-@pytest.mark.parametrize("case", _load_eval_cases(), ids=lambda c: c["id"])
+def _suite_evidence(suite: dict, case: dict) -> list[CommandEvidence]:
+    if not case.get("use_valid_evidence"):
+        return []
+    return [CommandEvidence(**entry) for entry in suite["valid_evidence"]]
+
+
+@pytest.mark.parametrize(
+    "case", _load_eval_suite()["cases"], ids=lambda c: c["id"]
+)
 def test_eval_scenario_cases(case):
+    suite = _load_eval_suite()
     contract = _contract()
+    expected_sha = suite["expected_commit_sha"]
     if case["kind"] == "changegate":
         decision = evaluate_change_gate(ChangeGateInput(
             contract=contract,
             changed_files=case["changed_files"],
-            tests_run=case["tests_run"],
+            tests_run=case.get("tests_run", []),
+            expected_commit_sha=expected_sha,
+            test_evidence=_suite_evidence(suite, case),
         ))
         assert decision.decision == case["expected_decision"], decision
         return
@@ -692,14 +757,17 @@ def test_eval_scenario_cases(case):
         assert action.action == case["expected_action"], action
         return
 
-    # next_action_full: run both gates first. R1: the gates-passed shipping stage is
-    # READY_FOR_MERGE (VERIFIED_PASS is no longer a legal merge state).
+    # next_action_full: run both gates first. R1/R2: READY_FOR_MERGE is the gates-passed
+    # shipping stage; ChangeGate PASS requires the structured commit-bound evidence.
     gate = evaluate_change_gate(ChangeGateInput(
         contract=contract,
         changed_files=case["changed_files"],
-        tests_run=case["tests_run"],
+        tests_run=case.get("tests_run", []),
+        expected_commit_sha=expected_sha,
+        test_evidence=_suite_evidence(suite, case),
     ))
     guard = evaluate_process_guard(ProcessGuardInput(
+        contract=contract,
         task_state=TaskState.READY_FOR_MERGE,
         implementer_report=implementer,
         verifier_report=verifier,
