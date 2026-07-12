@@ -165,7 +165,12 @@ def test_r4_malformed_findings_invalidate_pass(bad_findings):
 
 def test_r4_finding_bad_field_types_invalidate_pass():
     class BadFinding:
-        type = None; severity = True; file = 5; reason = ""; evidence = 9
+        type = None
+        severity = True
+        file = 5
+        reason = ""
+        evidence = 9
+
     assert _has_errors([BadFinding()])
 
 

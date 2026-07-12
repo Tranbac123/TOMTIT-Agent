@@ -69,10 +69,6 @@ class InvalidCommandEvidenceError(ValueError):
     """A CommandEvidence field failed strict type/value validation (no coercion)."""
 
 
-class InvalidCommandEvidenceError(ValueError):
-    """A CommandEvidence field failed strict type/value validation (no coercion)."""
-
-
 @dataclass(frozen=True)
 class Finding:
     type: str
@@ -266,7 +262,7 @@ def evaluate_change_gate(gate_input: ChangeGateInput) -> ChangeGateDecision:
     id_counts: dict[str, int] = {}
     for ev in gate_input.test_evidence:
         eid = getattr(ev, "evidence_id", None)
-        if is_valid_evidence_id(eid):
+        if type(eid) is str and is_valid_evidence_id(eid):
             id_counts[eid] = id_counts.get(eid, 0) + 1
     # R4 pass 2 — any valid identity counted more than once is a duplicate.
     duplicate_ids = {eid for eid, count in id_counts.items() if count > 1}
