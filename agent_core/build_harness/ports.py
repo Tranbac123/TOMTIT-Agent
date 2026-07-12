@@ -175,23 +175,36 @@ class RepositoryInspectionError:
 # ---------------------------------------------------------------------------
 
 def _validate_environment(env: object) -> tuple[tuple[str, str], ...]:
-    if not isinstance(env, tuple):
+    """Validate + copy an executable environment into a fresh, canonical, exact structure.
+
+    Every exact-type check happens BEFORE any subclass iteration/len/index/destructure can
+    execute (R1-SOL-001): the outer container and each pair must be EXACT built-in tuples, so
+    a caller-owned tuple subclass whose iteration/length can change is rejected at the
+    boundary. Validated pairs are copied into newly allocated exact tuples so no caller-owned
+    container survives into the frozen model.
+    """
+    if not is_exact_tuple(env):  # exact-type gate before any iteration of a subclass
         raise P09BValidationError("environment must be a tuple of (key, value) tuples")
+    canonical: list[tuple[str, str]] = []
     seen: set[str] = set()
-    for index, pair in enumerate(env):
-        if not isinstance(pair, tuple) or len(pair) != 2:
+    for index, pair in enumerate(env):  # now safe: env is an exact tuple
+        if not is_exact_tuple(pair):  # exact-type gate before len()/indexing/destructure
             raise P09BValidationError(f"environment[{index}] must be a (key, value) tuple")
-        key, value = pair
-        require_str(key, field=f"environment[{index}].key")
+        if len(pair) != 2:
+            raise P09BValidationError(f"environment[{index}] must be a (key, value) tuple")
+        key = pair[0]
+        value = pair[1]
+        require_str(key, field=f"environment[{index}].key")  # exact str (subclass rejects)
         require_str(value, field=f"environment[{index}].value", allow_empty=True)
         reject_control_characters(key, field=f"environment[{index}].key")
         reject_control_characters(value, field=f"environment[{index}].value")
         seen.add(key)
-    if list(env) != sorted(env):
+        canonical.append((key, value))  # newly allocated exact pair tuple
+    if canonical != sorted(canonical):
         raise P09BValidationError("environment must be sorted by key/value")
-    if len(seen) != len(env):
+    if len(seen) != len(canonical):
         raise P09BValidationError("environment keys must be unique")
-    return env
+    return tuple(canonical)  # newly allocated exact outer tuple (not the caller's object)
 
 
 @dataclass(frozen=True)
@@ -216,7 +229,9 @@ class CommandExecutionSpec:
             require_int(value, field=name)
             if value <= 0:
                 raise P09BValidationError(f"{name} must be a positive int")
-        _validate_environment(self.environment)
+        # Store the validator's fresh canonical copy so no caller-owned/subclassed container
+        # survives in this frozen model (R1-SOL-001).
+        object.__setattr__(self, "environment", _validate_environment(self.environment))
 
 
 @dataclass(frozen=True)
@@ -443,6 +458,30 @@ class EvidenceRunRecord:
                 raise P09BValidationError(
                     "verification_bundle candidate_binding != record candidate_binding"
                 )
+            # Every bundle entry must reference evidence this run actually collected
+            # (R1-SOL-003): the entry's OWN (evidence_id, run_id, task_id) must be a member of
+            # the collected identity set. run_id/task_id are read from the entry itself, never
+            # inferred from the record/bundle/candidate. Any valid subset (including all) is
+            # allowed; an empty bundle references nothing and is allowed.
+            collected_identities = {
+                (c.provenance.evidence_id, c.provenance.run_id, c.provenance.task_id)
+                for c in self.collected_evidence
+            }
+            bundle = self.verification_bundle
+            for v in bundle.verified:
+                identity = (v.evidence_id, v.run_id, v.task_id)
+                if identity not in collected_identities:
+                    raise P09BValidationError(
+                        f"verification_bundle verified evidence {identity!r} is not collected "
+                        "evidence of this run"
+                    )
+            for rej in bundle.rejected:
+                identity = (rej.evidence_id, rej.run_id, rej.task_id)
+                if identity not in collected_identities:
+                    raise P09BValidationError(
+                        f"verification_bundle rejected evidence {identity!r} is not collected "
+                        "evidence of this run"
+                    )
 
 
 # ---------------------------------------------------------------------------

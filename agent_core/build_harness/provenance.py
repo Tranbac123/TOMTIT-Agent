@@ -50,6 +50,7 @@ __all__ = [
     "VerifiedCommandEvidence",
     "EvidenceVerificationBundle",
     "collected_candidate_mismatches",
+    "expected_context_mismatch_status",
 ]
 
 
@@ -324,6 +325,102 @@ def collected_candidate_mismatches(
 
 
 # ---------------------------------------------------------------------------
+# Rejected-context status matrix (R1-SOL-002)
+# ---------------------------------------------------------------------------
+
+# Context-mismatch statuses ALWAYS require both an expected candidate and an observed
+# snapshot, and the declared status must be the single primary mismatch selected by the
+# exclusive precedence below.
+_CONTEXT_MISMATCH_STATUSES = frozenset({
+    VerificationStatus.STALE,
+    VerificationStatus.REPOSITORY_MISMATCH,
+    VerificationStatus.COMMIT_MISMATCH,
+    VerificationStatus.TREE_MISMATCH,
+    VerificationStatus.DIRTY_WORKTREE,
+    VerificationStatus.SNAPSHOT_CHANGED,
+})
+
+# Non-context rejection statuses describe a command/collector/provenance failure, not a
+# candidate/snapshot divergence. They allow shapes A (no context), B (candidate only), and
+# C (fully coherent candidate+snapshot); they may never carry foreign/mismatched facts.
+_NON_CONTEXT_REJECTION_STATUSES = frozenset({
+    VerificationStatus.COMMAND_MISMATCH,
+    VerificationStatus.EXECUTION_FAILED,
+    VerificationStatus.DUPLICATE_IDENTITY,
+    VerificationStatus.INVALID_PROVENANCE,
+    VerificationStatus.UNSUPPORTED_SCHEMA,
+    VerificationStatus.UNSUPPORTED_COLLECTOR,
+    VerificationStatus.INSPECTION_FAILED,
+})
+
+
+def expected_context_mismatch_status(
+    candidate: CandidateBinding, snapshot: RepositorySnapshot,
+) -> VerificationStatus | None:
+    """The single primary context-mismatch status a candidate/snapshot pair matches, by the
+    exclusive precedence: repository > object-format/base (STALE) > commit > tree >
+    changed-files > dirty. ``None`` means the snapshot is fully coherent AND release-clean, so
+    no context-mismatch status applies (R1-SOL-002)."""
+    if snapshot.repository_id != candidate.repository_id:
+        return VerificationStatus.REPOSITORY_MISMATCH
+    if (snapshot.object_format != candidate.object_format
+            or snapshot.base_commit_sha != candidate.base_commit_sha):
+        return VerificationStatus.STALE
+    if snapshot.head_commit_sha != candidate.candidate_commit_sha:
+        return VerificationStatus.COMMIT_MISMATCH
+    if snapshot.head_tree_sha != candidate.candidate_tree_sha:
+        return VerificationStatus.TREE_MISMATCH
+    if snapshot.changed_files_digest != candidate.changed_files_digest:
+        return VerificationStatus.SNAPSHOT_CHANGED
+    if not snapshot.is_release_clean:
+        return VerificationStatus.DIRTY_WORKTREE
+    return None
+
+
+def _validate_rejected_context(
+    status: VerificationStatus,
+    candidate: CandidateBinding | None,
+    snapshot: RepositorySnapshot | None,
+) -> None:
+    """Enforce the exclusive rejected-context matrix for a rejected result (R1-SOL-002)."""
+    has_candidate = candidate is not None
+    has_snapshot = snapshot is not None
+    # A snapshot without an expected candidate is meaningless in every rejection status.
+    if has_snapshot and not has_candidate:
+        raise P09BValidationError(
+            f"rejected result [{status.value}]: repository_snapshot requires candidate_binding"
+        )
+    if status in _CONTEXT_MISMATCH_STATUSES:
+        if not (has_candidate and has_snapshot):
+            raise P09BValidationError(
+                f"rejected result [{status.value}]: context-mismatch status requires both "
+                "candidate_binding and repository_snapshot"
+            )
+        assert candidate is not None and snapshot is not None  # for type-narrowing
+        expected = expected_context_mismatch_status(candidate, snapshot)
+        if status is not expected:
+            raise P09BValidationError(
+                f"rejected result: status {status.value!r} does not match the actual primary "
+                f"candidate/snapshot mismatch ({expected.value if expected else 'none'!r})"
+            )
+    elif status in _NON_CONTEXT_REJECTION_STATUSES:
+        # Shape C (both present) is allowed only when the binding fields are fully coherent;
+        # a non-context status may never smuggle foreign candidate/repository facts.
+        if has_candidate and has_snapshot:
+            assert candidate is not None and snapshot is not None  # for type-narrowing
+            mismatches = candidate_snapshot_mismatches(candidate, snapshot)
+            if mismatches:
+                raise P09BValidationError(
+                    f"rejected result [{status.value}]: non-context status may not carry a "
+                    f"mismatched candidate/snapshot ({', '.join(mismatches)})"
+                )
+    else:  # pragma: no cover - VERIFIED is the only remaining status and is never rejected
+        raise P09BValidationError(
+            f"rejected result: unexpected status {status.value!r}"
+        )
+
+
+# ---------------------------------------------------------------------------
 # EvidenceVerificationResult
 # ---------------------------------------------------------------------------
 
@@ -397,6 +494,11 @@ class EvidenceVerificationResult:
                 raise P09BValidationError(
                     "a rejected result cannot claim a matched requirement"
                 )
+            # A rejected result's status and optional candidate/snapshot must have exactly
+            # one precise meaning (R1-SOL-002).
+            _validate_rejected_context(
+                self.status, self.candidate_binding, self.repository_snapshot
+            )
         validate_sha256_digest(self.claim_digest, field="claim_digest")
         validate_rfc3339_utc(self.verified_at, field="verified_at")
         require_str(self.verifier_version, field="verifier_version")
@@ -609,6 +711,15 @@ class EvidenceVerificationBundle:
             if r.task_id != self.task_id:
                 raise P09BValidationError(
                     f"rejected result task_id {r.task_id!r} != bundle task_id {self.task_id!r}"
+                )
+            # The rejected result's candidate_binding is the EXPECTED candidate and must equal
+            # the bundle candidate; its optional repository_snapshot is the OBSERVED state and
+            # may legitimately differ (that observed mismatch is exactly what its status
+            # explains, already enforced by the result's own matrix). A rejected result may
+            # never smuggle a foreign expected candidate into the bundle (R1-SOL-002).
+            if r.candidate_binding is not None and r.candidate_binding != candidate:
+                raise P09BValidationError(
+                    "rejected result expected candidate_binding != bundle candidate_binding"
                 )
 
         mismatches = candidate_snapshot_mismatches(candidate, self.verified_at_snapshot)
