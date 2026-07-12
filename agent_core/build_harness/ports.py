@@ -9,10 +9,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+from enum import Enum
 from typing import Generic, Protocol, TypeVar, runtime_checkable
 
 from agent_core.build_harness.canonical import (
     P09BValidationError,
+    is_exact_bytes,
+    is_exact_tuple,
     is_exact_type,
     parse_rfc3339_utc,
     require_bool,
@@ -20,6 +23,7 @@ from agent_core.build_harness.canonical import (
     require_str,
     reject_control_characters,
     validate_diagnostic_text,
+    validate_duration_ms,
     validate_generated_id,
     validate_git_object_sha,
     validate_rfc3339_utc,
@@ -36,14 +40,19 @@ from agent_core.build_harness.repository_models import (
     RepositorySnapshot,
     _enum,
     _validate_argv,
+    candidate_snapshot_mismatches,
 )
 from agent_core.build_harness.provenance import (
     CollectedCommandEvidence,
     EvidenceVerificationBundle,
+    collected_candidate_mismatches,
 )
 
 __all__ = [
     "Outcome",
+    "Unit",
+    "StorageErrorCode",
+    "StorageError",
     "RepositoryInspectionRequest",
     "RepositoryInspectionError",
     "CommandExecutionSpec",
@@ -93,6 +102,33 @@ class Outcome(Generic[T, E]):
         if error is None:
             raise P09BValidationError("Outcome.failure requires a non-None error")
         return cls(value=None, error=error)
+
+
+@dataclass(frozen=True)
+class Unit:
+    """The single, immutable success value for operations that return no payload (a typed
+    stand-in for ``None`` so ``Outcome[Unit, E]`` stays representable — ``Unit()`` is
+    non-None, so ``Outcome.success(Unit())`` is a valid success)."""
+
+
+class StorageErrorCode(str, Enum):
+    NOT_FOUND = "NOT_FOUND"
+    CONFLICT = "CONFLICT"
+    CORRUPT = "CORRUPT"
+    IO_ERROR = "IO_ERROR"
+    UNSUPPORTED_SCHEMA = "UNSUPPORTED_SCHEMA"
+
+
+@dataclass(frozen=True)
+class StorageError:
+    """A typed storage failure so a repository adapter reports a representable outcome
+    instead of throwing or inventing missing/None semantics (B1-CODEX-010)."""
+    code: StorageErrorCode
+    message: str
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "code", _enum(self.code, StorageErrorCode, field="code"))
+        require_str(self.message, field="message")
 
 
 # ---------------------------------------------------------------------------
@@ -198,15 +234,31 @@ class CommandExecutionResult:
 
     def __post_init__(self) -> None:
         _validate_argv(self.argv)
-        if self.exit_code is not None:
-            require_int(self.exit_code, field="exit_code")
         require_bool(self.completed, field="completed")
         require_bool(self.timed_out, field="timed_out")
         require_bool(self.interrupted, field="interrupted")
-        if self.completed and self.exit_code is None:
-            raise P09BValidationError("completed=True requires an integer exit_code")
-        if self.completed and (self.timed_out or self.interrupted):
-            raise P09BValidationError("completed=True is inconsistent with timed_out/interrupted")
+        if self.exit_code is not None:
+            require_int(self.exit_code, field="exit_code")
+        # Exactly one coherent terminal state — no other flag combination is representable
+        # (B1-CODEX-004):
+        #   completed  : completed & !timed_out & !interrupted, exit_code is an int
+        #   timed_out  : !completed & timed_out & !interrupted, exit_code is None
+        #   interrupted: !completed & !timed_out & interrupted, exit_code is None
+        state = (self.completed, self.timed_out, self.interrupted)
+        if state == (True, False, False):
+            if self.exit_code is None:
+                raise P09BValidationError("completed result requires an integer exit_code")
+        elif state == (False, True, False):
+            if self.exit_code is not None:
+                raise P09BValidationError("timed_out result requires exit_code=None")
+        elif state == (False, False, True):
+            if self.exit_code is not None:
+                raise P09BValidationError("interrupted result requires exit_code=None")
+        else:
+            raise P09BValidationError(
+                "completed/timed_out/interrupted must form exactly one terminal state "
+                "(completed | timed_out | interrupted)"
+            )
         validate_rfc3339_utc(self.started_at, field="started_at")
         validate_rfc3339_utc(self.completed_at, field="completed_at")
         if parse_rfc3339_utc(self.completed_at) < parse_rfc3339_utc(self.started_at):
@@ -214,7 +266,8 @@ class CommandExecutionResult:
         require_int(self.duration_ms, field="duration_ms")
         if self.duration_ms < 0:
             raise P09BValidationError("duration_ms must be non-negative")
-        if not is_exact_type(self.stdout, bytes) or not is_exact_type(self.stderr, bytes):
+        validate_duration_ms(self.duration_ms, self.started_at, self.completed_at)
+        if not is_exact_bytes(self.stdout) or not is_exact_bytes(self.stderr):
             raise P09BValidationError("stdout and stderr must be bytes")
 
 
@@ -240,7 +293,9 @@ class CommandExecutionError:
 class EvidenceVerificationRequest:
     """Explicit, self-contained inputs for a future PURE verifier.
 
-    No repository path lookup, no Clock call, no Git call, no mutable store.
+    No repository path lookup, no Clock call, no Git call, no mutable store. The graph is
+    validated as ONE coherent context (B1-CODEX-007): unique requirements and evidence, a
+    single task, and every collected item plus the current snapshot bound to the candidate.
     """
     task_id: str
     requirements: tuple[CommandRequirement, ...]
@@ -252,33 +307,73 @@ class EvidenceVerificationRequest:
 
     def __post_init__(self) -> None:
         validate_task_id(self.task_id, field="task_id")
-        if not is_exact_type(self.requirements, tuple):
+        if not is_exact_tuple(self.requirements):
             raise P09BValidationError("requirements must be a tuple")
+        requirement_ids: set[str] = set()
         for r in self.requirements:
             if not isinstance(r, CommandRequirement):
                 raise P09BValidationError("requirements must contain CommandRequirement")
+            if r.requirement_id in requirement_ids:
+                raise P09BValidationError(
+                    f"duplicate requirement_id {r.requirement_id!r} in requirements"
+                )
+            requirement_ids.add(r.requirement_id)
         if not isinstance(self.candidate_binding, CandidateBinding):
             raise P09BValidationError("candidate_binding must be a CandidateBinding")
-        if not is_exact_type(self.collected_evidence, tuple):
+        if not is_exact_tuple(self.collected_evidence):
             raise P09BValidationError("collected_evidence must be a tuple")
+        evidence_ids: set[str] = set()
         for c in self.collected_evidence:
             if not isinstance(c, CollectedCommandEvidence):
                 raise P09BValidationError(
                     "collected_evidence must contain CollectedCommandEvidence"
                 )
+            prov = c.provenance
+            if prov.evidence_id in evidence_ids:
+                raise P09BValidationError(
+                    f"duplicate evidence_id {prov.evidence_id!r} in collected_evidence"
+                )
+            evidence_ids.add(prov.evidence_id)
+            if prov.task_id != self.task_id:
+                raise P09BValidationError(
+                    f"collected evidence task_id {prov.task_id!r} != request task_id "
+                    f"{self.task_id!r}"
+                )
+            if prov.requirement_id not in requirement_ids:
+                raise P09BValidationError(
+                    f"collected evidence requirement_id {prov.requirement_id!r} is not among "
+                    "the request requirements"
+                )
+            mismatches = collected_candidate_mismatches(self.candidate_binding, c)
+            if mismatches:
+                raise P09BValidationError(
+                    f"collected evidence {prov.evidence_id!r} does not bind to candidate "
+                    f"({', '.join(mismatches)})"
+                )
         if not isinstance(self.current_snapshot, RepositorySnapshot):
             raise P09BValidationError("current_snapshot must be a RepositorySnapshot")
+        snapshot_mismatches = candidate_snapshot_mismatches(
+            self.candidate_binding, self.current_snapshot
+        )
+        if snapshot_mismatches:
+            raise P09BValidationError(
+                "current_snapshot does not bind to candidate_binding "
+                f"({', '.join(snapshot_mismatches)})"
+            )
         require_str(self.verifier_version, field="verifier_version")
+        reject_control_characters(self.verifier_version, field="verifier_version")
         validate_rfc3339_utc(self.verified_at, field="verified_at")
 
 
 @dataclass(frozen=True)
 class EvidenceRunRecord:
-    """Immutable link between a task/run, its collected evidence, final snapshot, and an
-    optional verification bundle. Persistence behavior is defined by adapters, not here."""
+    """Immutable link for ONE task/run/candidate context: its collected evidence, final
+    snapshot, and optional verification bundle all bind to the same task, run, and candidate
+    (B1-CODEX-008). Persistence behavior is defined by adapters, not here."""
     schema_version: str
     task_id: str
     run_id: str
+    candidate_binding: CandidateBinding
     collected_evidence: tuple[CollectedCommandEvidence, ...]
     final_snapshot: RepositorySnapshot
     verification_bundle: EvidenceVerificationBundle | None
@@ -292,21 +387,62 @@ class EvidenceRunRecord:
             )
         validate_task_id(self.task_id, field="task_id")
         validate_generated_id(self.run_id, field="run_id")
-        if not is_exact_type(self.collected_evidence, tuple):
+        if not isinstance(self.candidate_binding, CandidateBinding):
+            raise P09BValidationError("candidate_binding must be a CandidateBinding")
+        if not is_exact_tuple(self.collected_evidence):
             raise P09BValidationError("collected_evidence must be a tuple")
+        evidence_ids: set[str] = set()
         for c in self.collected_evidence:
             if not isinstance(c, CollectedCommandEvidence):
                 raise P09BValidationError(
                     "collected_evidence must contain CollectedCommandEvidence"
                 )
+            prov = c.provenance
+            if prov.evidence_id in evidence_ids:
+                raise P09BValidationError(
+                    f"duplicate evidence_id {prov.evidence_id!r} in collected_evidence"
+                )
+            evidence_ids.add(prov.evidence_id)
+            if prov.task_id != self.task_id:
+                raise P09BValidationError(
+                    f"collected evidence task_id {prov.task_id!r} != record task_id "
+                    f"{self.task_id!r}"
+                )
+            if prov.run_id != self.run_id:
+                raise P09BValidationError(
+                    f"collected evidence run_id {prov.run_id!r} != record run_id "
+                    f"{self.run_id!r}"
+                )
+            mismatches = collected_candidate_mismatches(self.candidate_binding, c)
+            if mismatches:
+                raise P09BValidationError(
+                    f"collected evidence {prov.evidence_id!r} does not bind to candidate "
+                    f"({', '.join(mismatches)})"
+                )
         if not isinstance(self.final_snapshot, RepositorySnapshot):
             raise P09BValidationError("final_snapshot must be a RepositorySnapshot")
-        if self.verification_bundle is not None and not isinstance(
-            self.verification_bundle, EvidenceVerificationBundle
-        ):
+        snapshot_mismatches = candidate_snapshot_mismatches(
+            self.candidate_binding, self.final_snapshot
+        )
+        if snapshot_mismatches:
             raise P09BValidationError(
-                "verification_bundle must be an EvidenceVerificationBundle or None"
+                "final_snapshot does not bind to candidate_binding "
+                f"({', '.join(snapshot_mismatches)})"
             )
+        if self.verification_bundle is not None:
+            if not isinstance(self.verification_bundle, EvidenceVerificationBundle):
+                raise P09BValidationError(
+                    "verification_bundle must be an EvidenceVerificationBundle or None"
+                )
+            if self.verification_bundle.task_id != self.task_id:
+                raise P09BValidationError(
+                    f"verification_bundle task_id {self.verification_bundle.task_id!r} != "
+                    f"record task_id {self.task_id!r}"
+                )
+            if self.verification_bundle.candidate_binding != self.candidate_binding:
+                raise P09BValidationError(
+                    "verification_bundle candidate_binding != record candidate_binding"
+                )
 
 
 # ---------------------------------------------------------------------------
@@ -354,8 +490,11 @@ class RunIdGenerator(Protocol):
 
 @runtime_checkable
 class EvidenceRepository(Protocol):
-    def save_run(self, record: EvidenceRunRecord) -> None:
+    def save_run(self, record: EvidenceRunRecord) -> "Outcome[Unit, StorageError]":
         ...
 
-    def load_run(self, task_id: str, run_id: str) -> EvidenceRunRecord | None:
+    def load_run(
+        self, task_id: str, run_id: str,
+    ) -> "Outcome[EvidenceRunRecord, StorageError]":
+        # A missing record is a typed NOT_FOUND failure, never None and never an exception.
         ...

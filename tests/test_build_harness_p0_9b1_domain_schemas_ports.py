@@ -143,16 +143,16 @@ def _rejected_result(evidence_id="ev-9"):
     )
 
 
-def _bundle(verified=None, rejected=(), candidate=None, snapshot=None):
+def _bundle(verified=None, rejected=(), candidate=None, snapshot=None, task_id="BH-P0-B"):
     cand = candidate or _candidate()
     verified = verified if verified is not None else (_verified(candidate=cand),)
     snap = snapshot or _snapshot(commit=cand.candidate_commit_sha, tree=cand.candidate_tree_sha,
                                  base=cand.base_commit_sha)
     return EvidenceVerificationBundle(
-        schema_version="p0-9b.verification-bundle.v1", candidate_binding=cand,
+        schema_version="p0-9b.verification-bundle.v1", task_id=task_id, candidate_binding=cand,
         verified=tuple(verified), rejected=tuple(rejected), verified_at_snapshot=snap,
         bundle_digest=EvidenceVerificationBundle.compute_bundle_digest(
-            cand, tuple(verified), tuple(rejected), snap),
+            task_id, cand, tuple(verified), tuple(rejected), snap),
     )
 
 
@@ -592,8 +592,8 @@ def test_verified_evidence_incorrect_digest_rejected():
 def test_verified_tuple_rejects_raw_object():
     with pytest.raises(P09BValidationError):
         EvidenceVerificationBundle(
-            schema_version="p0-9b.verification-bundle.v1", candidate_binding=_candidate(),
-            verified=("not-verified-evidence",), rejected=(),
+            schema_version="p0-9b.verification-bundle.v1", task_id="BH-P0-B",
+            candidate_binding=_candidate(), verified=("not-verified-evidence",), rejected=(),
             verified_at_snapshot=_snapshot(), bundle_digest=D)
 
 
@@ -751,8 +751,8 @@ def test_command_execution_result_and_run_record():
     assert result.completed and result.stdout == b"ok"
     record = EvidenceRunRecord(
         schema_version="p0-9b.evidence-run-record.v1", task_id="BH-P0-B", run_id="run-1",
-        collected_evidence=(_collected(),), final_snapshot=_snapshot(),
-        verification_bundle=_bundle())
+        candidate_binding=_candidate(), collected_evidence=(_collected(),),
+        final_snapshot=_snapshot(), verification_bundle=_bundle())
     assert record.run_id == "run-1"
 
 

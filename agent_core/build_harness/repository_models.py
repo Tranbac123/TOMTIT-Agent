@@ -13,10 +13,15 @@ from typing import Any
 from agent_core.build_harness.canonical import (
     P09BValidationError,
     canonical_digest,
+    is_exact_dict,
+    is_exact_list,
+    is_exact_str,
+    is_exact_tuple,
     is_exact_type,
     changed_files_digest,
     require_bool,
     require_int,
+    require_str,
     require_str_tuple,
     validate_generated_id,
     validate_git_object_sha,
@@ -37,6 +42,7 @@ __all__ = [
     "CandidateBinding",
     "RepositorySnapshot",
     "CommandRequirement",
+    "candidate_snapshot_mismatches",
 ]
 
 
@@ -101,16 +107,16 @@ class CommandExecutionErrorCode(str, Enum):
 
 
 def _require_schema(value: object, expected: str, *, field: str = "schema_version") -> str:
-    if not isinstance(value, str) or value != expected:
+    if not is_exact_str(value) or value != expected:
         raise P09BValidationError(f"{field} must be exactly {expected!r}, got {value!r}")
     return value
 
 
 def _enum(value: object, enum_cls: type[Enum], *, field: str) -> Any:
-    if isinstance(value, enum_cls):
+    if type(value) is enum_cls:  # noqa: E721 — exact enum member, no subclass coercion
         return value
     # Exact string membership only — no case-variant normalization.
-    if is_exact_type(value, str):
+    if is_exact_str(value):
         for member in enum_cls:
             if member.value == value:
                 return member
@@ -120,7 +126,9 @@ def _enum(value: object, enum_cls: type[Enum], *, field: str) -> Any:
 
 
 def _require_mapping(data: object, *, model: str) -> dict:
-    if not isinstance(data, dict):
+    # Exact mapping at the deserialization boundary: a dict subclass whose ``items``/``keys``
+    # can lie is rejected rather than trusted (B1-CODEX-002).
+    if not is_exact_dict(data):
         raise P09BValidationError(f"{model}: root must be a mapping")
     return data
 
@@ -136,7 +144,9 @@ def _require_exact_keys(data: dict, required: frozenset[str], *, model: str) -> 
 
 
 def _tuple_from_json_list(value: object, *, field: str) -> tuple[str, ...]:
-    if not isinstance(value, list):
+    # Accept an EXACT JSON list and copy it into a NEW exact tuple: no caller-owned or
+    # subclassed container is retained (B1-CODEX-002).
+    if not is_exact_list(value):
         raise P09BValidationError(f"{field} must be a JSON list")
     return tuple(value)
 
@@ -289,9 +299,7 @@ class RepositorySnapshot:
                 "is_release_clean must equal (no staged/unstaged/untracked/submodule changes)"
             )
         validate_rfc3339_utc(self.captured_at, field="captured_at")
-        require_str_tuple((self.inspector_version,), field="inspector_version")
-        if not self.inspector_version:
-            raise P09BValidationError("inspector_version must be a non-empty string")
+        require_str(self.inspector_version, field="inspector_version")
 
     def to_json_dict(self) -> dict:
         return {
@@ -347,6 +355,37 @@ class RepositorySnapshot:
 
 
 # ---------------------------------------------------------------------------
+# Candidate ↔ snapshot binding (single source of the coherent-context rule)
+# ---------------------------------------------------------------------------
+
+def candidate_snapshot_mismatches(
+    candidate: CandidateBinding, snapshot: RepositorySnapshot,
+) -> tuple[str, ...]:
+    """Return the field names on which ``snapshot`` fails to bind to ``candidate``.
+
+    ONE pure internal comparison so every model that pairs a candidate with a snapshot
+    (accepted result, verification bundle, verification request, run record) enforces the
+    SAME coherent-context rule: identical repository, object format, base commit, the
+    candidate commit/tree equal to the snapshot HEAD commit/tree, and identical changed-files
+    digest. Empty result ⇒ the snapshot coherently describes the candidate.
+    """
+    mismatches: list[str] = []
+    if snapshot.repository_id != candidate.repository_id:
+        mismatches.append("repository_id")
+    if snapshot.object_format != candidate.object_format:
+        mismatches.append("object_format")
+    if snapshot.base_commit_sha != candidate.base_commit_sha:
+        mismatches.append("base_commit_sha")
+    if snapshot.head_commit_sha != candidate.candidate_commit_sha:
+        mismatches.append("candidate_commit_sha")
+    if snapshot.head_tree_sha != candidate.candidate_tree_sha:
+        mismatches.append("candidate_tree_sha")
+    if snapshot.changed_files_digest != candidate.changed_files_digest:
+        mismatches.append("changed_files_digest")
+    return tuple(mismatches)
+
+
+# ---------------------------------------------------------------------------
 # CommandRequirement
 # ---------------------------------------------------------------------------
 
@@ -363,12 +402,12 @@ def command_requirement_payload(
 
 
 def _validate_argv(argv: object, *, field: str = "argv") -> tuple[str, ...]:
-    if not isinstance(argv, tuple):
+    if not is_exact_tuple(argv):
         raise P09BValidationError(f"{field} must be a tuple")
     if not argv:
         raise P09BValidationError(f"{field} must be a non-empty tuple")
     for index, arg in enumerate(argv):
-        if not isinstance(arg, str) or not arg:
+        if not is_exact_str(arg) or not arg:
             raise P09BValidationError(f"{field}[{index}] must be a non-empty string")
         if any(ord(ch) < 32 or ch == "\x7f" or ch == "\x00" for ch in arg):
             raise P09BValidationError(f"{field}[{index}] contains NUL/control characters")

@@ -12,12 +12,14 @@ from dataclasses import dataclass
 from agent_core.build_harness.canonical import (
     P09BValidationError,
     canonical_digest,
+    is_exact_tuple,
     is_exact_type,
     parse_rfc3339_utc,
     require_bool,
     require_int,
+    require_sorted_unique_str_tuple,
     require_str,
-    require_str_tuple,
+    validate_duration_ms,
     validate_generated_id,
     validate_git_object_sha,
     validate_rfc3339_utc,
@@ -38,6 +40,7 @@ from agent_core.build_harness.repository_models import (
     _require_schema,
     _tuple_from_json_list,
     _validate_argv,
+    candidate_snapshot_mismatches,
 )
 
 __all__ = [
@@ -46,6 +49,7 @@ __all__ = [
     "EvidenceVerificationResult",
     "VerifiedCommandEvidence",
     "EvidenceVerificationBundle",
+    "collected_candidate_mismatches",
 ]
 
 
@@ -125,12 +129,7 @@ class EvidenceProvenance:
         require_int(self.duration_ms, field="duration_ms")
         if self.duration_ms < 0:
             raise P09BValidationError("duration_ms must be non-negative")
-        expected_ms = (end - start).total_seconds() * 1000.0
-        if abs(self.duration_ms - expected_ms) > 1.0:
-            raise P09BValidationError(
-                f"duration_ms {self.duration_ms} disagrees with timestamps "
-                f"({expected_ms:.3f}ms) by more than 1ms"
-            )
+        validate_duration_ms(self.duration_ms, self.started_at, self.completed_at)
 
         validate_sha256_digest(self.repository_id, field="repository_id")
         object.__setattr__(
@@ -263,6 +262,20 @@ class CollectedCommandEvidence:
             raise P09BValidationError("post_snapshot.head_commit_sha != provenance.commit_sha")
         if self.post_snapshot.head_tree_sha != prov.tree_sha:
             raise P09BValidationError("post_snapshot.head_tree_sha != provenance.tree_sha")
+        # The declared dirty_state is DERIVED from the bound snapshots, never asserted
+        # independently: CLEAN iff both the pre and post snapshots are release-clean, else
+        # DIRTY. This rejects contradictory immutable facts before the pure verifier sees
+        # them (B1-CODEX-005).
+        expected_dirty = (
+            DirtyState.CLEAN
+            if (self.pre_snapshot.is_release_clean and self.post_snapshot.is_release_clean)
+            else DirtyState.DIRTY
+        )
+        if prov.dirty_state is not expected_dirty:
+            raise P09BValidationError(
+                f"provenance.dirty_state {prov.dirty_state.value!r} contradicts its snapshots: "
+                f"expected {expected_dirty.value!r} from pre/post is_release_clean"
+            )
 
     def to_json_dict(self) -> dict:
         return {
@@ -282,6 +295,32 @@ class CollectedCommandEvidence:
             pre_snapshot=RepositorySnapshot.from_json_dict(d["pre_snapshot"]),
             post_snapshot=RepositorySnapshot.from_json_dict(d["post_snapshot"]),
         )
+
+
+def collected_candidate_mismatches(
+    candidate: CandidateBinding, collected: CollectedCommandEvidence,
+) -> tuple[str, ...]:
+    """Return the field names on which a collected item's provenance fails to bind to a
+    candidate context: repository, object format, base commit, and the collected commit/tree
+    equal to the candidate commit/tree.
+
+    (The per-command ``changed_files_digest`` is intentionally NOT compared — it is a
+    per-evidence artifact, not the candidate's full changed set.) One helper so the
+    verification request and the run record enforce the SAME rule (B1-CODEX-007/008).
+    """
+    prov = collected.provenance
+    mismatches: list[str] = []
+    if prov.repository_id != candidate.repository_id:
+        mismatches.append("repository_id")
+    if prov.object_format != candidate.object_format:
+        mismatches.append("object_format")
+    if prov.base_commit_sha != candidate.base_commit_sha:
+        mismatches.append("base_commit_sha")
+    if prov.commit_sha != candidate.candidate_commit_sha:
+        mismatches.append("candidate_commit_sha")
+    if prov.tree_sha != candidate.candidate_tree_sha:
+        mismatches.append("candidate_tree_sha")
+    return tuple(mismatches)
 
 
 # ---------------------------------------------------------------------------
@@ -321,10 +360,7 @@ class EvidenceVerificationResult:
             raise P09BValidationError(
                 "accepted must be True iff status == VERIFIED"
             )
-        require_str_tuple(self.reason_codes, field="reason_codes")
-        for index, code in enumerate(self.reason_codes):
-            if not code:
-                raise P09BValidationError(f"reason_codes[{index}] must be non-empty")
+        require_sorted_unique_str_tuple(self.reason_codes, field="reason_codes")
         validate_generated_id(self.evidence_id, field="evidence_id")
         validate_generated_id(self.run_id, field="run_id")
         validate_task_id(self.task_id, field="task_id")
@@ -345,6 +381,17 @@ class EvidenceVerificationResult:
                     "accepted result requires candidate_binding, repository_snapshot, "
                     "and matched_requirement_id"
                 )
+            # An accepted result structurally binds its snapshot to its candidate: same
+            # repository/format/base/commit/tree and identical changed-files digest, so a
+            # bundle can never authenticate a false coherent-context claim (B1-CODEX-006).
+            mismatches = candidate_snapshot_mismatches(
+                self.candidate_binding, self.repository_snapshot
+            )
+            if mismatches:
+                raise P09BValidationError(
+                    "accepted result: repository_snapshot does not bind to candidate_binding "
+                    f"({', '.join(mismatches)})"
+                )
         else:
             if self.matched_requirement_id is not None:
                 raise P09BValidationError(
@@ -353,8 +400,8 @@ class EvidenceVerificationResult:
         validate_sha256_digest(self.claim_digest, field="claim_digest")
         validate_rfc3339_utc(self.verified_at, field="verified_at")
         require_str(self.verifier_version, field="verifier_version")
-        require_str_tuple(self.warnings, field="warnings")
-        require_str_tuple(self.errors, field="errors")
+        require_sorted_unique_str_tuple(self.warnings, field="warnings")
+        require_sorted_unique_str_tuple(self.errors, field="errors")
 
     def to_json_dict(self) -> dict:
         return {
@@ -491,9 +538,10 @@ class VerifiedCommandEvidence:
 # EvidenceVerificationBundle
 # ---------------------------------------------------------------------------
 
-def _bundle_payload(candidate, verified, rejected, snapshot) -> dict:
+def _bundle_payload(task_id, candidate, verified, rejected, snapshot) -> dict:
     return {
         "kind": "p0-9b.verification-bundle-payload.v1",
+        "task_id": task_id,
         "candidate_binding": candidate.to_json_dict(),
         "verified": [v.to_json_dict() for v in verified],
         "rejected": [r.to_json_dict() for r in rejected],
@@ -504,6 +552,7 @@ def _bundle_payload(candidate, verified, rejected, snapshot) -> dict:
 @dataclass(frozen=True)
 class EvidenceVerificationBundle:
     schema_version: str
+    task_id: str
     candidate_binding: CandidateBinding
     verified: tuple[VerifiedCommandEvidence, ...]
     rejected: tuple[EvidenceVerificationResult, ...]
@@ -512,15 +561,16 @@ class EvidenceVerificationBundle:
 
     SCHEMA_VERSION = "p0-9b.verification-bundle.v1"
     _KEYS = frozenset({
-        "schema_version", "candidate_binding", "verified", "rejected",
+        "schema_version", "task_id", "candidate_binding", "verified", "rejected",
         "verified_at_snapshot", "bundle_digest",
     })
 
     def __post_init__(self) -> None:
         _require_schema(self.schema_version, self.SCHEMA_VERSION)
+        validate_task_id(self.task_id, field="task_id")
         if not isinstance(self.candidate_binding, CandidateBinding):
             raise P09BValidationError("candidate_binding must be a CandidateBinding")
-        if not is_exact_type(self.verified, tuple) or not is_exact_type(self.rejected, tuple):
+        if not is_exact_tuple(self.verified) or not is_exact_tuple(self.rejected):
             raise P09BValidationError("verified and rejected must be tuples")
         for v in self.verified:
             if not isinstance(v, VerifiedCommandEvidence):
@@ -541,38 +591,43 @@ class EvidenceVerificationBundle:
         if len(set(ids)) != len(ids):
             raise P09BValidationError("evidence IDs must be unique across verified and rejected")
 
+        # One coherent context: every verified/rejected entry is bound to THIS bundle's task
+        # and (for verified) THIS candidate; a bundle can never mix tasks or candidates
+        # (B1-CODEX-006 / B1-CODEX-008). An empty bundle is permitted but still carries an
+        # explicit task_id and candidate.
         candidate = self.candidate_binding
         for v in self.verified:
+            if v.task_id != self.task_id:
+                raise P09BValidationError(
+                    f"verified evidence task_id {v.task_id!r} != bundle task_id {self.task_id!r}"
+                )
             if v.candidate_binding != candidate:
                 raise P09BValidationError(
                     "every verified record must match the bundle candidate binding"
                 )
-            if v.task_id != _first_task_id(self.verified):
+        for r in self.rejected:
+            if r.task_id != self.task_id:
                 raise P09BValidationError(
-                    "verified records must share the same task candidate context"
+                    f"rejected result task_id {r.task_id!r} != bundle task_id {self.task_id!r}"
                 )
 
-        snap = self.verified_at_snapshot
-        if snap.repository_id != candidate.repository_id:
-            raise P09BValidationError("verified_at_snapshot.repository_id != candidate.repository_id")
-        if snap.object_format != candidate.object_format:
-            raise P09BValidationError("verified_at_snapshot.object_format != candidate.object_format")
-        if snap.head_commit_sha != candidate.candidate_commit_sha:
-            raise P09BValidationError("verified_at_snapshot.head_commit_sha != candidate_commit_sha")
-        if snap.head_tree_sha != candidate.candidate_tree_sha:
-            raise P09BValidationError("verified_at_snapshot.head_tree_sha != candidate_tree_sha")
-        if snap.base_commit_sha != candidate.base_commit_sha:
-            raise P09BValidationError("verified_at_snapshot.base_commit_sha != candidate base")
+        mismatches = candidate_snapshot_mismatches(candidate, self.verified_at_snapshot)
+        if mismatches:
+            raise P09BValidationError(
+                "verified_at_snapshot does not bind to candidate_binding "
+                f"({', '.join(mismatches)})"
+            )
 
         validate_sha256_digest(self.bundle_digest, field="bundle_digest")
         expected = canonical_digest(_bundle_payload(
-            candidate, self.verified, self.rejected, snap))
+            self.task_id, candidate, self.verified, self.rejected, self.verified_at_snapshot))
         if self.bundle_digest != expected:
             raise P09BValidationError("bundle_digest does not match the canonical payload")
 
     def to_json_dict(self) -> dict:
         return {
             "schema_version": self.schema_version,
+            "task_id": self.task_id,
             "candidate_binding": self.candidate_binding.to_json_dict(),
             "verified": [v.to_json_dict() for v in self.verified],
             "rejected": [r.to_json_dict() for r in self.rejected],
@@ -588,6 +643,7 @@ class EvidenceVerificationBundle:
             raise P09BValidationError("verified and rejected must be JSON lists")
         return cls(
             schema_version=d["schema_version"],
+            task_id=d["task_id"],
             candidate_binding=CandidateBinding.from_json_dict(d["candidate_binding"]),
             verified=tuple(VerifiedCommandEvidence.from_json_dict(v) for v in d["verified"]),
             rejected=tuple(EvidenceVerificationResult.from_json_dict(r) for r in d["rejected"]),
@@ -597,14 +653,11 @@ class EvidenceVerificationBundle:
 
     @staticmethod
     def compute_bundle_digest(
+        task_id: str,
         candidate_binding: CandidateBinding,
         verified: tuple[VerifiedCommandEvidence, ...],
         rejected: tuple[EvidenceVerificationResult, ...],
         verified_at_snapshot: RepositorySnapshot,
     ) -> str:
         return canonical_digest(_bundle_payload(
-            candidate_binding, verified, rejected, verified_at_snapshot))
-
-
-def _first_task_id(verified: tuple[VerifiedCommandEvidence, ...]) -> str | None:
-    return verified[0].task_id if verified else None
+            task_id, candidate_binding, verified, rejected, verified_at_snapshot))
