@@ -1,0 +1,11 @@
+{
+  "evidence": [
+    {
+      "evidence_id": "pytest-focused-1",
+      "command": "pytest tests/test_build_harness_p0_9a_core.py",
+      "exit_code": 0,
+      "completed": true,
+      "commit_sha": "0737577a2d2351947f412ed29d73722f18491c89"
+    }
+  ]
+}
