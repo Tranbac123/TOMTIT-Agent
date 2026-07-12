@@ -404,15 +404,18 @@ def _validate_rejected_context(
                 f"candidate/snapshot mismatch ({expected.value if expected else 'none'!r})"
             )
     elif status in _NON_CONTEXT_REJECTION_STATUSES:
-        # Shape C (both present) is allowed only when the binding fields are fully coherent;
-        # a non-context status may never smuggle foreign candidate/repository facts.
+        # Shape C (both present) is allowed ONLY when no primary context status applies. We ask
+        # the single precedence helper rather than candidate_snapshot_mismatches(), because the
+        # latter compares binding fields only and does not encode release cleanliness — it
+        # therefore misses DIRTY_WORKTREE, letting a non-context status silently outrank the
+        # mandatory primary context status (R2-SOL-001).
         if has_candidate and has_snapshot:
             assert candidate is not None and snapshot is not None  # for type-narrowing
-            mismatches = candidate_snapshot_mismatches(candidate, snapshot)
-            if mismatches:
+            primary = expected_context_mismatch_status(candidate, snapshot)
+            if primary is not None:
                 raise P09BValidationError(
-                    f"rejected result [{status.value}]: non-context status may not carry a "
-                    f"mismatched candidate/snapshot ({', '.join(mismatches)})"
+                    f"rejected result [{status.value}]: a non-context status may not carry a "
+                    f"candidate/snapshot whose primary context status is {primary.value!r}"
                 )
     else:  # pragma: no cover - VERIFIED is the only remaining status and is never rejected
         raise P09BValidationError(
