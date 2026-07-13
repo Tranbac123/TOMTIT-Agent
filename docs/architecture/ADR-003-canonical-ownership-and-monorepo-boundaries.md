@@ -1,15 +1,18 @@
 # ADR-003: Canonical Model Ownership and Incremental Monorepo Boundaries
 
 Title: Canonical Model Ownership and Incremental Monorepo Boundaries
-Status: DRAFT
+Status: ACCEPTED_BY_OWNER
 Owner: TranBac
-Technical Review: PENDING
-Owner Acceptance: PENDING
+Technical Review: PASS
+Owner Acceptance: ACCEPTED
+Accepted Candidate: 7bd3d7e86dc23af544325d228723c067f9f34200
+Owner Decision: ACCEPT_ALL_THREE_ADRS_WITH_DEFERRED_OWNER_DECISIONS
+Acceptance Date: 2026-07-13
 Date: 2026-07-13
 Supersedes: None
 
-> This ADR is a DRAFT authored by the implementer (Claude Code). It is **not** accepted.
-> Only the human owner (TranBac) may move it to `ACCEPTED_BY_OWNER`.
+> This ADR passed technical review and was accepted by the human owner, TranBac.
+> No model is an acceptance authority.
 
 ---
 
@@ -300,8 +303,19 @@ are met.
 - **Global decision digest in ContextPack.** Rejected: any unrelated approved decision would
   invalidate every running task (§10).
 
-## 18. Owner Decision
+## 18. Deferred Owner Decisions
 
-**Status: DRAFT. Technical Review: PENDING. Owner Acceptance: PENDING.**
+This ADR is accepted. The unresolved decisions are maintained in
+`docs/architecture/GATE_1_DEFERRED_OWNER_DECISIONS.md`.
 
-Awaiting Sol High technical review and explicit acceptance by TranBac.
+Acceptance does not authorize coding agents to choose those deferred semantics. Only an
+implementation that directly depends on a deferred decision is blocked by it.
+
+## 19. Owner Decision
+
+**Status: ACCEPTED_BY_OWNER. Technical Review: PASS. Owner Acceptance: ACCEPTED.**
+
+TranBac accepted this ADR through owner decision
+`ACCEPT_ALL_THREE_ADRS_WITH_DEFERRED_OWNER_DECISIONS` for accepted candidate
+`7bd3d7e86dc23af544325d228723c067f9f34200`. The seven registered owner decisions remain
+deferred and may be resolved only through a new owner-reviewed decision or ADR amendment.

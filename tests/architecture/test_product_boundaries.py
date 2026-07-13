@@ -726,3 +726,87 @@ def test_adr_003_decision_inventory_and_stated_counts_match_repository() -> None
         "ADR-003 stated inventory counts disagree with its concept table: "
         f"stated={stated_counts}, table={table_counts}"
     )
+
+
+# --- Gate 1 owner-acceptance lifecycle tests -------------------------------
+
+GATE_1_ACCEPTED_CANDIDATE = "7bd3d7e86dc23af544325d228723c067f9f34200"
+GATE_1_ADR_PATHS = (
+    REPO_ROOT / "docs/strategy/ADR-001-core-platform-and-changegate-wedge.md",
+    REPO_ROOT / "docs/strategy/ADR-002-product-dependencies-and-composition.md",
+    REPO_ROOT / "docs/architecture/ADR-003-canonical-ownership-and-monorepo-boundaries.md",
+)
+DEFERRED_DECISION_REGISTER = (
+    REPO_ROOT / "docs/architecture/GATE_1_DEFERRED_OWNER_DECISIONS.md"
+)
+DEFERRED_DECISION_IDS = tuple(f"OD-G1-{number:03d}" for number in range(1, 8))
+
+
+@pytest.mark.parametrize("adr_path", GATE_1_ADR_PATHS)
+def test_gate_1_adr_owner_acceptance_metadata(adr_path: pathlib.Path) -> None:
+    text = adr_path.read_text(encoding="utf-8")
+    required = (
+        "Status: ACCEPTED_BY_OWNER",
+        "Technical Review: PASS",
+        "Owner Acceptance: ACCEPTED",
+        "Owner: TranBac",
+        f"Accepted Candidate: {GATE_1_ACCEPTED_CANDIDATE}",
+        "Owner Decision: ACCEPT_ALL_THREE_ADRS_WITH_DEFERRED_OWNER_DECISIONS",
+        "Acceptance Date: 2026-07-13",
+        "docs/architecture/GATE_1_DEFERRED_OWNER_DECISIONS.md",
+    )
+    missing = [marker for marker in required if marker not in text]
+    assert not missing, f"{adr_path}: missing owner-acceptance metadata: {missing}"
+
+    forbidden = (
+        "APPROVED_BY_MODEL",
+        "ACCEPTED_BY_CLAUDE",
+        "ACCEPTED_BY_CODEX",
+    )
+    found = [marker for marker in forbidden if marker in text]
+    assert not found, f"{adr_path}: model acceptance claim is forbidden: {found}"
+
+
+def test_gate_1_deferred_owner_decision_register_is_complete() -> None:
+    assert DEFERRED_DECISION_REGISTER.is_file(), (
+        "Gate 1 deferred owner-decision register is missing"
+    )
+    text = DEFERRED_DECISION_REGISTER.read_text(encoding="utf-8")
+    metadata = (
+        "Title: Gate 1 Deferred Owner Decisions",
+        "Status: ACTIVE",
+        "Owner: TranBac",
+        "- ADR-001",
+        "- ADR-002",
+        "- ADR-003",
+        f"Accepted Gate 1 Candidate: {GATE_1_ACCEPTED_CANDIDATE}",
+    )
+    missing = [marker for marker in metadata if marker not in text]
+    assert not missing, f"deferred-decision register metadata missing: {missing}"
+
+    for index, decision_id in enumerate(DEFERRED_DECISION_IDS):
+        assert text.count(decision_id) == 1, (
+            f"{decision_id} must occur exactly once in the deferred-decision register"
+        )
+        start = text.index(decision_id)
+        if index + 1 < len(DEFERRED_DECISION_IDS):
+            end = text.index(DEFERRED_DECISION_IDS[index + 1])
+        else:
+            end = len(text)
+        record = text[start:end]
+        assert "Status: DEFERRED" in record, f"{decision_id}: status missing"
+        assert "Implementation gate:" in record, (
+            f"{decision_id}: implementation gate missing"
+        )
+
+    required_policy = (
+        "Deferred does not mean forgotten.",
+        "Coding agents may not silently resolve deferred decisions.",
+        "Each affected implementation must cite the relevant decision ID.",
+        "must return a specific blocked verdict",
+        "only through a new owner-reviewed decision or ADR amendment",
+    )
+    missing_policy = [marker for marker in required_policy if marker not in text]
+    assert not missing_policy, (
+        f"deferred-decision register policy missing: {missing_policy}"
+    )

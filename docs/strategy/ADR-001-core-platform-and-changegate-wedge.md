@@ -1,15 +1,18 @@
 # ADR-001: TOMTIT Core Platform and ChangeGate Commercial Wedge
 
 Title: TOMTIT Core Platform and ChangeGate Commercial Wedge
-Status: DRAFT
+Status: ACCEPTED_BY_OWNER
 Owner: TranBac
-Technical Review: PENDING
-Owner Acceptance: PENDING
+Technical Review: PASS
+Owner Acceptance: ACCEPTED
+Accepted Candidate: 7bd3d7e86dc23af544325d228723c067f9f34200
+Owner Decision: ACCEPT_ALL_THREE_ADRS_WITH_DEFERRED_OWNER_DECISIONS
+Acceptance Date: 2026-07-13
 Date: 2026-07-13
 Supersedes: None
 
-> This ADR is a DRAFT authored by the implementer (Claude Code). It is **not** accepted.
-> Only the human owner (TranBac) may move it to `ACCEPTED_BY_OWNER`.
+> This ADR passed technical review and was accepted by the human owner, TranBac.
+> No model is an acceptance authority.
 > Lifecycle: `DRAFT → TECHNICALLY_REVIEWED → ACCEPTED_BY_OWNER → SUPERSEDED`.
 
 ---
@@ -289,9 +292,19 @@ This ADR is exited when:
 - canonical ownership conflicts are documented (they are: `TaskContract`, `TaskState`,
   `Capability`).
 
-## 15. Owner Decision
+## 15. Deferred Owner Decisions
 
-**Status: DRAFT. Technical Review: PENDING. Owner Acceptance: PENDING.**
+This ADR is accepted. The unresolved decisions are maintained in
+`docs/architecture/GATE_1_DEFERRED_OWNER_DECISIONS.md`.
 
-The implementer (Claude Code) does **not** have authority to accept this ADR. Awaiting Sol High
-technical review and explicit acceptance by TranBac.
+Acceptance does not authorize coding agents to choose those deferred semantics. Only an
+implementation that directly depends on a deferred decision is blocked by it.
+
+## 16. Owner Decision
+
+**Status: ACCEPTED_BY_OWNER. Technical Review: PASS. Owner Acceptance: ACCEPTED.**
+
+TranBac accepted this ADR through owner decision
+`ACCEPT_ALL_THREE_ADRS_WITH_DEFERRED_OWNER_DECISIONS` for accepted candidate
+`7bd3d7e86dc23af544325d228723c067f9f34200`. The seven registered owner decisions remain
+deferred and may be resolved only through a new owner-reviewed decision or ADR amendment.
