@@ -177,3 +177,13 @@ docs/specs/*
 !docs/reports/
 docs/reports/*
 !docs/reports/REPORT_EX1_TOOL_REGISTRY_INVENTORY_VERIFIED.md
+
+# Track the three normative Gate 1 ADRs only — all other docs/strategy and
+# docs/architecture files remain ignored (same allowlist policy as above).
+!docs/strategy/
+docs/strategy/*
+!docs/strategy/ADR-001-core-platform-and-changegate-wedge.md
+!docs/strategy/ADR-002-product-dependencies-and-composition.md
+!docs/architecture/
+docs/architecture/*
+!docs/architecture/ADR-003-canonical-ownership-and-monorepo-boundaries.md
