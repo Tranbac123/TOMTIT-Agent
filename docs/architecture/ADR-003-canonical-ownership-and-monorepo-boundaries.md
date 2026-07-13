@@ -69,7 +69,7 @@ No vendor SDK (`anthropic`, `openai`, `github`, `gitlab`, `boto3`) is imported a
 | TaskContract | DOMAIN_SPECIFIC_EXISTING | `agent_core/build_harness/contracts.py::TaskContract` | OWNERSHIP_UNRESOLVED | software-delivery-shaped today | keep in place now | canonical-model spec decides generalize / adapt / supersede |
 | TaskState | DOMAIN_SPECIFIC_EXISTING | `agent_core/build_harness/state.py::TaskState` (StrEnum) | OWNERSHIP_UNRESOLVED | software-delivery-shaped today | keep in place now | canonical-model spec decides |
 | AgentState | DOMAIN_SPECIFIC_EXISTING | `agent_core/state/agent_state.py::AgentState` | Runtime (existing) | runtime state of one task/session | keep in place now | **not** durable memory, **not** an AgentRunRecord |
-| Decision | DOMAIN_SPECIFIC_EXISTING | `agent_core/safety/policy.py::PolicyDecision`, `agent_core/safety/approval.py::ApprovalDecision`, `agent_core/safety/capability_gate.py::SafetyDecision`, `agent_core/confirmation/models.py::ConfirmedDecision` | OWNERSHIP_UNRESOLVED | safety/confirmation-scoped | keep in place now | none is a canonical governance DecisionRecord |
+| Decision | DOMAIN_SPECIFIC_EXISTING | `agent_core/build_harness/change_gate.py::ChangeGateDecision`, `agent_core/build_harness/process_guard.py::ProcessGuardDecision`, `agent_core/safety/policy.py::PolicyDecision`, `agent_core/safety/approval.py::ApprovalDecision`, `agent_core/safety/capability_gate.py::SafetyDecision`, `agent_core/confirmation/models.py::ConfirmedDecision` | OWNERSHIP_UNRESOLVED | ChangeGate-oriented (`ChangeGateDecision`, `ProcessGuardDecision`), safety (`PolicyDecision`, `ApprovalDecision`, `SafetyDecision`), and confirmation (`ConfirmedDecision`) | keep all six in their current domains now | none is the canonical cross-domain governance `DecisionRecord`; canonical generalization, adaptation, or supersession remains unresolved |
 | DecisionRecord | FUTURE_CONCEPT_NOT_IMPLEMENTED | NOT_FOUND | Kernel/Core | cross-domain | future design only | outside Gate 1 |
 | Approval | DOMAIN_SPECIFIC_EXISTING | `agent_core/safety/approval.py` (`ApprovalDecision`, `ApprovalGate`) | OWNERSHIP_UNRESOLVED | runtime tool-gating | keep in place now | not a durable ApprovalRecord |
 | ApprovalRecord | FUTURE_CONCEPT_NOT_IMPLEMENTED | NOT_FOUND | Kernel/Core | cross-domain | future design only | outside Gate 1 |
@@ -82,6 +82,16 @@ No vendor SDK (`anthropic`, `openai`, `github`, `gitlab`, `boto3`) is imported a
 | TaskExecutionRecord | FUTURE_CONCEPT_NOT_IMPLEMENTED | NOT_FOUND | Project Control | application aggregate | future design only | outside Gate 1 |
 | AgentRunRecord | FUTURE_CONCEPT_NOT_IMPLEMENTED | NOT_FOUND | Project Control | application aggregate | future design only | see §9 three run-state axes |
 | CandidateBinding | EXISTS | `agent_core/build_harness/repository_models.py::CandidateBinding` | **ChangeGate** | software-delivery-specific | keep in place now | remains ChangeGate-owned; never embedded in generic records |
+
+Inventory status counts derived from these 19 concept rows:
+
+- `EXISTS`: 1
+- `DOMAIN_SPECIFIC_EXISTING`: 7
+- `FUTURE_CONCEPT_NOT_IMPLEMENTED`: 11
+
+Canonical ownership is a separate dimension: 5 concept rows currently identify
+`OWNERSHIP_UNRESOLVED` (`Capability`, `TaskContract`, `TaskState`, `Decision`, and `Approval`).
+These counts do not settle any owner decision.
 
 ### Ownership rules
 
@@ -96,7 +106,7 @@ own an equivalent `DecisionRecord`, `ApprovalRecord` or `AuditEvent`: the canoni
 near-duplicate authority records for convenience.
 
 Where an existing type is **not general enough** to become canonical (`TaskContract`,
-`TaskState`, `Capability`, the four `*Decision` types):
+`TaskState`, `Capability`, the six semantic `*Decision` types):
 
 - it **remains in its current module**;
 - **no duplicate canonical replacement is introduced in Gate 1**;
@@ -261,7 +271,7 @@ The later Project Control track may start **only after**:
 - the owner explicitly accepts or revises them;
 - architecture boundary tests pass;
 - canonical ownership conflicts are documented (they are: `TaskContract`, `TaskState`,
-  `Capability`, the four `*Decision` types);
+  `Capability`, the six semantic `*Decision` types);
 - direct-import boundary status is explicit (active vs. reserved);
 - no production behavior was changed in Gate 1.
 
@@ -271,8 +281,9 @@ are met.
 ## 16. Consequences
 
 - A canonical-model specification is now a prerequisite for kernel extraction.
-- The repository is honest about what exists: 3 concepts exist, 1 is ChangeGate-owned, and 13
-  are future-only.
+- The repository is honest about the 19-row concept inventory: 1 row is `EXISTS`, 7 are
+  `DOMAIN_SPECIFIC_EXISTING`, and 11 are `FUTURE_CONCEPT_NOT_IMPLEMENTED`. Inventory state is
+  not conflated with the separate unresolved-ownership dimension.
 - No churn, no empty packages, no duplicate models, zero production risk in Gate 1.
 
 ## 17. Rejected Alternatives
