@@ -1,15 +1,19 @@
 {
   "suite_id": "changegate_merge_eligibility_golden_cases",
-  "schema_version": "changegate-merge-eligibility-golden.v1",
+  "schema_version": "changegate-merge-eligibility-golden.v2",
   "status": "DRAFT_FOR_OWNER_REVIEW",
-  "description": "Golden evaluation cases for the ChangeGate Slice 1 merge-eligibility policy. Each case supplies typed eligibility facts (spec §6) and pins the expected disposition, deterministic primary reason, complete reason set, override class and product-event assertions. Consumed today by tests/build_harness/test_changegate_slice_1_spec_artifacts.py (artifact validation only); consumed in Slice 1-A2 by the pure evaluator's golden runner. No production evaluator exists yet.",
+  "description": "Golden evaluation cases for the ChangeGate Slice 1 merge-eligibility policy (R1-hardened). Each case supplies the complete typed EligibilityFacts (spec §6) and pins the expected disposition, decision authority, deterministic primary reason, complete reason set, override class and product-event assertions. fact_state_mapping is the normative machine-readable total mapping from every fact state to its reason code; the test-only oracle in tests/build_harness/test_changegate_slice_1_spec_artifacts.py derives every case's reasons independently from its facts. No production evaluator exists yet.",
   "policy_spec": "docs/strategy/CHANGEGATE_VERTICAL_MVP_SLICE_1_POLICY_SPEC.md",
-  "policy_version_ref": "changegate-merge-eligibility-policy.v1-draft",
+  "policy_version_ref": "changegate-merge-eligibility-policy.v2-draft",
   "event_schema": "data/schemas/changegate_evaluation_event_v1.schema.json",
   "dispositions": [
     "ELIGIBLE_TO_MERGE_UNDER_POLICY",
     "REVIEW_REQUIRED",
     "BLOCK"
+  ],
+  "decision_authorities": [
+    "AUTHORITATIVE",
+    "ADVISORY_ONLY"
   ],
   "reason_codes": [
     {
@@ -88,6 +92,15 @@
       "code": "REQUIRED_EVIDENCE_INVALID",
       "precedence_rank": 90,
       "category": "EVIDENCE",
+      "kind": "FACTUAL",
+      "default_disposition": "BLOCK",
+      "override_class": "POLICY_EXCEPTION_REQUIRED",
+      "owner_decision_pending": null
+    },
+    {
+      "code": "TASK_CONTEXT_STALE",
+      "precedence_rank": 95,
+      "category": "FRESHNESS",
       "kind": "FACTUAL",
       "default_disposition": "BLOCK",
       "override_class": "POLICY_EXCEPTION_REQUIRED",
@@ -184,10 +197,150 @@
       "owner_decision_pending": "OD-S1A-003"
     }
   ],
+  "fact_state_mapping": {
+    "enum_facts": {
+      "task_context_current": {
+        "CURRENT": null,
+        "STALE": "TASK_CONTEXT_STALE",
+        "UNKNOWN": "REQUIRED_CONTEXT_INCOMPLETE"
+      },
+      "candidate_binding_current": {
+        "CURRENT": null,
+        "STALE": "CANDIDATE_STALE",
+        "UNKNOWN": "REQUIRED_CONTEXT_INCOMPLETE"
+      },
+      "repository_snapshot_current": {
+        "CURRENT": null,
+        "MISMATCH": "REPOSITORY_CONTEXT_MISMATCH",
+        "UNKNOWN": "REQUIRED_CONTEXT_INCOMPLETE"
+      },
+      "repository_release_clean": {
+        "CLEAN": null,
+        "DIRTY": "RELEASE_STATE_NOT_CLEAN",
+        "UNKNOWN": "REQUIRED_CONTEXT_INCOMPLETE"
+      },
+      "policy_context_current": {
+        "CURRENT": null,
+        "STALE": "POLICY_CONTEXT_STALE",
+        "UNKNOWN": "REQUIRED_CONTEXT_INCOMPLETE"
+      },
+      "evidence_context_status": {
+        "COHERENT": null,
+        "INCOHERENT": null,
+        "UNKNOWN": "REQUIRED_CONTEXT_INCOMPLETE"
+      },
+      "scope_status": {
+        "COMPLIANT": null,
+        "VIOLATION": "SCOPE_VIOLATION",
+        "SEMANTIC_UNCERTAIN": "SCOPE_UNCERTAIN",
+        "NOT_EVALUATED": "REQUIRED_CONTEXT_INCOMPLETE"
+      },
+      "approval_status": {
+        "VALID": null,
+        "MISSING": "APPROVAL_MISSING",
+        "STALE": "APPROVAL_STALE",
+        "UNKNOWN": "APPROVAL_MISSING"
+      },
+      "authority_status": {
+        "VALID": null,
+        "INVALID": "AUTHORITY_INVALID",
+        "UNKNOWN": "REQUIRED_CONTEXT_INCOMPLETE"
+      },
+      "evaluation_mode": {
+        "ENFORCE": null,
+        "SHADOW": null
+      }
+    },
+    "violation_tag_reasons": {
+      "TASK_MISMATCH": "EVIDENCE_TASK_MISMATCH",
+      "RUN_MISMATCH": "EVIDENCE_RUN_MISMATCH",
+      "CANDIDATE_MISMATCH": "EVIDENCE_CANDIDATE_MISMATCH",
+      "PROVENANCE_INVALID": "EVIDENCE_PROVENANCE_INVALID",
+      "DUPLICATE_IDENTITY": "EVIDENCE_DUPLICATE_IDENTITY"
+    },
+    "set_facts": {
+      "required_requirement_ids": null,
+      "satisfied_requirement_ids": null,
+      "missing_requirement_ids": "REQUIRED_EVIDENCE_MISSING",
+      "invalid_requirement_ids": "REQUIRED_EVIDENCE_INVALID",
+      "invalid_provenance_evidence_ids": "EVIDENCE_PROVENANCE_INVALID",
+      "rejected_evidence_ids": null,
+      "unexpected_evidence_ids": null
+    },
+    "verifier_rule": [
+      {
+        "identity": [
+          "INVALID"
+        ],
+        "independence": "*",
+        "reason": "AUTHORITY_INVALID"
+      },
+      {
+        "identity": [
+          "ABSENT"
+        ],
+        "independence": "*",
+        "reason": "REQUIRED_CONTEXT_INCOMPLETE"
+      },
+      {
+        "identity": [
+          "ATTESTED",
+          "PRESENT_UNATTESTED"
+        ],
+        "independence": [
+          "NOT_INDEPENDENT"
+        ],
+        "reason": "VERIFIER_NOT_INDEPENDENT"
+      },
+      {
+        "identity": [
+          "ATTESTED"
+        ],
+        "independence": [
+          "INDEPENDENT"
+        ],
+        "reason": null
+      },
+      {
+        "identity": [
+          "ATTESTED"
+        ],
+        "independence": [
+          "UNKNOWN"
+        ],
+        "reason": "VERIFIER_INDEPENDENCE_UNKNOWN"
+      },
+      {
+        "identity": [
+          "PRESENT_UNATTESTED"
+        ],
+        "independence": [
+          "INDEPENDENT",
+          "UNKNOWN"
+        ],
+        "reason": "VERIFIER_INDEPENDENCE_UNKNOWN"
+      }
+    ],
+    "verifier_identity_values": [
+      "ATTESTED",
+      "PRESENT_UNATTESTED",
+      "ABSENT",
+      "INVALID"
+    ],
+    "verifier_independence_values": [
+      "INDEPENDENT",
+      "NOT_INDEPENDENT",
+      "UNKNOWN"
+    ],
+    "decision_authority_by_mode": {
+      "ENFORCE": "AUTHORITATIVE",
+      "SHADOW": "ADVISORY_ONLY"
+    }
+  },
   "cases": [
     {
       "case_id": "GC-S1-001",
-      "summary": "Complete, current, clean, authorized: every mandatory fact green and required evidence fully verified for this task/run/candidate.",
+      "summary": "Complete, current, clean, authorized: every mandatory fact green and required evidence fully satisfied for this task/run/candidate.",
       "tags": [
         "happy_path"
       ],
@@ -196,26 +349,31 @@
         "candidate_binding_current": "CURRENT",
         "repository_snapshot_current": "CURRENT",
         "repository_release_clean": "CLEAN",
-        "required_evidence_ids": [
+        "policy_context_current": "CURRENT",
+        "required_requirement_ids": [
           "req-compileall",
           "req-pytest-full"
         ],
-        "verified_evidence_ids": [
+        "satisfied_requirement_ids": [
           "req-compileall",
           "req-pytest-full"
         ],
-        "missing_evidence_ids": [],
-        "invalid_evidence_ids": [],
+        "invalid_requirement_ids": [],
+        "missing_requirement_ids": [],
+        "rejected_evidence_ids": [],
+        "invalid_provenance_evidence_ids": [],
         "unexpected_evidence_ids": [],
-        "evidence_context_coherent": true,
+        "evidence_context_status": "COHERENT",
         "evidence_context_violations": [],
-        "scope_status": "IN_SCOPE",
+        "scope_status": "COMPLIANT",
         "approval_status": "VALID",
         "authority_status": "VALID",
+        "verifier_identity_status": "ATTESTED",
         "verifier_independence_status": "INDEPENDENT",
-        "policy_context_current": "CURRENT"
+        "evaluation_mode": "ENFORCE"
       },
       "expected_disposition": "ELIGIBLE_TO_MERGE_UNDER_POLICY",
+      "expected_decision_authority": "AUTHORITATIVE",
       "expected_primary_reason": null,
       "expected_complete_reason_codes": [],
       "override_class": "NOT_APPLICABLE",
@@ -225,9 +383,10 @@
         ],
         "decision_ref_disposition": "ELIGIBLE_TO_MERGE_UNDER_POLICY",
         "decision_ref_primary_reason_code": null,
+        "decision_authority": "AUTHORITATIVE",
         "active_policy_mutated": false
       },
-      "owner_decision_pending": null
+      "owner_decisions_pending": []
     },
     {
       "case_id": "GC-S1-002",
@@ -240,26 +399,31 @@
         "candidate_binding_current": "CURRENT",
         "repository_snapshot_current": "CURRENT",
         "repository_release_clean": "CLEAN",
-        "required_evidence_ids": [
+        "policy_context_current": "CURRENT",
+        "required_requirement_ids": [
           "req-compileall",
           "req-pytest-full"
         ],
-        "verified_evidence_ids": [],
-        "missing_evidence_ids": [
+        "satisfied_requirement_ids": [],
+        "invalid_requirement_ids": [],
+        "missing_requirement_ids": [
           "req-compileall",
           "req-pytest-full"
         ],
-        "invalid_evidence_ids": [],
+        "rejected_evidence_ids": [],
+        "invalid_provenance_evidence_ids": [],
         "unexpected_evidence_ids": [],
-        "evidence_context_coherent": true,
+        "evidence_context_status": "COHERENT",
         "evidence_context_violations": [],
-        "scope_status": "IN_SCOPE",
+        "scope_status": "COMPLIANT",
         "approval_status": "VALID",
         "authority_status": "VALID",
+        "verifier_identity_status": "ATTESTED",
         "verifier_independence_status": "INDEPENDENT",
-        "policy_context_current": "CURRENT"
+        "evaluation_mode": "ENFORCE"
       },
       "expected_disposition": "BLOCK",
+      "expected_decision_authority": "AUTHORITATIVE",
       "expected_primary_reason": "REQUIRED_EVIDENCE_MISSING",
       "expected_complete_reason_codes": [
         "REQUIRED_EVIDENCE_MISSING"
@@ -271,13 +435,14 @@
         ],
         "decision_ref_disposition": "BLOCK",
         "decision_ref_primary_reason_code": "REQUIRED_EVIDENCE_MISSING",
+        "decision_authority": "AUTHORITATIVE",
         "active_policy_mutated": false
       },
-      "owner_decision_pending": null
+      "owner_decisions_pending": []
     },
     {
       "case_id": "GC-S1-003",
-      "summary": "Partial mandatory evidence: one of two required requirement_ids verified.",
+      "summary": "Partial mandatory evidence: one of two required requirement_ids satisfied, the other has no bound record at all.",
       "tags": [
         "partial_evidence"
       ],
@@ -286,27 +451,32 @@
         "candidate_binding_current": "CURRENT",
         "repository_snapshot_current": "CURRENT",
         "repository_release_clean": "CLEAN",
-        "required_evidence_ids": [
+        "policy_context_current": "CURRENT",
+        "required_requirement_ids": [
           "req-compileall",
           "req-pytest-full"
         ],
-        "verified_evidence_ids": [
+        "satisfied_requirement_ids": [
           "req-compileall"
         ],
-        "missing_evidence_ids": [
+        "invalid_requirement_ids": [],
+        "missing_requirement_ids": [
           "req-pytest-full"
         ],
-        "invalid_evidence_ids": [],
+        "rejected_evidence_ids": [],
+        "invalid_provenance_evidence_ids": [],
         "unexpected_evidence_ids": [],
-        "evidence_context_coherent": true,
+        "evidence_context_status": "COHERENT",
         "evidence_context_violations": [],
-        "scope_status": "IN_SCOPE",
+        "scope_status": "COMPLIANT",
         "approval_status": "VALID",
         "authority_status": "VALID",
+        "verifier_identity_status": "ATTESTED",
         "verifier_independence_status": "INDEPENDENT",
-        "policy_context_current": "CURRENT"
+        "evaluation_mode": "ENFORCE"
       },
       "expected_disposition": "BLOCK",
+      "expected_decision_authority": "AUTHORITATIVE",
       "expected_primary_reason": "REQUIRED_EVIDENCE_MISSING",
       "expected_complete_reason_codes": [
         "REQUIRED_EVIDENCE_MISSING"
@@ -318,13 +488,14 @@
         ],
         "decision_ref_disposition": "BLOCK",
         "decision_ref_primary_reason_code": "REQUIRED_EVIDENCE_MISSING",
+        "decision_authority": "AUTHORITATIVE",
         "active_policy_mutated": false
       },
-      "owner_decision_pending": null
+      "owner_decisions_pending": []
     },
     {
       "case_id": "GC-S1-004",
-      "summary": "Presented evidence belongs to another task; foreign evidence never satisfies a requirement.",
+      "summary": "Presented evidence belongs to another task; foreign evidence is not bound and never satisfies a requirement.",
       "tags": [
         "foreign_task_evidence"
       ],
@@ -333,28 +504,33 @@
         "candidate_binding_current": "CURRENT",
         "repository_snapshot_current": "CURRENT",
         "repository_release_clean": "CLEAN",
-        "required_evidence_ids": [
+        "policy_context_current": "CURRENT",
+        "required_requirement_ids": [
           "req-compileall",
           "req-pytest-full"
         ],
-        "verified_evidence_ids": [],
-        "missing_evidence_ids": [
+        "satisfied_requirement_ids": [],
+        "invalid_requirement_ids": [],
+        "missing_requirement_ids": [
           "req-compileall",
           "req-pytest-full"
         ],
-        "invalid_evidence_ids": [],
+        "rejected_evidence_ids": [],
+        "invalid_provenance_evidence_ids": [],
         "unexpected_evidence_ids": [],
-        "evidence_context_coherent": false,
+        "evidence_context_status": "INCOHERENT",
         "evidence_context_violations": [
           "TASK_MISMATCH"
         ],
-        "scope_status": "IN_SCOPE",
+        "scope_status": "COMPLIANT",
         "approval_status": "VALID",
         "authority_status": "VALID",
+        "verifier_identity_status": "ATTESTED",
         "verifier_independence_status": "INDEPENDENT",
-        "policy_context_current": "CURRENT"
+        "evaluation_mode": "ENFORCE"
       },
       "expected_disposition": "BLOCK",
+      "expected_decision_authority": "AUTHORITATIVE",
       "expected_primary_reason": "EVIDENCE_TASK_MISMATCH",
       "expected_complete_reason_codes": [
         "EVIDENCE_TASK_MISMATCH",
@@ -367,9 +543,10 @@
         ],
         "decision_ref_disposition": "BLOCK",
         "decision_ref_primary_reason_code": "EVIDENCE_TASK_MISMATCH",
+        "decision_authority": "AUTHORITATIVE",
         "active_policy_mutated": false
       },
-      "owner_decision_pending": null
+      "owner_decisions_pending": []
     },
     {
       "case_id": "GC-S1-005",
@@ -382,28 +559,33 @@
         "candidate_binding_current": "CURRENT",
         "repository_snapshot_current": "CURRENT",
         "repository_release_clean": "CLEAN",
-        "required_evidence_ids": [
+        "policy_context_current": "CURRENT",
+        "required_requirement_ids": [
           "req-compileall",
           "req-pytest-full"
         ],
-        "verified_evidence_ids": [],
-        "missing_evidence_ids": [
+        "satisfied_requirement_ids": [],
+        "invalid_requirement_ids": [],
+        "missing_requirement_ids": [
           "req-compileall",
           "req-pytest-full"
         ],
-        "invalid_evidence_ids": [],
+        "rejected_evidence_ids": [],
+        "invalid_provenance_evidence_ids": [],
         "unexpected_evidence_ids": [],
-        "evidence_context_coherent": false,
+        "evidence_context_status": "INCOHERENT",
         "evidence_context_violations": [
           "RUN_MISMATCH"
         ],
-        "scope_status": "IN_SCOPE",
+        "scope_status": "COMPLIANT",
         "approval_status": "VALID",
         "authority_status": "VALID",
+        "verifier_identity_status": "ATTESTED",
         "verifier_independence_status": "INDEPENDENT",
-        "policy_context_current": "CURRENT"
+        "evaluation_mode": "ENFORCE"
       },
       "expected_disposition": "BLOCK",
+      "expected_decision_authority": "AUTHORITATIVE",
       "expected_primary_reason": "EVIDENCE_RUN_MISMATCH",
       "expected_complete_reason_codes": [
         "EVIDENCE_RUN_MISMATCH",
@@ -416,9 +598,10 @@
         ],
         "decision_ref_disposition": "BLOCK",
         "decision_ref_primary_reason_code": "EVIDENCE_RUN_MISMATCH",
+        "decision_authority": "AUTHORITATIVE",
         "active_policy_mutated": false
       },
-      "owner_decision_pending": null
+      "owner_decisions_pending": []
     },
     {
       "case_id": "GC-S1-006",
@@ -431,28 +614,33 @@
         "candidate_binding_current": "CURRENT",
         "repository_snapshot_current": "CURRENT",
         "repository_release_clean": "CLEAN",
-        "required_evidence_ids": [
+        "policy_context_current": "CURRENT",
+        "required_requirement_ids": [
           "req-compileall",
           "req-pytest-full"
         ],
-        "verified_evidence_ids": [],
-        "missing_evidence_ids": [
+        "satisfied_requirement_ids": [],
+        "invalid_requirement_ids": [],
+        "missing_requirement_ids": [
           "req-compileall",
           "req-pytest-full"
         ],
-        "invalid_evidence_ids": [],
+        "rejected_evidence_ids": [],
+        "invalid_provenance_evidence_ids": [],
         "unexpected_evidence_ids": [],
-        "evidence_context_coherent": false,
+        "evidence_context_status": "INCOHERENT",
         "evidence_context_violations": [
           "CANDIDATE_MISMATCH"
         ],
-        "scope_status": "IN_SCOPE",
+        "scope_status": "COMPLIANT",
         "approval_status": "VALID",
         "authority_status": "VALID",
+        "verifier_identity_status": "ATTESTED",
         "verifier_independence_status": "INDEPENDENT",
-        "policy_context_current": "CURRENT"
+        "evaluation_mode": "ENFORCE"
       },
       "expected_disposition": "BLOCK",
+      "expected_decision_authority": "AUTHORITATIVE",
       "expected_primary_reason": "EVIDENCE_CANDIDATE_MISMATCH",
       "expected_complete_reason_codes": [
         "EVIDENCE_CANDIDATE_MISMATCH",
@@ -465,9 +653,10 @@
         ],
         "decision_ref_disposition": "BLOCK",
         "decision_ref_primary_reason_code": "EVIDENCE_CANDIDATE_MISMATCH",
+        "decision_authority": "AUTHORITATIVE",
         "active_policy_mutated": false
       },
-      "owner_decision_pending": null
+      "owner_decisions_pending": []
     },
     {
       "case_id": "GC-S1-007",
@@ -480,28 +669,33 @@
         "candidate_binding_current": "CURRENT",
         "repository_snapshot_current": "CURRENT",
         "repository_release_clean": "CLEAN",
-        "required_evidence_ids": [
+        "policy_context_current": "CURRENT",
+        "required_requirement_ids": [
           "req-compileall",
           "req-pytest-full"
         ],
-        "verified_evidence_ids": [],
-        "missing_evidence_ids": [
+        "satisfied_requirement_ids": [],
+        "invalid_requirement_ids": [],
+        "missing_requirement_ids": [
           "req-compileall",
           "req-pytest-full"
         ],
-        "invalid_evidence_ids": [],
+        "rejected_evidence_ids": [],
+        "invalid_provenance_evidence_ids": [],
         "unexpected_evidence_ids": [],
-        "evidence_context_coherent": false,
+        "evidence_context_status": "INCOHERENT",
         "evidence_context_violations": [
           "DUPLICATE_IDENTITY"
         ],
-        "scope_status": "IN_SCOPE",
+        "scope_status": "COMPLIANT",
         "approval_status": "VALID",
         "authority_status": "VALID",
+        "verifier_identity_status": "ATTESTED",
         "verifier_independence_status": "INDEPENDENT",
-        "policy_context_current": "CURRENT"
+        "evaluation_mode": "ENFORCE"
       },
       "expected_disposition": "BLOCK",
+      "expected_decision_authority": "AUTHORITATIVE",
       "expected_primary_reason": "EVIDENCE_DUPLICATE_IDENTITY",
       "expected_complete_reason_codes": [
         "EVIDENCE_DUPLICATE_IDENTITY",
@@ -514,9 +708,10 @@
         ],
         "decision_ref_disposition": "BLOCK",
         "decision_ref_primary_reason_code": "EVIDENCE_DUPLICATE_IDENTITY",
+        "decision_authority": "AUTHORITATIVE",
         "active_policy_mutated": false
       },
-      "owner_decision_pending": null
+      "owner_decisions_pending": []
     },
     {
       "case_id": "GC-S1-008",
@@ -529,26 +724,31 @@
         "candidate_binding_current": "STALE",
         "repository_snapshot_current": "CURRENT",
         "repository_release_clean": "CLEAN",
-        "required_evidence_ids": [
+        "policy_context_current": "CURRENT",
+        "required_requirement_ids": [
           "req-compileall",
           "req-pytest-full"
         ],
-        "verified_evidence_ids": [
+        "satisfied_requirement_ids": [
           "req-compileall",
           "req-pytest-full"
         ],
-        "missing_evidence_ids": [],
-        "invalid_evidence_ids": [],
+        "invalid_requirement_ids": [],
+        "missing_requirement_ids": [],
+        "rejected_evidence_ids": [],
+        "invalid_provenance_evidence_ids": [],
         "unexpected_evidence_ids": [],
-        "evidence_context_coherent": true,
+        "evidence_context_status": "COHERENT",
         "evidence_context_violations": [],
-        "scope_status": "IN_SCOPE",
+        "scope_status": "COMPLIANT",
         "approval_status": "VALID",
         "authority_status": "VALID",
+        "verifier_identity_status": "ATTESTED",
         "verifier_independence_status": "INDEPENDENT",
-        "policy_context_current": "CURRENT"
+        "evaluation_mode": "ENFORCE"
       },
       "expected_disposition": "BLOCK",
+      "expected_decision_authority": "AUTHORITATIVE",
       "expected_primary_reason": "CANDIDATE_STALE",
       "expected_complete_reason_codes": [
         "CANDIDATE_STALE"
@@ -560,9 +760,10 @@
         ],
         "decision_ref_disposition": "BLOCK",
         "decision_ref_primary_reason_code": "CANDIDATE_STALE",
+        "decision_authority": "AUTHORITATIVE",
         "active_policy_mutated": false
       },
-      "owner_decision_pending": null
+      "owner_decisions_pending": []
     },
     {
       "case_id": "GC-S1-009",
@@ -575,26 +776,31 @@
         "candidate_binding_current": "CURRENT",
         "repository_snapshot_current": "MISMATCH",
         "repository_release_clean": "CLEAN",
-        "required_evidence_ids": [
+        "policy_context_current": "CURRENT",
+        "required_requirement_ids": [
           "req-compileall",
           "req-pytest-full"
         ],
-        "verified_evidence_ids": [
+        "satisfied_requirement_ids": [
           "req-compileall",
           "req-pytest-full"
         ],
-        "missing_evidence_ids": [],
-        "invalid_evidence_ids": [],
+        "invalid_requirement_ids": [],
+        "missing_requirement_ids": [],
+        "rejected_evidence_ids": [],
+        "invalid_provenance_evidence_ids": [],
         "unexpected_evidence_ids": [],
-        "evidence_context_coherent": true,
+        "evidence_context_status": "COHERENT",
         "evidence_context_violations": [],
-        "scope_status": "IN_SCOPE",
+        "scope_status": "COMPLIANT",
         "approval_status": "VALID",
         "authority_status": "VALID",
+        "verifier_identity_status": "ATTESTED",
         "verifier_independence_status": "INDEPENDENT",
-        "policy_context_current": "CURRENT"
+        "evaluation_mode": "ENFORCE"
       },
       "expected_disposition": "BLOCK",
+      "expected_decision_authority": "AUTHORITATIVE",
       "expected_primary_reason": "REPOSITORY_CONTEXT_MISMATCH",
       "expected_complete_reason_codes": [
         "REPOSITORY_CONTEXT_MISMATCH"
@@ -606,9 +812,10 @@
         ],
         "decision_ref_disposition": "BLOCK",
         "decision_ref_primary_reason_code": "REPOSITORY_CONTEXT_MISMATCH",
+        "decision_authority": "AUTHORITATIVE",
         "active_policy_mutated": false
       },
-      "owner_decision_pending": null
+      "owner_decisions_pending": []
     },
     {
       "case_id": "GC-S1-010",
@@ -621,26 +828,31 @@
         "candidate_binding_current": "CURRENT",
         "repository_snapshot_current": "CURRENT",
         "repository_release_clean": "DIRTY",
-        "required_evidence_ids": [
+        "policy_context_current": "CURRENT",
+        "required_requirement_ids": [
           "req-compileall",
           "req-pytest-full"
         ],
-        "verified_evidence_ids": [
+        "satisfied_requirement_ids": [
           "req-compileall",
           "req-pytest-full"
         ],
-        "missing_evidence_ids": [],
-        "invalid_evidence_ids": [],
+        "invalid_requirement_ids": [],
+        "missing_requirement_ids": [],
+        "rejected_evidence_ids": [],
+        "invalid_provenance_evidence_ids": [],
         "unexpected_evidence_ids": [],
-        "evidence_context_coherent": true,
+        "evidence_context_status": "COHERENT",
         "evidence_context_violations": [],
-        "scope_status": "IN_SCOPE",
+        "scope_status": "COMPLIANT",
         "approval_status": "VALID",
         "authority_status": "VALID",
+        "verifier_identity_status": "ATTESTED",
         "verifier_independence_status": "INDEPENDENT",
-        "policy_context_current": "CURRENT"
+        "evaluation_mode": "ENFORCE"
       },
       "expected_disposition": "BLOCK",
+      "expected_decision_authority": "AUTHORITATIVE",
       "expected_primary_reason": "RELEASE_STATE_NOT_CLEAN",
       "expected_complete_reason_codes": [
         "RELEASE_STATE_NOT_CLEAN"
@@ -652,9 +864,10 @@
         ],
         "decision_ref_disposition": "BLOCK",
         "decision_ref_primary_reason_code": "RELEASE_STATE_NOT_CLEAN",
+        "decision_authority": "AUTHORITATIVE",
         "active_policy_mutated": false
       },
-      "owner_decision_pending": null
+      "owner_decisions_pending": []
     },
     {
       "case_id": "GC-S1-011",
@@ -667,26 +880,31 @@
         "candidate_binding_current": "CURRENT",
         "repository_snapshot_current": "CURRENT",
         "repository_release_clean": "CLEAN",
-        "required_evidence_ids": [
+        "policy_context_current": "CURRENT",
+        "required_requirement_ids": [
           "req-compileall",
           "req-pytest-full"
         ],
-        "verified_evidence_ids": [
+        "satisfied_requirement_ids": [
           "req-compileall",
           "req-pytest-full"
         ],
-        "missing_evidence_ids": [],
-        "invalid_evidence_ids": [],
+        "invalid_requirement_ids": [],
+        "missing_requirement_ids": [],
+        "rejected_evidence_ids": [],
+        "invalid_provenance_evidence_ids": [],
         "unexpected_evidence_ids": [],
-        "evidence_context_coherent": true,
+        "evidence_context_status": "COHERENT",
         "evidence_context_violations": [],
         "scope_status": "VIOLATION",
         "approval_status": "VALID",
         "authority_status": "VALID",
+        "verifier_identity_status": "ATTESTED",
         "verifier_independence_status": "INDEPENDENT",
-        "policy_context_current": "CURRENT"
+        "evaluation_mode": "ENFORCE"
       },
       "expected_disposition": "BLOCK",
+      "expected_decision_authority": "AUTHORITATIVE",
       "expected_primary_reason": "SCOPE_VIOLATION",
       "expected_complete_reason_codes": [
         "SCOPE_VIOLATION"
@@ -698,41 +916,47 @@
         ],
         "decision_ref_disposition": "BLOCK",
         "decision_ref_primary_reason_code": "SCOPE_VIOLATION",
+        "decision_authority": "AUTHORITATIVE",
         "active_policy_mutated": false
       },
-      "owner_decision_pending": null
+      "owner_decisions_pending": []
     },
     {
       "case_id": "GC-S1-012",
       "summary": "Semantic scope uncertainty (policy-designated reviewable question, e.g. contract-routed dependency change).",
       "tags": [
-        "scope_uncertain"
+        "scope_semantic_uncertain"
       ],
       "policy_input_facts": {
         "task_context_current": "CURRENT",
         "candidate_binding_current": "CURRENT",
         "repository_snapshot_current": "CURRENT",
         "repository_release_clean": "CLEAN",
-        "required_evidence_ids": [
+        "policy_context_current": "CURRENT",
+        "required_requirement_ids": [
           "req-compileall",
           "req-pytest-full"
         ],
-        "verified_evidence_ids": [
+        "satisfied_requirement_ids": [
           "req-compileall",
           "req-pytest-full"
         ],
-        "missing_evidence_ids": [],
-        "invalid_evidence_ids": [],
+        "invalid_requirement_ids": [],
+        "missing_requirement_ids": [],
+        "rejected_evidence_ids": [],
+        "invalid_provenance_evidence_ids": [],
         "unexpected_evidence_ids": [],
-        "evidence_context_coherent": true,
+        "evidence_context_status": "COHERENT",
         "evidence_context_violations": [],
-        "scope_status": "UNCERTAIN",
+        "scope_status": "SEMANTIC_UNCERTAIN",
         "approval_status": "VALID",
         "authority_status": "VALID",
+        "verifier_identity_status": "ATTESTED",
         "verifier_independence_status": "INDEPENDENT",
-        "policy_context_current": "CURRENT"
+        "evaluation_mode": "ENFORCE"
       },
       "expected_disposition": "REVIEW_REQUIRED",
+      "expected_decision_authority": "AUTHORITATIVE",
       "expected_primary_reason": "SCOPE_UNCERTAIN",
       "expected_complete_reason_codes": [
         "SCOPE_UNCERTAIN"
@@ -744,9 +968,10 @@
         ],
         "decision_ref_disposition": "REVIEW_REQUIRED",
         "decision_ref_primary_reason_code": "SCOPE_UNCERTAIN",
+        "decision_authority": "AUTHORITATIVE",
         "active_policy_mutated": false
       },
-      "owner_decision_pending": null
+      "owner_decisions_pending": []
     },
     {
       "case_id": "GC-S1-013",
@@ -759,26 +984,31 @@
         "candidate_binding_current": "CURRENT",
         "repository_snapshot_current": "CURRENT",
         "repository_release_clean": "CLEAN",
-        "required_evidence_ids": [
+        "policy_context_current": "CURRENT",
+        "required_requirement_ids": [
           "req-compileall",
           "req-pytest-full"
         ],
-        "verified_evidence_ids": [
+        "satisfied_requirement_ids": [
           "req-compileall",
           "req-pytest-full"
         ],
-        "missing_evidence_ids": [],
-        "invalid_evidence_ids": [],
+        "invalid_requirement_ids": [],
+        "missing_requirement_ids": [],
+        "rejected_evidence_ids": [],
+        "invalid_provenance_evidence_ids": [],
         "unexpected_evidence_ids": [],
-        "evidence_context_coherent": true,
+        "evidence_context_status": "COHERENT",
         "evidence_context_violations": [],
-        "scope_status": "IN_SCOPE",
+        "scope_status": "COMPLIANT",
         "approval_status": "MISSING",
         "authority_status": "VALID",
+        "verifier_identity_status": "ATTESTED",
         "verifier_independence_status": "INDEPENDENT",
-        "policy_context_current": "CURRENT"
+        "evaluation_mode": "ENFORCE"
       },
       "expected_disposition": "BLOCK",
+      "expected_decision_authority": "AUTHORITATIVE",
       "expected_primary_reason": "APPROVAL_MISSING",
       "expected_complete_reason_codes": [
         "APPROVAL_MISSING"
@@ -790,9 +1020,12 @@
         ],
         "decision_ref_disposition": "BLOCK",
         "decision_ref_primary_reason_code": "APPROVAL_MISSING",
+        "decision_authority": "AUTHORITATIVE",
         "active_policy_mutated": false
       },
-      "owner_decision_pending": "OD-S1A-001"
+      "owner_decisions_pending": [
+        "OD-S1A-001"
+      ]
     },
     {
       "case_id": "GC-S1-014",
@@ -805,26 +1038,31 @@
         "candidate_binding_current": "CURRENT",
         "repository_snapshot_current": "CURRENT",
         "repository_release_clean": "CLEAN",
-        "required_evidence_ids": [
+        "policy_context_current": "CURRENT",
+        "required_requirement_ids": [
           "req-compileall",
           "req-pytest-full"
         ],
-        "verified_evidence_ids": [
+        "satisfied_requirement_ids": [
           "req-compileall",
           "req-pytest-full"
         ],
-        "missing_evidence_ids": [],
-        "invalid_evidence_ids": [],
+        "invalid_requirement_ids": [],
+        "missing_requirement_ids": [],
+        "rejected_evidence_ids": [],
+        "invalid_provenance_evidence_ids": [],
         "unexpected_evidence_ids": [],
-        "evidence_context_coherent": true,
+        "evidence_context_status": "COHERENT",
         "evidence_context_violations": [],
-        "scope_status": "IN_SCOPE",
+        "scope_status": "COMPLIANT",
         "approval_status": "STALE",
         "authority_status": "VALID",
+        "verifier_identity_status": "ATTESTED",
         "verifier_independence_status": "INDEPENDENT",
-        "policy_context_current": "CURRENT"
+        "evaluation_mode": "ENFORCE"
       },
       "expected_disposition": "BLOCK",
+      "expected_decision_authority": "AUTHORITATIVE",
       "expected_primary_reason": "APPROVAL_STALE",
       "expected_complete_reason_codes": [
         "APPROVAL_STALE"
@@ -836,9 +1074,12 @@
         ],
         "decision_ref_disposition": "BLOCK",
         "decision_ref_primary_reason_code": "APPROVAL_STALE",
+        "decision_authority": "AUTHORITATIVE",
         "active_policy_mutated": false
       },
-      "owner_decision_pending": "OD-S1A-002"
+      "owner_decisions_pending": [
+        "OD-S1A-002"
+      ]
     },
     {
       "case_id": "GC-S1-015",
@@ -851,26 +1092,31 @@
         "candidate_binding_current": "CURRENT",
         "repository_snapshot_current": "CURRENT",
         "repository_release_clean": "CLEAN",
-        "required_evidence_ids": [
+        "policy_context_current": "CURRENT",
+        "required_requirement_ids": [
           "req-compileall",
           "req-pytest-full"
         ],
-        "verified_evidence_ids": [
+        "satisfied_requirement_ids": [
           "req-compileall",
           "req-pytest-full"
         ],
-        "missing_evidence_ids": [],
-        "invalid_evidence_ids": [],
+        "invalid_requirement_ids": [],
+        "missing_requirement_ids": [],
+        "rejected_evidence_ids": [],
+        "invalid_provenance_evidence_ids": [],
         "unexpected_evidence_ids": [],
-        "evidence_context_coherent": true,
+        "evidence_context_status": "COHERENT",
         "evidence_context_violations": [],
-        "scope_status": "IN_SCOPE",
+        "scope_status": "COMPLIANT",
         "approval_status": "VALID",
         "authority_status": "INVALID",
+        "verifier_identity_status": "ATTESTED",
         "verifier_independence_status": "INDEPENDENT",
-        "policy_context_current": "CURRENT"
+        "evaluation_mode": "ENFORCE"
       },
       "expected_disposition": "BLOCK",
+      "expected_decision_authority": "AUTHORITATIVE",
       "expected_primary_reason": "AUTHORITY_INVALID",
       "expected_complete_reason_codes": [
         "AUTHORITY_INVALID"
@@ -882,13 +1128,14 @@
         ],
         "decision_ref_disposition": "BLOCK",
         "decision_ref_primary_reason_code": "AUTHORITY_INVALID",
+        "decision_authority": "AUTHORITATIVE",
         "active_policy_mutated": false
       },
-      "owner_decision_pending": null
+      "owner_decisions_pending": []
     },
     {
       "case_id": "GC-S1-016",
-      "summary": "Verifier not independent: verifier actor equals implementer actor.",
+      "summary": "Verifier not independent: attested verifier actor equals implementer actor.",
       "tags": [
         "verifier_not_independent"
       ],
@@ -897,26 +1144,31 @@
         "candidate_binding_current": "CURRENT",
         "repository_snapshot_current": "CURRENT",
         "repository_release_clean": "CLEAN",
-        "required_evidence_ids": [
+        "policy_context_current": "CURRENT",
+        "required_requirement_ids": [
           "req-compileall",
           "req-pytest-full"
         ],
-        "verified_evidence_ids": [
+        "satisfied_requirement_ids": [
           "req-compileall",
           "req-pytest-full"
         ],
-        "missing_evidence_ids": [],
-        "invalid_evidence_ids": [],
+        "invalid_requirement_ids": [],
+        "missing_requirement_ids": [],
+        "rejected_evidence_ids": [],
+        "invalid_provenance_evidence_ids": [],
         "unexpected_evidence_ids": [],
-        "evidence_context_coherent": true,
+        "evidence_context_status": "COHERENT",
         "evidence_context_violations": [],
-        "scope_status": "IN_SCOPE",
+        "scope_status": "COMPLIANT",
         "approval_status": "VALID",
         "authority_status": "VALID",
+        "verifier_identity_status": "ATTESTED",
         "verifier_independence_status": "NOT_INDEPENDENT",
-        "policy_context_current": "CURRENT"
+        "evaluation_mode": "ENFORCE"
       },
       "expected_disposition": "BLOCK",
+      "expected_decision_authority": "AUTHORITATIVE",
       "expected_primary_reason": "VERIFIER_NOT_INDEPENDENT",
       "expected_complete_reason_codes": [
         "VERIFIER_NOT_INDEPENDENT"
@@ -928,13 +1180,14 @@
         ],
         "decision_ref_disposition": "BLOCK",
         "decision_ref_primary_reason_code": "VERIFIER_NOT_INDEPENDENT",
+        "decision_authority": "AUTHORITATIVE",
         "active_policy_mutated": false
       },
-      "owner_decision_pending": null
+      "owner_decisions_pending": []
     },
     {
       "case_id": "GC-S1-017",
-      "summary": "Verifier independence unknown: identity attested, independence attestation absent. Reviewability boundary PENDING_OWNER_DECISION OD-S1A-003.",
+      "summary": "Verifier independence unknown with an ATTESTED identity: independence attestation absent. Reviewability boundary PENDING_OWNER_DECISION OD-S1A-003.",
       "tags": [
         "verifier_independence_unknown"
       ],
@@ -943,26 +1196,31 @@
         "candidate_binding_current": "CURRENT",
         "repository_snapshot_current": "CURRENT",
         "repository_release_clean": "CLEAN",
-        "required_evidence_ids": [
+        "policy_context_current": "CURRENT",
+        "required_requirement_ids": [
           "req-compileall",
           "req-pytest-full"
         ],
-        "verified_evidence_ids": [
+        "satisfied_requirement_ids": [
           "req-compileall",
           "req-pytest-full"
         ],
-        "missing_evidence_ids": [],
-        "invalid_evidence_ids": [],
+        "invalid_requirement_ids": [],
+        "missing_requirement_ids": [],
+        "rejected_evidence_ids": [],
+        "invalid_provenance_evidence_ids": [],
         "unexpected_evidence_ids": [],
-        "evidence_context_coherent": true,
+        "evidence_context_status": "COHERENT",
         "evidence_context_violations": [],
-        "scope_status": "IN_SCOPE",
+        "scope_status": "COMPLIANT",
         "approval_status": "VALID",
         "authority_status": "VALID",
+        "verifier_identity_status": "ATTESTED",
         "verifier_independence_status": "UNKNOWN",
-        "policy_context_current": "CURRENT"
+        "evaluation_mode": "ENFORCE"
       },
       "expected_disposition": "REVIEW_REQUIRED",
+      "expected_decision_authority": "AUTHORITATIVE",
       "expected_primary_reason": "VERIFIER_INDEPENDENCE_UNKNOWN",
       "expected_complete_reason_codes": [
         "VERIFIER_INDEPENDENCE_UNKNOWN"
@@ -974,9 +1232,12 @@
         ],
         "decision_ref_disposition": "REVIEW_REQUIRED",
         "decision_ref_primary_reason_code": "VERIFIER_INDEPENDENCE_UNKNOWN",
+        "decision_authority": "AUTHORITATIVE",
         "active_policy_mutated": false
       },
-      "owner_decision_pending": "OD-S1A-003"
+      "owner_decisions_pending": [
+        "OD-S1A-003"
+      ]
     },
     {
       "case_id": "GC-S1-018",
@@ -989,26 +1250,31 @@
         "candidate_binding_current": "CURRENT",
         "repository_snapshot_current": "CURRENT",
         "repository_release_clean": "CLEAN",
-        "required_evidence_ids": [
+        "policy_context_current": "STALE",
+        "required_requirement_ids": [
           "req-compileall",
           "req-pytest-full"
         ],
-        "verified_evidence_ids": [
+        "satisfied_requirement_ids": [
           "req-compileall",
           "req-pytest-full"
         ],
-        "missing_evidence_ids": [],
-        "invalid_evidence_ids": [],
+        "invalid_requirement_ids": [],
+        "missing_requirement_ids": [],
+        "rejected_evidence_ids": [],
+        "invalid_provenance_evidence_ids": [],
         "unexpected_evidence_ids": [],
-        "evidence_context_coherent": true,
+        "evidence_context_status": "COHERENT",
         "evidence_context_violations": [],
-        "scope_status": "IN_SCOPE",
+        "scope_status": "COMPLIANT",
         "approval_status": "VALID",
         "authority_status": "VALID",
+        "verifier_identity_status": "ATTESTED",
         "verifier_independence_status": "INDEPENDENT",
-        "policy_context_current": "STALE"
+        "evaluation_mode": "ENFORCE"
       },
       "expected_disposition": "BLOCK",
+      "expected_decision_authority": "AUTHORITATIVE",
       "expected_primary_reason": "POLICY_CONTEXT_STALE",
       "expected_complete_reason_codes": [
         "POLICY_CONTEXT_STALE"
@@ -1020,9 +1286,10 @@
         ],
         "decision_ref_disposition": "BLOCK",
         "decision_ref_primary_reason_code": "POLICY_CONTEXT_STALE",
+        "decision_authority": "AUTHORITATIVE",
         "active_policy_mutated": false
       },
-      "owner_decision_pending": null
+      "owner_decisions_pending": []
     },
     {
       "case_id": "GC-S1-019",
@@ -1036,26 +1303,31 @@
         "candidate_binding_current": "CURRENT",
         "repository_snapshot_current": "CURRENT",
         "repository_release_clean": "CLEAN",
-        "required_evidence_ids": [
+        "policy_context_current": "CURRENT",
+        "required_requirement_ids": [
           "req-compileall",
           "req-pytest-full"
         ],
-        "verified_evidence_ids": [
+        "satisfied_requirement_ids": [
           "req-compileall",
           "req-pytest-full"
         ],
-        "missing_evidence_ids": [],
-        "invalid_evidence_ids": [],
+        "invalid_requirement_ids": [],
+        "missing_requirement_ids": [],
+        "rejected_evidence_ids": [],
+        "invalid_provenance_evidence_ids": [],
         "unexpected_evidence_ids": [],
-        "evidence_context_coherent": true,
+        "evidence_context_status": "COHERENT",
         "evidence_context_violations": [],
-        "scope_status": "IN_SCOPE",
+        "scope_status": "COMPLIANT",
         "approval_status": "VALID",
         "authority_status": "VALID",
+        "verifier_identity_status": "ATTESTED",
         "verifier_independence_status": "INDEPENDENT",
-        "policy_context_current": "CURRENT"
+        "evaluation_mode": "ENFORCE"
       },
       "expected_disposition": "BLOCK",
+      "expected_decision_authority": "AUTHORITATIVE",
       "expected_primary_reason": "REQUIRED_CONTEXT_INCOMPLETE",
       "expected_complete_reason_codes": [
         "REQUIRED_CONTEXT_INCOMPLETE"
@@ -1067,9 +1339,10 @@
         ],
         "decision_ref_disposition": "BLOCK",
         "decision_ref_primary_reason_code": "REQUIRED_CONTEXT_INCOMPLETE",
+        "decision_authority": "AUTHORITATIVE",
         "active_policy_mutated": false
       },
-      "owner_decision_pending": null
+      "owner_decisions_pending": []
     },
     {
       "case_id": "GC-S1-020",
@@ -1082,20 +1355,25 @@
         "candidate_binding_current": "CURRENT",
         "repository_snapshot_current": "CURRENT",
         "repository_release_clean": "CLEAN",
-        "required_evidence_ids": [],
-        "verified_evidence_ids": [],
-        "missing_evidence_ids": [],
-        "invalid_evidence_ids": [],
+        "policy_context_current": "CURRENT",
+        "required_requirement_ids": [],
+        "satisfied_requirement_ids": [],
+        "invalid_requirement_ids": [],
+        "missing_requirement_ids": [],
+        "rejected_evidence_ids": [],
+        "invalid_provenance_evidence_ids": [],
         "unexpected_evidence_ids": [],
-        "evidence_context_coherent": true,
+        "evidence_context_status": "COHERENT",
         "evidence_context_violations": [],
-        "scope_status": "IN_SCOPE",
+        "scope_status": "COMPLIANT",
         "approval_status": "VALID",
         "authority_status": "VALID",
+        "verifier_identity_status": "ATTESTED",
         "verifier_independence_status": "INDEPENDENT",
-        "policy_context_current": "CURRENT"
+        "evaluation_mode": "ENFORCE"
       },
       "expected_disposition": "ELIGIBLE_TO_MERGE_UNDER_POLICY",
+      "expected_decision_authority": "AUTHORITATIVE",
       "expected_primary_reason": null,
       "expected_complete_reason_codes": [],
       "override_class": "NOT_APPLICABLE",
@@ -1105,14 +1383,15 @@
         ],
         "decision_ref_disposition": "ELIGIBLE_TO_MERGE_UNDER_POLICY",
         "decision_ref_primary_reason_code": null,
+        "decision_authority": "AUTHORITATIVE",
         "active_policy_mutated": false
       },
-      "owner_decision_pending": null,
+      "owner_decisions_pending": [],
       "notes": "Not blocked solely for being empty (spec §11; ADR-001 §8)."
     },
     {
       "case_id": "GC-S1-021",
-      "summary": "Multiple independent failures: foreign-task evidence, dirty repository, and missing approval. One deterministic primary reason (lowest rank), full sorted complete set.",
+      "summary": "Multiple independent failures: foreign-task evidence, dirty repository, and missing approval. One deterministic primary reason (lowest rank), full sorted complete set. The exact precedence among coexisting integrity failures is PENDING_OWNER_DECISION OD-S1A-007 (recommended rank table encoded here).",
       "tags": [
         "multiple_failure_precedence"
       ],
@@ -1121,28 +1400,33 @@
         "candidate_binding_current": "CURRENT",
         "repository_snapshot_current": "CURRENT",
         "repository_release_clean": "DIRTY",
-        "required_evidence_ids": [
+        "policy_context_current": "CURRENT",
+        "required_requirement_ids": [
           "req-compileall",
           "req-pytest-full"
         ],
-        "verified_evidence_ids": [],
-        "missing_evidence_ids": [
+        "satisfied_requirement_ids": [],
+        "invalid_requirement_ids": [],
+        "missing_requirement_ids": [
           "req-compileall",
           "req-pytest-full"
         ],
-        "invalid_evidence_ids": [],
+        "rejected_evidence_ids": [],
+        "invalid_provenance_evidence_ids": [],
         "unexpected_evidence_ids": [],
-        "evidence_context_coherent": false,
+        "evidence_context_status": "INCOHERENT",
         "evidence_context_violations": [
           "TASK_MISMATCH"
         ],
-        "scope_status": "IN_SCOPE",
+        "scope_status": "COMPLIANT",
         "approval_status": "MISSING",
         "authority_status": "VALID",
+        "verifier_identity_status": "ATTESTED",
         "verifier_independence_status": "INDEPENDENT",
-        "policy_context_current": "CURRENT"
+        "evaluation_mode": "ENFORCE"
       },
       "expected_disposition": "BLOCK",
+      "expected_decision_authority": "AUTHORITATIVE",
       "expected_primary_reason": "EVIDENCE_TASK_MISMATCH",
       "expected_complete_reason_codes": [
         "APPROVAL_MISSING",
@@ -1157,9 +1441,13 @@
         ],
         "decision_ref_disposition": "BLOCK",
         "decision_ref_primary_reason_code": "EVIDENCE_TASK_MISMATCH",
+        "decision_authority": "AUTHORITATIVE",
         "active_policy_mutated": false
       },
-      "owner_decision_pending": null
+      "owner_decisions_pending": [
+        "OD-S1A-001",
+        "OD-S1A-007"
+      ]
     },
     {
       "case_id": "GC-S1-022",
@@ -1173,26 +1461,31 @@
         "candidate_binding_current": "CURRENT",
         "repository_snapshot_current": "CURRENT",
         "repository_release_clean": "DIRTY",
-        "required_evidence_ids": [
+        "policy_context_current": "CURRENT",
+        "required_requirement_ids": [
           "req-compileall",
           "req-pytest-full"
         ],
-        "verified_evidence_ids": [
+        "satisfied_requirement_ids": [
           "req-compileall",
           "req-pytest-full"
         ],
-        "missing_evidence_ids": [],
-        "invalid_evidence_ids": [],
+        "invalid_requirement_ids": [],
+        "missing_requirement_ids": [],
+        "rejected_evidence_ids": [],
+        "invalid_provenance_evidence_ids": [],
         "unexpected_evidence_ids": [],
-        "evidence_context_coherent": true,
+        "evidence_context_status": "COHERENT",
         "evidence_context_violations": [],
-        "scope_status": "IN_SCOPE",
+        "scope_status": "COMPLIANT",
         "approval_status": "VALID",
         "authority_status": "VALID",
+        "verifier_identity_status": "ATTESTED",
         "verifier_independence_status": "INDEPENDENT",
-        "policy_context_current": "CURRENT"
+        "evaluation_mode": "ENFORCE"
       },
       "expected_disposition": "BLOCK",
+      "expected_decision_authority": "AUTHORITATIVE",
       "expected_primary_reason": "RELEASE_STATE_NOT_CLEAN",
       "expected_complete_reason_codes": [
         "RELEASE_STATE_NOT_CLEAN"
@@ -1204,9 +1497,10 @@
         ],
         "decision_ref_disposition": "BLOCK",
         "decision_ref_primary_reason_code": "RELEASE_STATE_NOT_CLEAN",
+        "decision_authority": "AUTHORITATIVE",
         "active_policy_mutated": false
       },
-      "owner_decision_pending": null
+      "owner_decisions_pending": []
     },
     {
       "case_id": "GC-S1-023",
@@ -1220,26 +1514,31 @@
         "candidate_binding_current": "CURRENT",
         "repository_snapshot_current": "CURRENT",
         "repository_release_clean": "CLEAN",
-        "required_evidence_ids": [
+        "policy_context_current": "CURRENT",
+        "required_requirement_ids": [
           "req-compileall",
           "req-pytest-full"
         ],
-        "verified_evidence_ids": [
+        "satisfied_requirement_ids": [
           "req-compileall",
           "req-pytest-full"
         ],
-        "missing_evidence_ids": [],
-        "invalid_evidence_ids": [],
+        "invalid_requirement_ids": [],
+        "missing_requirement_ids": [],
+        "rejected_evidence_ids": [],
+        "invalid_provenance_evidence_ids": [],
         "unexpected_evidence_ids": [],
-        "evidence_context_coherent": true,
+        "evidence_context_status": "COHERENT",
         "evidence_context_violations": [],
-        "scope_status": "IN_SCOPE",
+        "scope_status": "COMPLIANT",
         "approval_status": "STALE",
         "authority_status": "VALID",
+        "verifier_identity_status": "ATTESTED",
         "verifier_independence_status": "INDEPENDENT",
-        "policy_context_current": "CURRENT"
+        "evaluation_mode": "ENFORCE"
       },
       "expected_disposition": "BLOCK",
+      "expected_decision_authority": "AUTHORITATIVE",
       "expected_primary_reason": "APPROVAL_STALE",
       "expected_complete_reason_codes": [
         "APPROVAL_STALE"
@@ -1251,9 +1550,12 @@
         ],
         "decision_ref_disposition": "BLOCK",
         "decision_ref_primary_reason_code": "APPROVAL_STALE",
+        "decision_authority": "AUTHORITATIVE",
         "active_policy_mutated": false
       },
-      "owner_decision_pending": "OD-S1A-002"
+      "owner_decisions_pending": [
+        "OD-S1A-002"
+      ]
     },
     {
       "case_id": "GC-S1-024",
@@ -1267,26 +1569,31 @@
         "candidate_binding_current": "CURRENT",
         "repository_snapshot_current": "CURRENT",
         "repository_release_clean": "CLEAN",
-        "required_evidence_ids": [
+        "policy_context_current": "CURRENT",
+        "required_requirement_ids": [
           "req-compileall",
           "req-pytest-full"
         ],
-        "verified_evidence_ids": [
+        "satisfied_requirement_ids": [
           "req-compileall",
           "req-pytest-full"
         ],
-        "missing_evidence_ids": [],
-        "invalid_evidence_ids": [],
+        "invalid_requirement_ids": [],
+        "missing_requirement_ids": [],
+        "rejected_evidence_ids": [],
+        "invalid_provenance_evidence_ids": [],
         "unexpected_evidence_ids": [],
-        "evidence_context_coherent": true,
+        "evidence_context_status": "COHERENT",
         "evidence_context_violations": [],
-        "scope_status": "IN_SCOPE",
+        "scope_status": "COMPLIANT",
         "approval_status": "VALID",
         "authority_status": "INVALID",
+        "verifier_identity_status": "ATTESTED",
         "verifier_independence_status": "INDEPENDENT",
-        "policy_context_current": "CURRENT"
+        "evaluation_mode": "ENFORCE"
       },
       "expected_disposition": "BLOCK",
+      "expected_decision_authority": "AUTHORITATIVE",
       "expected_primary_reason": "AUTHORITY_INVALID",
       "expected_complete_reason_codes": [
         "AUTHORITY_INVALID"
@@ -1298,9 +1605,10 @@
         ],
         "decision_ref_disposition": "BLOCK",
         "decision_ref_primary_reason_code": "AUTHORITY_INVALID",
+        "decision_authority": "AUTHORITATIVE",
         "active_policy_mutated": false
       },
-      "owner_decision_pending": null,
+      "owner_decisions_pending": [],
       "notes": "Only the pure evaluator may author a decision whose digest verifies (spec §7). All other facts in this case are green on purpose: green facts cannot launder a forged decision."
     },
     {
@@ -1314,26 +1622,31 @@
         "candidate_binding_current": "CURRENT",
         "repository_snapshot_current": "CURRENT",
         "repository_release_clean": "CLEAN",
-        "required_evidence_ids": [
+        "policy_context_current": "CURRENT",
+        "required_requirement_ids": [
           "req-compileall",
           "req-pytest-full"
         ],
-        "verified_evidence_ids": [
+        "satisfied_requirement_ids": [
           "req-compileall",
           "req-pytest-full"
         ],
-        "missing_evidence_ids": [],
-        "invalid_evidence_ids": [],
+        "invalid_requirement_ids": [],
+        "missing_requirement_ids": [],
+        "rejected_evidence_ids": [],
+        "invalid_provenance_evidence_ids": [],
         "unexpected_evidence_ids": [],
-        "evidence_context_coherent": true,
+        "evidence_context_status": "COHERENT",
         "evidence_context_violations": [],
         "scope_status": "VIOLATION",
         "approval_status": "VALID",
         "authority_status": "VALID",
+        "verifier_identity_status": "ATTESTED",
         "verifier_independence_status": "INDEPENDENT",
-        "policy_context_current": "CURRENT"
+        "evaluation_mode": "ENFORCE"
       },
       "expected_disposition": "BLOCK",
+      "expected_decision_authority": "AUTHORITATIVE",
       "expected_primary_reason": "SCOPE_VIOLATION",
       "expected_complete_reason_codes": [
         "SCOPE_VIOLATION"
@@ -1346,12 +1659,829 @@
         ],
         "decision_ref_disposition": "BLOCK",
         "decision_ref_primary_reason_code": "SCOPE_VIOLATION",
+        "decision_authority": "AUTHORITATIVE",
         "feedback_verdict": "DISAGREE",
+        "feedback_category_code": "DISPUTED_BLOCK",
         "active_policy_mutated": false,
         "decision_digest_unchanged": true
       },
-      "owner_decision_pending": null,
+      "owner_decisions_pending": [],
       "notes": "Feedback is a signal, not ground truth. dislike -> automatic policy weakening and negative feedback -> direct active-policy mutation are forbidden."
+    },
+    {
+      "case_id": "GC-S1-026",
+      "summary": "Rejected-only requirement: a required id has at least one bound rejected record (benign rejection, e.g. EXECUTION_FAILED) and no valid verified record: REQUIRED_EVIDENCE_INVALID, disjoint from missing.",
+      "tags": [
+        "rejected_only_requirement"
+      ],
+      "policy_input_facts": {
+        "task_context_current": "CURRENT",
+        "candidate_binding_current": "CURRENT",
+        "repository_snapshot_current": "CURRENT",
+        "repository_release_clean": "CLEAN",
+        "policy_context_current": "CURRENT",
+        "required_requirement_ids": [
+          "req-compileall",
+          "req-pytest-full"
+        ],
+        "satisfied_requirement_ids": [
+          "req-compileall"
+        ],
+        "invalid_requirement_ids": [
+          "req-pytest-full"
+        ],
+        "missing_requirement_ids": [],
+        "rejected_evidence_ids": [
+          "ev-pytest-try1"
+        ],
+        "invalid_provenance_evidence_ids": [],
+        "unexpected_evidence_ids": [],
+        "evidence_context_status": "COHERENT",
+        "evidence_context_violations": [],
+        "scope_status": "COMPLIANT",
+        "approval_status": "VALID",
+        "authority_status": "VALID",
+        "verifier_identity_status": "ATTESTED",
+        "verifier_independence_status": "INDEPENDENT",
+        "evaluation_mode": "ENFORCE"
+      },
+      "expected_disposition": "BLOCK",
+      "expected_decision_authority": "AUTHORITATIVE",
+      "expected_primary_reason": "REQUIRED_EVIDENCE_INVALID",
+      "expected_complete_reason_codes": [
+        "REQUIRED_EVIDENCE_INVALID"
+      ],
+      "override_class": "POLICY_EXCEPTION_REQUIRED",
+      "expected_event_assertions": {
+        "emits": [
+          "CHANGEGATE_EVALUATION_COMPLETED"
+        ],
+        "decision_ref_disposition": "BLOCK",
+        "decision_ref_primary_reason_code": "REQUIRED_EVIDENCE_INVALID",
+        "decision_authority": "AUTHORITATIVE",
+        "active_policy_mutated": false
+      },
+      "owner_decisions_pending": []
+    },
+    {
+      "case_id": "GC-S1-027",
+      "summary": "Invalid-provenance record bound to a required id with no valid record: both the requirement-level failure and the record-level integrity failure emit; provenance integrity outranks the requirement outcome.",
+      "tags": [
+        "invalid_provenance_required"
+      ],
+      "policy_input_facts": {
+        "task_context_current": "CURRENT",
+        "candidate_binding_current": "CURRENT",
+        "repository_snapshot_current": "CURRENT",
+        "repository_release_clean": "CLEAN",
+        "policy_context_current": "CURRENT",
+        "required_requirement_ids": [
+          "req-compileall",
+          "req-pytest-full"
+        ],
+        "satisfied_requirement_ids": [
+          "req-compileall"
+        ],
+        "invalid_requirement_ids": [
+          "req-pytest-full"
+        ],
+        "missing_requirement_ids": [],
+        "rejected_evidence_ids": [
+          "ev-pytest-bad"
+        ],
+        "invalid_provenance_evidence_ids": [
+          "ev-pytest-bad"
+        ],
+        "unexpected_evidence_ids": [],
+        "evidence_context_status": "COHERENT",
+        "evidence_context_violations": [],
+        "scope_status": "COMPLIANT",
+        "approval_status": "VALID",
+        "authority_status": "VALID",
+        "verifier_identity_status": "ATTESTED",
+        "verifier_independence_status": "INDEPENDENT",
+        "evaluation_mode": "ENFORCE"
+      },
+      "expected_disposition": "BLOCK",
+      "expected_decision_authority": "AUTHORITATIVE",
+      "expected_primary_reason": "EVIDENCE_PROVENANCE_INVALID",
+      "expected_complete_reason_codes": [
+        "EVIDENCE_PROVENANCE_INVALID",
+        "REQUIRED_EVIDENCE_INVALID"
+      ],
+      "override_class": "NOT_OVERRIDEABLE",
+      "expected_event_assertions": {
+        "emits": [
+          "CHANGEGATE_EVALUATION_COMPLETED"
+        ],
+        "decision_ref_disposition": "BLOCK",
+        "decision_ref_primary_reason_code": "EVIDENCE_PROVENANCE_INVALID",
+        "decision_authority": "AUTHORITATIVE",
+        "active_policy_mutated": false
+      },
+      "owner_decisions_pending": []
+    },
+    {
+      "case_id": "GC-S1-028",
+      "summary": "Task context stale: the governing TaskContract digest no longer matches the candidate's bound contract digest (the contract was amended after the candidate was produced).",
+      "tags": [
+        "task_context_stale"
+      ],
+      "policy_input_facts": {
+        "task_context_current": "STALE",
+        "candidate_binding_current": "CURRENT",
+        "repository_snapshot_current": "CURRENT",
+        "repository_release_clean": "CLEAN",
+        "policy_context_current": "CURRENT",
+        "required_requirement_ids": [
+          "req-compileall",
+          "req-pytest-full"
+        ],
+        "satisfied_requirement_ids": [
+          "req-compileall",
+          "req-pytest-full"
+        ],
+        "invalid_requirement_ids": [],
+        "missing_requirement_ids": [],
+        "rejected_evidence_ids": [],
+        "invalid_provenance_evidence_ids": [],
+        "unexpected_evidence_ids": [],
+        "evidence_context_status": "COHERENT",
+        "evidence_context_violations": [],
+        "scope_status": "COMPLIANT",
+        "approval_status": "VALID",
+        "authority_status": "VALID",
+        "verifier_identity_status": "ATTESTED",
+        "verifier_independence_status": "INDEPENDENT",
+        "evaluation_mode": "ENFORCE"
+      },
+      "expected_disposition": "BLOCK",
+      "expected_decision_authority": "AUTHORITATIVE",
+      "expected_primary_reason": "TASK_CONTEXT_STALE",
+      "expected_complete_reason_codes": [
+        "TASK_CONTEXT_STALE"
+      ],
+      "override_class": "POLICY_EXCEPTION_REQUIRED",
+      "expected_event_assertions": {
+        "emits": [
+          "CHANGEGATE_EVALUATION_COMPLETED"
+        ],
+        "decision_ref_disposition": "BLOCK",
+        "decision_ref_primary_reason_code": "TASK_CONTEXT_STALE",
+        "decision_authority": "AUTHORITATIVE",
+        "active_policy_mutated": false
+      },
+      "owner_decisions_pending": []
+    },
+    {
+      "case_id": "GC-S1-029",
+      "summary": "Scope not evaluated: the changed-file set or scope check could not be performed at all. This is missing mandatory context, not reviewable uncertainty.",
+      "tags": [
+        "mandatory_context_rule",
+        "scope_not_evaluated"
+      ],
+      "policy_input_facts": {
+        "task_context_current": "CURRENT",
+        "candidate_binding_current": "CURRENT",
+        "repository_snapshot_current": "CURRENT",
+        "repository_release_clean": "CLEAN",
+        "policy_context_current": "CURRENT",
+        "required_requirement_ids": [
+          "req-compileall",
+          "req-pytest-full"
+        ],
+        "satisfied_requirement_ids": [
+          "req-compileall",
+          "req-pytest-full"
+        ],
+        "invalid_requirement_ids": [],
+        "missing_requirement_ids": [],
+        "rejected_evidence_ids": [],
+        "invalid_provenance_evidence_ids": [],
+        "unexpected_evidence_ids": [],
+        "evidence_context_status": "COHERENT",
+        "evidence_context_violations": [],
+        "scope_status": "NOT_EVALUATED",
+        "approval_status": "VALID",
+        "authority_status": "VALID",
+        "verifier_identity_status": "ATTESTED",
+        "verifier_independence_status": "INDEPENDENT",
+        "evaluation_mode": "ENFORCE"
+      },
+      "expected_disposition": "BLOCK",
+      "expected_decision_authority": "AUTHORITATIVE",
+      "expected_primary_reason": "REQUIRED_CONTEXT_INCOMPLETE",
+      "expected_complete_reason_codes": [
+        "REQUIRED_CONTEXT_INCOMPLETE"
+      ],
+      "override_class": "NOT_OVERRIDEABLE",
+      "expected_event_assertions": {
+        "emits": [
+          "CHANGEGATE_EVALUATION_COMPLETED"
+        ],
+        "decision_ref_disposition": "BLOCK",
+        "decision_ref_primary_reason_code": "REQUIRED_CONTEXT_INCOMPLETE",
+        "decision_authority": "AUTHORITATIVE",
+        "active_policy_mutated": false
+      },
+      "owner_decisions_pending": []
+    },
+    {
+      "case_id": "GC-S1-030",
+      "summary": "Unexpected but valid verified evidence beyond the requirement set: recorded as diagnostic record ids; never satisfies anything and (recommended, PENDING_OWNER_DECISION OD-S1A-006) never blocks alone.",
+      "tags": [
+        "unexpected_valid_evidence"
+      ],
+      "policy_input_facts": {
+        "task_context_current": "CURRENT",
+        "candidate_binding_current": "CURRENT",
+        "repository_snapshot_current": "CURRENT",
+        "repository_release_clean": "CLEAN",
+        "policy_context_current": "CURRENT",
+        "required_requirement_ids": [
+          "req-compileall",
+          "req-pytest-full"
+        ],
+        "satisfied_requirement_ids": [
+          "req-compileall",
+          "req-pytest-full"
+        ],
+        "invalid_requirement_ids": [],
+        "missing_requirement_ids": [],
+        "rejected_evidence_ids": [],
+        "invalid_provenance_evidence_ids": [],
+        "unexpected_evidence_ids": [
+          "ev-extra-benchmark"
+        ],
+        "evidence_context_status": "COHERENT",
+        "evidence_context_violations": [],
+        "scope_status": "COMPLIANT",
+        "approval_status": "VALID",
+        "authority_status": "VALID",
+        "verifier_identity_status": "ATTESTED",
+        "verifier_independence_status": "INDEPENDENT",
+        "evaluation_mode": "ENFORCE"
+      },
+      "expected_disposition": "ELIGIBLE_TO_MERGE_UNDER_POLICY",
+      "expected_decision_authority": "AUTHORITATIVE",
+      "expected_primary_reason": null,
+      "expected_complete_reason_codes": [],
+      "override_class": "NOT_APPLICABLE",
+      "expected_event_assertions": {
+        "emits": [
+          "CHANGEGATE_EVALUATION_COMPLETED"
+        ],
+        "decision_ref_disposition": "ELIGIBLE_TO_MERGE_UNDER_POLICY",
+        "decision_ref_primary_reason_code": null,
+        "decision_authority": "AUTHORITATIVE",
+        "active_policy_mutated": false
+      },
+      "owner_decisions_pending": [
+        "OD-S1A-006"
+      ]
+    },
+    {
+      "case_id": "GC-S1-031",
+      "summary": "SHADOW-mode eligible counterfactual: identical green facts evaluated in SHADOW mode produce the same disposition and reasons but decision_authority=ADVISORY_ONLY; no consumer may treat it as authorization.",
+      "tags": [
+        "shadow_eligible_counterfactual",
+        "shadow_mode"
+      ],
+      "policy_input_facts": {
+        "task_context_current": "CURRENT",
+        "candidate_binding_current": "CURRENT",
+        "repository_snapshot_current": "CURRENT",
+        "repository_release_clean": "CLEAN",
+        "policy_context_current": "CURRENT",
+        "required_requirement_ids": [
+          "req-compileall",
+          "req-pytest-full"
+        ],
+        "satisfied_requirement_ids": [
+          "req-compileall",
+          "req-pytest-full"
+        ],
+        "invalid_requirement_ids": [],
+        "missing_requirement_ids": [],
+        "rejected_evidence_ids": [],
+        "invalid_provenance_evidence_ids": [],
+        "unexpected_evidence_ids": [],
+        "evidence_context_status": "COHERENT",
+        "evidence_context_violations": [],
+        "scope_status": "COMPLIANT",
+        "approval_status": "VALID",
+        "authority_status": "VALID",
+        "verifier_identity_status": "ATTESTED",
+        "verifier_independence_status": "INDEPENDENT",
+        "evaluation_mode": "SHADOW"
+      },
+      "expected_disposition": "ELIGIBLE_TO_MERGE_UNDER_POLICY",
+      "expected_decision_authority": "ADVISORY_ONLY",
+      "expected_primary_reason": null,
+      "expected_complete_reason_codes": [],
+      "override_class": "NOT_APPLICABLE",
+      "expected_event_assertions": {
+        "emits": [
+          "CHANGEGATE_EVALUATION_COMPLETED"
+        ],
+        "decision_ref_disposition": "ELIGIBLE_TO_MERGE_UNDER_POLICY",
+        "decision_ref_primary_reason_code": null,
+        "decision_authority": "ADVISORY_ONLY",
+        "active_policy_mutated": false
+      },
+      "owner_decisions_pending": []
+    },
+    {
+      "case_id": "GC-S1-032",
+      "summary": "SHADOW-mode block counterfactual: dirty repository in SHADOW mode computes the same BLOCK and reasons, still ADVISORY_ONLY.",
+      "tags": [
+        "shadow_block_counterfactual",
+        "shadow_mode"
+      ],
+      "policy_input_facts": {
+        "task_context_current": "CURRENT",
+        "candidate_binding_current": "CURRENT",
+        "repository_snapshot_current": "CURRENT",
+        "repository_release_clean": "DIRTY",
+        "policy_context_current": "CURRENT",
+        "required_requirement_ids": [
+          "req-compileall",
+          "req-pytest-full"
+        ],
+        "satisfied_requirement_ids": [
+          "req-compileall",
+          "req-pytest-full"
+        ],
+        "invalid_requirement_ids": [],
+        "missing_requirement_ids": [],
+        "rejected_evidence_ids": [],
+        "invalid_provenance_evidence_ids": [],
+        "unexpected_evidence_ids": [],
+        "evidence_context_status": "COHERENT",
+        "evidence_context_violations": [],
+        "scope_status": "COMPLIANT",
+        "approval_status": "VALID",
+        "authority_status": "VALID",
+        "verifier_identity_status": "ATTESTED",
+        "verifier_independence_status": "INDEPENDENT",
+        "evaluation_mode": "SHADOW"
+      },
+      "expected_disposition": "BLOCK",
+      "expected_decision_authority": "ADVISORY_ONLY",
+      "expected_primary_reason": "RELEASE_STATE_NOT_CLEAN",
+      "expected_complete_reason_codes": [
+        "RELEASE_STATE_NOT_CLEAN"
+      ],
+      "override_class": "POLICY_EXCEPTION_REQUIRED",
+      "expected_event_assertions": {
+        "emits": [
+          "CHANGEGATE_EVALUATION_COMPLETED"
+        ],
+        "decision_ref_disposition": "BLOCK",
+        "decision_ref_primary_reason_code": "RELEASE_STATE_NOT_CLEAN",
+        "decision_authority": "ADVISORY_ONLY",
+        "active_policy_mutated": false
+      },
+      "owner_decisions_pending": []
+    },
+    {
+      "case_id": "GC-S1-033",
+      "summary": "Simultaneous BLOCK and REVIEW_REQUIRED reasons: dirty repository plus semantic scope uncertainty. BLOCK dominates; the reviewable reason stays in the complete set.",
+      "tags": [
+        "mixed_block_and_review"
+      ],
+      "policy_input_facts": {
+        "task_context_current": "CURRENT",
+        "candidate_binding_current": "CURRENT",
+        "repository_snapshot_current": "CURRENT",
+        "repository_release_clean": "DIRTY",
+        "policy_context_current": "CURRENT",
+        "required_requirement_ids": [
+          "req-compileall",
+          "req-pytest-full"
+        ],
+        "satisfied_requirement_ids": [
+          "req-compileall",
+          "req-pytest-full"
+        ],
+        "invalid_requirement_ids": [],
+        "missing_requirement_ids": [],
+        "rejected_evidence_ids": [],
+        "invalid_provenance_evidence_ids": [],
+        "unexpected_evidence_ids": [],
+        "evidence_context_status": "COHERENT",
+        "evidence_context_violations": [],
+        "scope_status": "SEMANTIC_UNCERTAIN",
+        "approval_status": "VALID",
+        "authority_status": "VALID",
+        "verifier_identity_status": "ATTESTED",
+        "verifier_independence_status": "INDEPENDENT",
+        "evaluation_mode": "ENFORCE"
+      },
+      "expected_disposition": "BLOCK",
+      "expected_decision_authority": "AUTHORITATIVE",
+      "expected_primary_reason": "RELEASE_STATE_NOT_CLEAN",
+      "expected_complete_reason_codes": [
+        "RELEASE_STATE_NOT_CLEAN",
+        "SCOPE_UNCERTAIN"
+      ],
+      "override_class": "POLICY_EXCEPTION_REQUIRED",
+      "expected_event_assertions": {
+        "emits": [
+          "CHANGEGATE_EVALUATION_COMPLETED"
+        ],
+        "decision_ref_disposition": "BLOCK",
+        "decision_ref_primary_reason_code": "RELEASE_STATE_NOT_CLEAN",
+        "decision_authority": "AUTHORITATIVE",
+        "active_policy_mutated": false
+      },
+      "owner_decisions_pending": []
+    },
+    {
+      "case_id": "GC-S1-034",
+      "summary": "Valid and benign-rejected records for the same requirement: the valid record satisfies the requirement; the benign rejection (e.g. a failed earlier attempt) is diagnostic only and emits no reason.",
+      "tags": [
+        "valid_and_rejected_same_requirement"
+      ],
+      "policy_input_facts": {
+        "task_context_current": "CURRENT",
+        "candidate_binding_current": "CURRENT",
+        "repository_snapshot_current": "CURRENT",
+        "repository_release_clean": "CLEAN",
+        "policy_context_current": "CURRENT",
+        "required_requirement_ids": [
+          "req-compileall",
+          "req-pytest-full"
+        ],
+        "satisfied_requirement_ids": [
+          "req-compileall",
+          "req-pytest-full"
+        ],
+        "invalid_requirement_ids": [],
+        "missing_requirement_ids": [],
+        "rejected_evidence_ids": [
+          "ev-pytest-try1"
+        ],
+        "invalid_provenance_evidence_ids": [],
+        "unexpected_evidence_ids": [],
+        "evidence_context_status": "COHERENT",
+        "evidence_context_violations": [],
+        "scope_status": "COMPLIANT",
+        "approval_status": "VALID",
+        "authority_status": "VALID",
+        "verifier_identity_status": "ATTESTED",
+        "verifier_independence_status": "INDEPENDENT",
+        "evaluation_mode": "ENFORCE"
+      },
+      "expected_disposition": "ELIGIBLE_TO_MERGE_UNDER_POLICY",
+      "expected_decision_authority": "AUTHORITATIVE",
+      "expected_primary_reason": null,
+      "expected_complete_reason_codes": [],
+      "override_class": "NOT_APPLICABLE",
+      "expected_event_assertions": {
+        "emits": [
+          "CHANGEGATE_EVALUATION_COMPLETED"
+        ],
+        "decision_ref_disposition": "ELIGIBLE_TO_MERGE_UNDER_POLICY",
+        "decision_ref_primary_reason_code": null,
+        "decision_authority": "AUTHORITATIVE",
+        "active_policy_mutated": false
+      },
+      "owner_decisions_pending": [],
+      "notes": "required=satisfied; the rejected record id remains visible in diagnostics for audit."
+    },
+    {
+      "case_id": "GC-S1-035",
+      "summary": "Valid record satisfies the requirement BUT an invalid-provenance record was also presented for the same context: the requirement is satisfied, yet the independently confirmed provenance corruption still emits its factual integrity reason.",
+      "tags": [
+        "satisfied_with_invalid_provenance"
+      ],
+      "policy_input_facts": {
+        "task_context_current": "CURRENT",
+        "candidate_binding_current": "CURRENT",
+        "repository_snapshot_current": "CURRENT",
+        "repository_release_clean": "CLEAN",
+        "policy_context_current": "CURRENT",
+        "required_requirement_ids": [
+          "req-compileall",
+          "req-pytest-full"
+        ],
+        "satisfied_requirement_ids": [
+          "req-compileall",
+          "req-pytest-full"
+        ],
+        "invalid_requirement_ids": [],
+        "missing_requirement_ids": [],
+        "rejected_evidence_ids": [
+          "ev-pytest-forged"
+        ],
+        "invalid_provenance_evidence_ids": [
+          "ev-pytest-forged"
+        ],
+        "unexpected_evidence_ids": [],
+        "evidence_context_status": "COHERENT",
+        "evidence_context_violations": [],
+        "scope_status": "COMPLIANT",
+        "approval_status": "VALID",
+        "authority_status": "VALID",
+        "verifier_identity_status": "ATTESTED",
+        "verifier_independence_status": "INDEPENDENT",
+        "evaluation_mode": "ENFORCE"
+      },
+      "expected_disposition": "BLOCK",
+      "expected_decision_authority": "AUTHORITATIVE",
+      "expected_primary_reason": "EVIDENCE_PROVENANCE_INVALID",
+      "expected_complete_reason_codes": [
+        "EVIDENCE_PROVENANCE_INVALID"
+      ],
+      "override_class": "NOT_OVERRIDEABLE",
+      "expected_event_assertions": {
+        "emits": [
+          "CHANGEGATE_EVALUATION_COMPLETED"
+        ],
+        "decision_ref_disposition": "BLOCK",
+        "decision_ref_primary_reason_code": "EVIDENCE_PROVENANCE_INVALID",
+        "decision_authority": "AUTHORITATIVE",
+        "active_policy_mutated": false
+      },
+      "owner_decisions_pending": []
+    },
+    {
+      "case_id": "GC-S1-036",
+      "summary": "Verifier identity absent: no verifier identity reference at all. Missing mandatory context (BLOCK), never reviewable uncertainty (spec §15; OD-S1A-003 boundary input).",
+      "tags": [
+        "mandatory_context_rule",
+        "verifier_identity_absent"
+      ],
+      "policy_input_facts": {
+        "task_context_current": "CURRENT",
+        "candidate_binding_current": "CURRENT",
+        "repository_snapshot_current": "CURRENT",
+        "repository_release_clean": "CLEAN",
+        "policy_context_current": "CURRENT",
+        "required_requirement_ids": [
+          "req-compileall",
+          "req-pytest-full"
+        ],
+        "satisfied_requirement_ids": [
+          "req-compileall",
+          "req-pytest-full"
+        ],
+        "invalid_requirement_ids": [],
+        "missing_requirement_ids": [],
+        "rejected_evidence_ids": [],
+        "invalid_provenance_evidence_ids": [],
+        "unexpected_evidence_ids": [],
+        "evidence_context_status": "COHERENT",
+        "evidence_context_violations": [],
+        "scope_status": "COMPLIANT",
+        "approval_status": "VALID",
+        "authority_status": "VALID",
+        "verifier_identity_status": "ABSENT",
+        "verifier_independence_status": "UNKNOWN",
+        "evaluation_mode": "ENFORCE"
+      },
+      "expected_disposition": "BLOCK",
+      "expected_decision_authority": "AUTHORITATIVE",
+      "expected_primary_reason": "REQUIRED_CONTEXT_INCOMPLETE",
+      "expected_complete_reason_codes": [
+        "REQUIRED_CONTEXT_INCOMPLETE"
+      ],
+      "override_class": "NOT_OVERRIDEABLE",
+      "expected_event_assertions": {
+        "emits": [
+          "CHANGEGATE_EVALUATION_COMPLETED"
+        ],
+        "decision_ref_disposition": "BLOCK",
+        "decision_ref_primary_reason_code": "REQUIRED_CONTEXT_INCOMPLETE",
+        "decision_authority": "AUTHORITATIVE",
+        "active_policy_mutated": false
+      },
+      "owner_decisions_pending": [
+        "OD-S1A-003"
+      ]
+    },
+    {
+      "case_id": "GC-S1-037",
+      "summary": "Verifier identity present but unattested while claiming independence: an unattested identity cannot ground an independence claim, so independence is unknown and reviewable (recommended; PENDING_OWNER_DECISION OD-S1A-003).",
+      "tags": [
+        "verifier_identity_present_unattested"
+      ],
+      "policy_input_facts": {
+        "task_context_current": "CURRENT",
+        "candidate_binding_current": "CURRENT",
+        "repository_snapshot_current": "CURRENT",
+        "repository_release_clean": "CLEAN",
+        "policy_context_current": "CURRENT",
+        "required_requirement_ids": [
+          "req-compileall",
+          "req-pytest-full"
+        ],
+        "satisfied_requirement_ids": [
+          "req-compileall",
+          "req-pytest-full"
+        ],
+        "invalid_requirement_ids": [],
+        "missing_requirement_ids": [],
+        "rejected_evidence_ids": [],
+        "invalid_provenance_evidence_ids": [],
+        "unexpected_evidence_ids": [],
+        "evidence_context_status": "COHERENT",
+        "evidence_context_violations": [],
+        "scope_status": "COMPLIANT",
+        "approval_status": "VALID",
+        "authority_status": "VALID",
+        "verifier_identity_status": "PRESENT_UNATTESTED",
+        "verifier_independence_status": "INDEPENDENT",
+        "evaluation_mode": "ENFORCE"
+      },
+      "expected_disposition": "REVIEW_REQUIRED",
+      "expected_decision_authority": "AUTHORITATIVE",
+      "expected_primary_reason": "VERIFIER_INDEPENDENCE_UNKNOWN",
+      "expected_complete_reason_codes": [
+        "VERIFIER_INDEPENDENCE_UNKNOWN"
+      ],
+      "override_class": "HUMAN_REVIEW_RESOLVABLE",
+      "expected_event_assertions": {
+        "emits": [
+          "CHANGEGATE_EVALUATION_COMPLETED"
+        ],
+        "decision_ref_disposition": "REVIEW_REQUIRED",
+        "decision_ref_primary_reason_code": "VERIFIER_INDEPENDENCE_UNKNOWN",
+        "decision_authority": "AUTHORITATIVE",
+        "active_policy_mutated": false
+      },
+      "owner_decisions_pending": [
+        "OD-S1A-003"
+      ]
+    },
+    {
+      "case_id": "GC-S1-038",
+      "summary": "Strict-deployment trace persistence: an eligible ENFORCE decision whose RELEASE to consumers is gated on successful EvaluationTrace persistence in strict mode. The disposition itself is unaffected; the release-gating rule is PENDING_OWNER_DECISION OD-S1A-004.",
+      "tags": [
+        "trace_persistence_gating"
+      ],
+      "policy_input_facts": {
+        "task_context_current": "CURRENT",
+        "candidate_binding_current": "CURRENT",
+        "repository_snapshot_current": "CURRENT",
+        "repository_release_clean": "CLEAN",
+        "policy_context_current": "CURRENT",
+        "required_requirement_ids": [
+          "req-compileall",
+          "req-pytest-full"
+        ],
+        "satisfied_requirement_ids": [
+          "req-compileall",
+          "req-pytest-full"
+        ],
+        "invalid_requirement_ids": [],
+        "missing_requirement_ids": [],
+        "rejected_evidence_ids": [],
+        "invalid_provenance_evidence_ids": [],
+        "unexpected_evidence_ids": [],
+        "evidence_context_status": "COHERENT",
+        "evidence_context_violations": [],
+        "scope_status": "COMPLIANT",
+        "approval_status": "VALID",
+        "authority_status": "VALID",
+        "verifier_identity_status": "ATTESTED",
+        "verifier_independence_status": "INDEPENDENT",
+        "evaluation_mode": "ENFORCE"
+      },
+      "expected_disposition": "ELIGIBLE_TO_MERGE_UNDER_POLICY",
+      "expected_decision_authority": "AUTHORITATIVE",
+      "expected_primary_reason": null,
+      "expected_complete_reason_codes": [],
+      "override_class": "NOT_APPLICABLE",
+      "expected_event_assertions": {
+        "emits": [
+          "CHANGEGATE_EVALUATION_COMPLETED"
+        ],
+        "decision_ref_disposition": "ELIGIBLE_TO_MERGE_UNDER_POLICY",
+        "decision_ref_primary_reason_code": null,
+        "decision_authority": "AUTHORITATIVE",
+        "active_policy_mutated": false,
+        "strict_mode_release_requires_trace_persistence": "PENDING_OWNER_DECISION"
+      },
+      "owner_decisions_pending": [
+        "OD-S1A-004"
+      ]
+    },
+    {
+      "case_id": "GC-S1-039",
+      "summary": "Policy exception lifecycle: a SCOPE_VIOLATION block whose only sanctioned relief is a separately authorized, versioned, attributable, time-bounded policy exception recorded as CHANGEGATE_REVIEW_OVERRIDDEN with a mandatory expiry. Exception authority and expiry policy are PENDING_OWNER_DECISION OD-S1A-005.",
+      "tags": [
+        "policy_exception_lifecycle"
+      ],
+      "policy_input_facts": {
+        "task_context_current": "CURRENT",
+        "candidate_binding_current": "CURRENT",
+        "repository_snapshot_current": "CURRENT",
+        "repository_release_clean": "CLEAN",
+        "policy_context_current": "CURRENT",
+        "required_requirement_ids": [
+          "req-compileall",
+          "req-pytest-full"
+        ],
+        "satisfied_requirement_ids": [
+          "req-compileall",
+          "req-pytest-full"
+        ],
+        "invalid_requirement_ids": [],
+        "missing_requirement_ids": [],
+        "rejected_evidence_ids": [],
+        "invalid_provenance_evidence_ids": [],
+        "unexpected_evidence_ids": [],
+        "evidence_context_status": "COHERENT",
+        "evidence_context_violations": [],
+        "scope_status": "VIOLATION",
+        "approval_status": "VALID",
+        "authority_status": "VALID",
+        "verifier_identity_status": "ATTESTED",
+        "verifier_independence_status": "INDEPENDENT",
+        "evaluation_mode": "ENFORCE"
+      },
+      "expected_disposition": "BLOCK",
+      "expected_decision_authority": "AUTHORITATIVE",
+      "expected_primary_reason": "SCOPE_VIOLATION",
+      "expected_complete_reason_codes": [
+        "SCOPE_VIOLATION"
+      ],
+      "override_class": "POLICY_EXCEPTION_REQUIRED",
+      "expected_event_assertions": {
+        "emits": [
+          "CHANGEGATE_EVALUATION_COMPLETED",
+          "CHANGEGATE_REVIEW_OVERRIDDEN"
+        ],
+        "decision_ref_disposition": "BLOCK",
+        "decision_ref_primary_reason_code": "SCOPE_VIOLATION",
+        "decision_authority": "AUTHORITATIVE",
+        "active_policy_mutated": false,
+        "override_requires_exception_ref_and_expiry": true,
+        "exception_authority": "PENDING_OWNER_DECISION"
+      },
+      "owner_decisions_pending": [
+        "OD-S1A-005"
+      ]
+    },
+    {
+      "case_id": "GC-S1-040",
+      "summary": "Two coexisting integrity failures: invalid caller authority AND foreign-task evidence. The recommended rank table selects AUTHORITY_INVALID as primary; the exact precedence between coexisting integrity failures is PENDING_OWNER_DECISION OD-S1A-007.",
+      "tags": [
+        "dual_integrity_failure"
+      ],
+      "policy_input_facts": {
+        "task_context_current": "CURRENT",
+        "candidate_binding_current": "CURRENT",
+        "repository_snapshot_current": "CURRENT",
+        "repository_release_clean": "CLEAN",
+        "policy_context_current": "CURRENT",
+        "required_requirement_ids": [
+          "req-compileall",
+          "req-pytest-full"
+        ],
+        "satisfied_requirement_ids": [],
+        "invalid_requirement_ids": [],
+        "missing_requirement_ids": [
+          "req-compileall",
+          "req-pytest-full"
+        ],
+        "rejected_evidence_ids": [],
+        "invalid_provenance_evidence_ids": [],
+        "unexpected_evidence_ids": [],
+        "evidence_context_status": "INCOHERENT",
+        "evidence_context_violations": [
+          "TASK_MISMATCH"
+        ],
+        "scope_status": "COMPLIANT",
+        "approval_status": "VALID",
+        "authority_status": "INVALID",
+        "verifier_identity_status": "ATTESTED",
+        "verifier_independence_status": "INDEPENDENT",
+        "evaluation_mode": "ENFORCE"
+      },
+      "expected_disposition": "BLOCK",
+      "expected_decision_authority": "AUTHORITATIVE",
+      "expected_primary_reason": "AUTHORITY_INVALID",
+      "expected_complete_reason_codes": [
+        "AUTHORITY_INVALID",
+        "EVIDENCE_TASK_MISMATCH",
+        "REQUIRED_EVIDENCE_MISSING"
+      ],
+      "override_class": "NOT_OVERRIDEABLE",
+      "expected_event_assertions": {
+        "emits": [
+          "CHANGEGATE_EVALUATION_COMPLETED"
+        ],
+        "decision_ref_disposition": "BLOCK",
+        "decision_ref_primary_reason_code": "AUTHORITY_INVALID",
+        "decision_authority": "AUTHORITATIVE",
+        "active_policy_mutated": false
+      },
+      "owner_decisions_pending": [
+        "OD-S1A-007"
+      ]
     }
   ]
 }

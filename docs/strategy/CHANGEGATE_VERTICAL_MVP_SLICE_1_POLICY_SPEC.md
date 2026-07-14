@@ -7,6 +7,8 @@ Technical Author: Claude Code Fable 5
 Independent Verification: PENDING
 Baseline: 3e72e93bfac8da2ecdb7960a55ae0357135eb61e
 Production Implementation: NOT_STARTED
+Revision: R1 (contract completeness, replay and evaluation hardening after Sol High
+review of candidate 07bc5b7be43a275c8484cdc633579ecfda657ffd)
 
 > This document is a specification-and-contract artifact only. It defines the deterministic
 > merge-eligibility policy contract for ChangeGate Slice 1. It implements nothing. It remains
@@ -22,17 +24,17 @@ ADR-001 (accepted) establishes ChangeGate as the first commercial wedge and reco
 durable obligations:
 
 - **FOLLOWUP-P0-9B1-002 / ADR-001 §7** — structural evidence verification
-  (`EvidenceVerificationResult.accepted == True`, `VerificationStatus.VERIFIED`) is **not**
-  authorization to merge. Merge eligibility is a separate policy decision.
+  (`EvidenceVerificationResult.accepted == True`, `VerificationStatus.VERIFIED`) is
+  never authorization to merge. Merge eligibility is a separate policy decision.
 - **FOLLOWUP-P0-9B1-001 / ADR-001 §8** — a schema-valid **empty** verification bundle is
-  **not** evidence completeness. When evidence is required, the policy layer must enforce
+  never evidence completeness. When evidence is required, the policy layer must enforce
   `required evidence ⊆ verified evidence`.
 
 The current repository has two evidence generations inside `agent_core.build_harness`:
 
 - **Slice 0 (P0-9A "ChangeGate Lite")** — `evaluate_change_gate()` over legacy
   `CommandEvidence` (command-string matching, commit-bound, exit-0). Its `PASS` is a
-  structural scope/evidence check, not merge authority.
+  structural scope/evidence check, never merge authority.
 - **P0-9B1 domain layer** — `CandidateBinding`, `RepositorySnapshot`, `CommandRequirement`,
   `EvidenceProvenance`, `CollectedCommandEvidence`, `EvidenceVerificationResult`,
   `VerifiedCommandEvidence`, `EvidenceVerificationBundle`, `EvidenceRunRecord`, plus pure
@@ -40,34 +42,49 @@ The current repository has two evidence generations inside `agent_core.build_har
   end-to-end (no adapter from verified bundles into an eligibility decision).
 
 This slice (1A) defines the **policy contract** that will sit on top of the P0-9B1 layer:
-what `ELIGIBLE_TO_MERGE_UNDER_POLICY` means, exactly which facts it requires, its
-deterministic reason-code precedence, its evaluation trace, its product event schema, and
-its golden evaluation matrix. Slice 1-A2 (a later, separately approved task) implements the
-pure evaluator.
+what `ELIGIBLE_TO_MERGE_UNDER_POLICY` means, exactly which facts it requires, how those
+facts are derivable from existing contracts, its deterministic reason-code precedence, its
+evaluation trace and replay identity, its product event schema, and its golden evaluation
+matrix. Slice 1-A2 (a later, separately approved task) implements the pure evaluator;
+Slice 1-A3 implements fact derivation and adapters.
+
+R1 incorporates the independent Sol High review findings (H-01 … H-04, M-01 … M-03): the
+fact contract is now total and derivable through an explicit derivation seam, evidence
+accounting is disjoint, decision identity is separated from trace identity, the event
+schema enforces per-event linkage, and the golden matrix covers every closed reason code.
 
 ## 2. Goals
 
 1. Separate **structural evidence verification** from **merge eligibility under policy**,
    permanently and testably.
-2. Define the narrowest deterministic **policy input** built from existing P0-9B1 contracts.
-3. Define a typed **eligibility facts** layer between raw evidence and policy evaluation.
-4. Define the authoritative **output contract** (disposition + reason codes + digests).
-5. Define a stable, machine-readable **reason-code taxonomy** with deterministic precedence.
-6. Define **required-evidence completeness** semantics (`required ⊆ verified`, stable
-   requirement identifiers, never inferred from prose or display text).
-7. Define **authority and override boundaries**: facts cannot be voted away by an approval.
-8. Define a replayable **EvaluationTrace** returned as pure data.
-9. Define the **product event schema** linking decisions to real user/CI/merge outcomes.
-10. Define **privacy and redaction** rules for everything the policy emits.
-11. Provide **golden evaluation cases** executable against the future evaluator.
+2. Define two explicit application seams: **fact derivation** (A3) over existing
+   contracts, and a **pure evaluator** (A2) over validated facts only.
+3. Define a typed, **total** eligibility-facts layer: every declared fact state maps to
+   exactly one reason (or none), one disposition class, and one override class.
+4. Define the authoritative **output contract** (disposition + decision authority +
+   reason codes + digests) with replay-stable decision identity.
+5. Define a stable, machine-readable **reason-code taxonomy** with deterministic
+   precedence.
+6. Define **disjoint required-evidence accounting** (`satisfied ∪ invalid ∪ missing`,
+   pairwise disjoint) with stable requirement identifiers, never inferred from prose.
+7. Define **authority and override boundaries**: facts cannot be voted away by an
+   approval.
+8. Define a replayable **EvaluationTrace** returned as pure data, with `decision_digest`
+   independent of trace/request identity and a separate `trace_digest`.
+9. Define the **product event schema** with per-event-type conditional linkage from
+   decisions to real user/CI/merge outcomes.
+10. Define **privacy and redaction** rules, including bounded reference grammars.
+11. Provide **golden evaluation cases** covering every closed reason code and every
+    owner-decision-controlled boundary, validated by an independent test-only oracle.
 
 ## 3. Non-Goals
 
-- No production eligibility evaluator is implemented in Slice 1A.
+- No production eligibility evaluator is implemented in Slice 1A/R1.
 - No Git/subprocess/filesystem/network adapters; no GitHub App; no auto-merge.
 - No Coordinator, Project Control, LLM integration, notification, dashboard, or vector DB.
 - No change to any `agent_core/**` production file, contract, or schema version.
-- No resolution of deferred owner decisions OD-G1-001 … OD-G1-007 (§24).
+- No resolution of deferred owner decisions OD-G1-001 … OD-G1-007 (§24) or
+  OD-S1A-001 … OD-S1A-007 (§25).
 - No canonical kernel models (`ActorIdentity`, `ApprovalRecord`, `DecisionRecord`,
   `AuditEvent` remain `FUTURE_CONCEPT_NOT_IMPLEMENTED` per ADR-003).
 - No self-improvement implementation; §20 records the controlled boundary only.
@@ -78,7 +95,7 @@ Inventory taken against baseline `3e72e93` (all statuses verified by reading the
 
 | Symbol | Module | Semantic meaning | Authority level | Slice 1 reuse |
 | --- | --- | --- | --- | --- |
-| `TaskContract` | `build_harness/contracts.py` | What may change, what must be proven, what needs a human | Declarative source of requirements | REUSED as policy input (referenced by `contract_digest`) |
+| `TaskContract` | `build_harness/contracts.py` | What may change, what must be proven, what needs a human | Declarative source of requirements | REUSED as derivation input (referenced by `contract_digest`) |
 | `ContractValidationError` | `contracts.py` | Fail-loud contract validation | — | reused indirectly |
 | `CommandEvidence` | `build_harness/change_gate.py` | Legacy Slice-0 evidence claim (command string + exit code + commit) | None (claim) | NOT reused for Slice 1 policy input; superseded by the P0-9B1 bundle. Remains for ChangeGate Lite |
 | `ChangeGateInput` / `ChangeGateDecision` / `Finding` | `change_gate.py` | Structural scope/evidence gate; PASS/REVIEW_REQUIRED/BLOCK | Structural gate only — its `PASS` is NOT merge authority (ADR-001 §7) | Reused as an upstream structural check; its finding vocabulary informs scope facts. Not the eligibility output |
@@ -90,133 +107,226 @@ Inventory taken against baseline `3e72e93` (all statuses verified by reading the
 | `RepositorySnapshot` | `repository_models.py` | Immutable observed repository state incl. `is_release_clean` | Observed fact | REUSED verbatim |
 | `CommandRequirement` | `repository_models.py` | One required command with **stable `requirement_id`** and canonical `command_digest` | Requirement declaration | REUSED verbatim — the stable requirement identifier of §11 |
 | `candidate_snapshot_mismatches` | `repository_models.py` | Single coherent-context rule | — | REUSED as the freshness primitive (§12) |
-| `EvidenceProvenance` / `CollectedCommandEvidence` | `build_harness/provenance.py` | Collected command evidence bound to task/run/candidate/snapshots | Collected fact | REUSED verbatim |
-| `EvidenceVerificationResult` / `VerificationStatus` | `provenance.py` | Structural verification result; `accepted ⇔ VERIFIED`; exclusive rejected-context matrix | Structural verification only | REUSED verbatim; source of invalid-evidence facts |
-| `VerifiedCommandEvidence` | `provenance.py` | Digest-bound proof that one requirement was structurally verified for one candidate | Structural verification only | REUSED verbatim; source of verified-evidence facts |
-| `EvidenceVerificationBundle` | `provenance.py` | One coherent verified/rejected set for one task+candidate, digest-sealed | Structural verification only | REUSED verbatim as the policy input's verification bundle |
-| `EvidenceVerificationRequest` / `EvidenceRunRecord` | `build_harness/ports.py` | Pure verifier request; immutable run membership record | — | REUSED upstream of policy; run membership backs `EVIDENCE_RUN_MISMATCH` facts |
-| `Outcome` / `Unit` / `StorageError` | `ports.py` | Typed success/failure | — | REUSED by future A2 application layer |
+| `EvidenceProvenance` / `CollectedCommandEvidence` | `build_harness/provenance.py` | Collected command evidence bound to task/run/candidate/snapshots; **carries `requirement_id` for every record, including records later rejected** | Collected fact | REUSED verbatim — the requirement binding for rejected records (§5, §6) |
+| `EvidenceVerificationResult` / `VerificationStatus` | `provenance.py` | Structural verification result; `accepted ⇔ VERIFIED`; a REJECTED result must carry `matched_requirement_id=None` (`provenance.py` §rejected rules) | Structural verification only | REUSED verbatim; source of rejected/invalid record facts. Its requirement binding for rejected records comes from collected provenance, never from the result |
+| `VerifiedCommandEvidence` | `provenance.py` | Digest-bound proof that one requirement was structurally verified for one candidate | Structural verification only | REUSED verbatim; source of satisfied-requirement facts |
+| `EvidenceVerificationBundle` | `provenance.py` | One coherent verified/rejected set for one task+candidate, digest-sealed | Structural verification only | REUSED verbatim inside the derivation input |
+| `EvidenceRunRecord` | `build_harness/ports.py` | Immutable link binding one task/run/candidate to its collected evidence (with provenance) and optional bundle | — | REUSED verbatim as a **derivation input** (§5): it is the only place a rejected record's `requirement_id` remains reachable |
+| `EvidenceVerificationRequest` | `ports.py` | Pure verifier request | — | REUSED upstream of policy |
+| `Outcome` / `Unit` / `StorageError` | `ports.py` | Typed success/failure | — | REUSED by future A3 application layer |
 | `canonical_digest` / canonical validators | `build_harness/canonical.py` | Deterministic canonical JSON digests | — | REUSED for input/decision/trace digests |
 | `NextAction` / `recommend_next_action` | `build_harness/next_action.py` | Operator recommendation | None | Unchanged consumer |
 | CLI | `build_harness/cli.py` | Standalone JSON path (ADR-002 §8) | — | Unchanged in 1A; A2 proposes a subcommand |
-| Approval / actor identity | NOT_FOUND in `build_harness` (searched; `agent_core/safety/approval.py` is runtime tool-gating, a different domain per ADR-003) | — | — | MISSING → new application facts (§5, §14) |
+| Approval / actor identity | NOT_FOUND in ChangeGate scope (`agent_core/safety/approval.py` is runtime tool-gating, a different domain per ADR-003; `ProcessGuardInput.human_approved` is an unattributed bool) | — | — | MISSING → new application facts (§5, §14) |
 | Policy version / policy digest | NOT_FOUND (searched `policy_version`, `reason_code`, `ActorIdentity`, `ApprovalRecord` across `agent_core`) | — | — | MISSING → new `PolicyContextFact` (§5) |
 | Event / trace / evaluation / audit models | NOT_FOUND (`AuditEvent`, `DecisionRecord` are `FUTURE_CONCEPT_NOT_IMPLEMENTED` per ADR-003 §5) | — | — | MISSING → schema artifact + trace contract (§18, §19), no kernel model minted |
 
-**Duplicate-model rule honored:** no concept above gets a second canonical model. Every new
-concept in §5 is a ChangeGate-local application DTO, explicitly non-canonical, and is
+**Load-bearing integration constraint (Sol High H-01):** a rejected
+`EvidenceVerificationResult` is required by existing code to have
+`matched_requirement_id is None`. The only stable requirement binding for a rejected
+record is `EvidenceProvenance.requirement_id`, reachable through the run's
+`CollectedCommandEvidence` inside `EvidenceRunRecord`. Therefore fact derivation (A3)
+consumes the run record; the pure evaluator (A2) consumes only derived facts. Neither
+existing model is modified.
+
+**Duplicate-model rule honored:** no concept above gets a second canonical model. Every
+new concept in §5 is a ChangeGate-local application DTO, explicitly non-canonical, and is
 adapter-suppliable without modifying any existing domain model.
 
 ## 5. Policy Input
 
-The future pure evaluator consumes exactly one immutable input,
-**`MergeEligibilityPolicyInput`** (application DTO, ChangeGate-scoped, to be defined in A2 —
-named here as a contract, not created as code). It embeds no Git execution, filesystem,
-network, clock, or model call; every field is an explicit fact supplied by the caller.
+R1 separates two application seams so every declared fact is derivable from declared
+input, and the pure evaluator never touches storage or raw evidence:
 
-| Field | Type (existing unless marked NEW) | Binds |
+```
+existing contracts
+→ A3 fact derivation   (EligibilityFactDerivationInput → EligibilityFacts)
+→ validated EligibilityFacts
+→ A2 pure evaluator    (MergeEligibilityPolicyInput → decision + trace data)
+→ decision + deterministic policy trace data
+```
+
+### 5.1 EligibilityFactDerivationInput (A3)
+
+An immutable application DTO referencing the existing raw contracts needed to derive
+every fact in §6. Pure derivation: no Git, filesystem, network, clock, or model call.
+
+| Field | Type (existing unless marked NEW) | Supplies |
 | --- | --- | --- |
-| `task_id` | validated task id | task identity |
-| `contract` | `TaskContract` | the governing contract |
-| `contract_digest` | sha256 over `contract_to_dict` canonical payload | contract version identity; must equal `candidate_binding.contract_digest` |
+| `contract` | `TaskContract` | requirement declarations, approval-required actions, scope patterns |
+| `contract_digest` | sha256 over the canonical `contract_to_dict` payload | task-contract version identity; compared with `candidate_binding.contract_digest` for `task_context_current` |
 | `candidate_binding` | `CandidateBinding` | candidate identity |
-| `current_snapshot` | `RepositorySnapshot` | current repository state at evaluation time |
-| `required_evidence` | `tuple[CommandRequirement, ...]` | required evidence declarations with stable `requirement_id`s |
-| `verification_bundle` | `EvidenceVerificationBundle` | structural verification facts |
-| `run_id` | validated generated id | the evidence run the bundle claims (cross-checked against `EvidenceRunRecord` by the application layer) |
-| `scope_facts` | NEW `ScopeFacts` | scope evaluation facts (§13): status + violating/uncertain paths |
-| `approval_fact` | NEW `ApprovalFact \| None` | approval facts (§14) |
-| `authority_fact` | NEW `AuthorityFact` | caller authority facts (§14) |
-| `verifier_fact` | NEW `VerifierIndependenceFact` | verifier identity + independence facts (§15) |
-| `policy_context` | NEW `PolicyContextFact` | policy id, version, digest, currency |
-| `evaluation_mode` | NEW enum `ENFORCE \| SHADOW` | SHADOW evaluations never authorize anything and must be marked in trace and events |
+| `current_snapshot` | `RepositorySnapshot` | freshness + release cleanliness |
+| `evidence_run_record` | `EvidenceRunRecord` | collected evidence with `EvidenceProvenance.requirement_id` for EVERY record — the requirement binding for rejected/invalid records that the verification result itself must not carry |
+| `verification_bundle` | `EvidenceVerificationBundle` | verified/rejected structural results; must be the run record's bundle (identity-checked during derivation) |
+| `required_evidence` | `tuple[CommandRequirement, ...]` | required requirement ids |
+| `scope_inputs` | NEW `ScopeInputs` (changed files + contract patterns, or the ChangeGate Lite decision they produced) | `scope_status` |
+| `approval_inputs` | NEW `ApprovalFact \| None` | `approval_status` |
+| `authority_inputs` | NEW `AuthorityFact` | `authority_status` |
+| `verifier_identity_inputs` | NEW `VerifierIdentityFact` | `verifier_identity_status` + `verifier_independence_status` |
+| `policy_context` | NEW `PolicyContextFact` | `policy_context_current`, policy id/version/digest |
+
+### 5.2 MergeEligibilityPolicyInput (A2)
+
+The pure evaluator's only input. It must not require A2 to inspect storage, raw collected
+evidence, the filesystem, or any external system.
+
+| Field | Content |
+| --- | --- |
+| `task_id` | validated task id |
+| `contract_digest` | exact task-contract binding |
+| `candidate_binding` | `CandidateBinding` (or its canonical digest plus identifying fields) |
+| `policy_context` | policy id, version, digest |
+| `facts` | validated `EligibilityFacts` (§6) — the complete typed fact set |
+| `evaluation_mode` | `ENFORCE \| SHADOW` (deterministic input, digest-covered) |
+| `evaluator_version` | evaluator software identity |
+
+`input_digest` is the canonical digest of this structure (it is deterministic policy
+input only — it contains no trace/request/timestamp identity, see §18).
 
 For every proposed NEW concept:
 
 | New concept | Why existing contracts are insufficient | ChangeGate-specific? | Temporary application DTO? | Adapter-suppliable without touching canonical models? |
 | --- | --- | --- | --- | --- |
-| `ScopeFacts` | `ChangeGateDecision` mixes scope findings with legacy evidence findings and is an output, not a typed input fact | Yes | Yes — until a kernel policy vocabulary exists | Yes — derived from `evaluate_change_gate` findings + contract paths |
-| `ApprovalFact` | No approval record exists anywhere; `ProcessGuardInput.human_approved` is an unattributed bool with no target binding or freshness; `ApprovalRecord` is kernel-future (ADR-003) and may not be minted here (OD-G1-004 adjacent) | Yes (binds to candidate digests) | Yes — explicitly NOT the canonical `ApprovalRecord` | Yes — application layer records approvals and supplies the fact |
-| `AuthorityFact` | No `ActorIdentity` exists; `Capability` ownership is unresolved (OD-G1-003) — so authority is expressed as opaque actor/role references + validity status, never as a capability model | Yes | Yes | Yes |
-| `VerifierIndependenceFact` | `EvidenceVerificationResult.verifier_version` identifies software, not actor independence | Yes | Yes | Yes |
+| `EligibilityFactDerivationInput` | No existing type aggregates contract + candidate + run record + bundle + approval/authority/policy context for derivation | Yes | Yes | Yes — composed from existing contracts |
+| `ScopeInputs` / `ScopeFacts` | `ChangeGateDecision` mixes scope findings with legacy evidence findings and is an output, not a typed input fact | Yes | Yes — until a kernel policy vocabulary exists | Yes — derived from `evaluate_change_gate` findings + contract paths |
+| `ApprovalFact` | No approval record exists anywhere; `ProcessGuardInput.human_approved` is an unattributed bool with no target binding or freshness; `ApprovalRecord` is kernel-future (ADR-003) and may not be minted here (OD-G1-004 adjacent) | Yes (binds to candidate digests) | Yes — explicitly NOT the canonical `ApprovalRecord` | Yes |
+| `AuthorityFact` | No `ActorIdentity` exists; `Capability` ownership is unresolved (OD-G1-003) — authority is expressed as opaque actor/role references + validity status, never as a capability model | Yes | Yes | Yes |
+| `VerifierIdentityFact` | `EvidenceVerificationResult.verifier_version` identifies software, not actor identity/attestation/independence; OD-S1A-003 needs identity presence as a fact | Yes | Yes | Yes |
 | `PolicyContextFact` | No policy-version concept exists in the repository | Yes | Yes | Yes |
 | `EligibilityFacts` (§6) | Nothing maps raw contracts to policy-consumable facts | Yes | Yes | Yes — pure derivation |
 | `MergeEligibilityDecision` (§7) | `ChangeGateDecision` is structural and its vocabulary (`PASS`) is explicitly not merge authority | Yes | Yes | n/a (evaluator output) |
 | `EvaluationTrace` (§18) | No trace/audit model exists | Yes (v1) | Yes — `AuditEvent` remains kernel-future | n/a (evaluator output) |
 
-Deferred-decision guard: none of these DTOs generalizes `TaskContract` (OD-G1-001), creates
-a second `TaskState` or overloads execution status with eligibility (OD-G1-002 — eligibility
-is a separate decision object, exactly the three-axis separation of ADR-003 §9), claims the
-canonical `Capability` (OD-G1-003), or mints a canonical `DecisionRecord` (OD-G1-004).
+Deferred-decision guard: none of these DTOs generalizes `TaskContract` (OD-G1-001),
+creates a second `TaskState` or overloads execution status with eligibility (OD-G1-002 —
+eligibility is a separate decision object, exactly the three-axis separation of ADR-003
+§9), claims the canonical `Capability` (OD-G1-003), or mints a canonical `DecisionRecord`
+(OD-G1-004).
 
 ## 6. Eligibility Facts
 
 A typed conceptual layer, **`EligibilityFacts`**, sits between raw contracts and policy
-evaluation. The A2 application vertical derives these facts deterministically from the
-policy input; the evaluator consumes only facts. **Facts grant no authority by themselves**
-— they are observations; only the policy maps facts to a disposition.
+evaluation. A3 derives these facts deterministically from `EligibilityFactDerivationInput`;
+the evaluator consumes only facts. **Facts grant no authority by themselves** — they are
+observations; only the policy maps facts to a disposition.
 
-| Fact | Values | Derived from |
-| --- | --- | --- |
-| `task_context_current` | `CURRENT \| STALE \| UNKNOWN` | contract digest vs candidate `contract_digest`; task id consistency across input |
-| `candidate_binding_current` | `CURRENT \| STALE \| UNKNOWN` | `candidate_snapshot_mismatches(candidate, current_snapshot)` restricted to commit/tree/changed-files divergence in the same repository (§12) |
-| `repository_snapshot_current` | `CURRENT \| MISMATCH \| UNKNOWN` | repository/object-format/base divergence (§12) |
-| `repository_release_clean` | `CLEAN \| DIRTY \| UNKNOWN` | `current_snapshot.is_release_clean` |
-| `required_evidence_ids` | sorted unique tuple of `requirement_id` | `required_evidence` declarations |
-| `verified_evidence_ids` | sorted unique tuple of `requirement_id` | bundle `verified` entries bound to this task/run/candidate |
-| `missing_evidence_ids` | sorted unique tuple | `required − verified` (§11) |
-| `invalid_evidence_ids` | sorted unique tuple | required ids whose only matching records were rejected (§11) |
-| `unexpected_evidence_ids` | sorted unique tuple | `verified − required` (§11; treatment PENDING_OWNER_DECISION OD-S1A-006) |
-| `evidence_context_coherent` | `true \| false \| UNKNOWN` + violation tags `TASK_MISMATCH, RUN_MISMATCH, CANDIDATE_MISMATCH, PROVENANCE_INVALID, DUPLICATE_IDENTITY` | bundle/run-record identity checks (the P0-9B1 models make most incoherence unrepresentable; the facts layer records any presented incoherence instead of trusting the caller) |
-| `scope_status` | `IN_SCOPE \| VIOLATION \| UNCERTAIN \| UNKNOWN` | `ScopeFacts` (§13) |
-| `approval_status` | `VALID \| MISSING \| STALE \| UNKNOWN` | `ApprovalFact` (§14) |
-| `authority_status` | `VALID \| INVALID \| UNKNOWN` | `AuthorityFact` (§14) |
-| `verifier_independence_status` | `INDEPENDENT \| NOT_INDEPENDENT \| UNKNOWN` | `VerifierIndependenceFact` (§15) |
-| `policy_context_current` | `CURRENT \| STALE \| UNKNOWN` | `PolicyContextFact` |
+### 6.1 Requirement accounting facts (requirement identifiers — disjoint)
 
-**Mandatory-context rule (explicit, per golden case 19):** every fact above is mandatory.
-`UNKNOWN` never defaults toward eligibility. `UNKNOWN` on an integrity fact
-(`task_context_current`, `candidate_binding_current`, `repository_snapshot_current`,
-`repository_release_clean`, `evidence_context_coherent`, `authority_status`,
-`policy_context_current`, or any evidence id set underivable) emits
-`REQUIRED_CONTEXT_INCOMPLETE` → BLOCK. `UNKNOWN` on the two policy-designated semantic facts
-maps to their dedicated reviewable codes: `scope_status = UNKNOWN` → `SCOPE_UNCERTAIN`
-(REVIEW_REQUIRED) and `verifier_independence_status = UNKNOWN` →
-`VERIFIER_INDEPENDENCE_UNKNOWN` (REVIEW_REQUIRED, boundary PENDING_OWNER_DECISION
-OD-S1A-003). `approval_status = UNKNOWN` is treated as `MISSING` (recommended; disposition
-of missing approval itself is PENDING_OWNER_DECISION OD-S1A-001).
+Matching key: `CommandRequirement.requirement_id` on the declaration side;
+`VerifiedCommandEvidence.requirement_id` (satisfied) or the rejected record's
+`EvidenceProvenance.requirement_id` reachable via the run record (invalid).
+
+| Fact | Definition |
+| --- | --- |
+| `required_requirement_ids` | sorted unique requirement ids declared required |
+| `satisfied_requirement_ids` | required ids with ≥ 1 valid verified record bound to the current task, run and candidate |
+| `invalid_requirement_ids` | required ids with NO valid verified record but ≥ 1 **bound** rejected/invalid record (bound = the record's provenance identifies this task, run, candidate, and this requirement id) |
+| `missing_requirement_ids` | required ids with neither a valid verified record nor a bound rejected/invalid record |
+
+**Partition invariant (normative, executably checked):**
+
+```
+required_requirement_ids = satisfied ∪ invalid ∪ missing        (pairwise disjoint)
+```
+
+`missing` explicitly EXCLUDES `invalid`: a required id with a bound rejected record is
+invalid, not missing; a foreign or unbound record leaves the requirement missing.
+
+### 6.2 Evidence record diagnostics (evidence-record identifiers — never requirement ids)
+
+| Fact | Definition |
+| --- | --- |
+| `rejected_evidence_ids` | record ids of bound rejected results (any rejection status) |
+| `invalid_provenance_evidence_ids` | ⊆ rejected: record ids whose rejection is a provenance/schema/collector integrity failure (`INVALID_PROVENANCE`, `UNSUPPORTED_SCHEMA`, `UNSUPPORTED_COLLECTOR`) |
+| `unexpected_evidence_ids` | record ids of VALID verified records whose `requirement_id` is not in `required_requirement_ids` |
+
+Requirement ids and evidence-record ids are never interchangeable: `*_requirement_ids`
+sets hold requirement ids; `*_evidence_ids` sets hold record ids.
+
+### 6.3 Context, scope, approval, authority, verifier and mode facts
+
+| Fact | Values |
+| --- | --- |
+| `task_context_current` | `CURRENT \| STALE \| UNKNOWN` (contract digest vs candidate `contract_digest`) |
+| `candidate_binding_current` | `CURRENT \| STALE \| UNKNOWN` (§12) |
+| `repository_snapshot_current` | `CURRENT \| MISMATCH \| UNKNOWN` (§12) |
+| `repository_release_clean` | `CLEAN \| DIRTY \| UNKNOWN` |
+| `policy_context_current` | `CURRENT \| STALE \| UNKNOWN` |
+| `evidence_context_status` | `COHERENT \| INCOHERENT \| UNKNOWN`, with `evidence_context_violations` tags (`TASK_MISMATCH, RUN_MISMATCH, CANDIDATE_MISMATCH, PROVENANCE_INVALID, DUPLICATE_IDENTITY`); violations non-empty ⇔ INCOHERENT |
+| `scope_status` | `COMPLIANT \| VIOLATION \| SEMANTIC_UNCERTAIN \| NOT_EVALUATED` (§13) |
+| `approval_status` | `VALID \| MISSING \| STALE \| UNKNOWN` (§14) |
+| `authority_status` | `VALID \| INVALID \| UNKNOWN` (§14) |
+| `verifier_identity_status` | `ATTESTED \| PRESENT_UNATTESTED \| ABSENT \| INVALID` (§15) |
+| `verifier_independence_status` | `INDEPENDENT \| NOT_INDEPENDENT \| UNKNOWN` (§15) |
+| `evaluation_mode` | `ENFORCE \| SHADOW` (§8) |
+
+### 6.4 Total fact-state mapping (normative)
+
+Every declared fact state maps to **no reason or exactly one reason code**, and through
+the taxonomy (§9) to exactly one disposition class and one override class. No state is
+left to the A2 implementer. The machine-readable normative form of this table is
+`fact_state_mapping` in `data/evals/changegate_merge_eligibility_golden_cases.json`;
+artifact tests prove there is no unmapped fact state and that the independent oracle
+reproduces every golden expectation from it.
+
+| Fact | Value → reason |
+| --- | --- |
+| `task_context_current` | CURRENT → none; STALE → `TASK_CONTEXT_STALE`; UNKNOWN → `REQUIRED_CONTEXT_INCOMPLETE` |
+| `candidate_binding_current` | CURRENT → none; STALE → `CANDIDATE_STALE`; UNKNOWN → `REQUIRED_CONTEXT_INCOMPLETE` |
+| `repository_snapshot_current` | CURRENT → none; MISMATCH → `REPOSITORY_CONTEXT_MISMATCH`; UNKNOWN → `REQUIRED_CONTEXT_INCOMPLETE` |
+| `repository_release_clean` | CLEAN → none; DIRTY → `RELEASE_STATE_NOT_CLEAN`; UNKNOWN → `REQUIRED_CONTEXT_INCOMPLETE` |
+| `policy_context_current` | CURRENT → none; STALE → `POLICY_CONTEXT_STALE`; UNKNOWN → `REQUIRED_CONTEXT_INCOMPLETE` |
+| `evidence_context_status` | COHERENT → none; INCOHERENT → none directly (each violation tag emits its exact integrity code); UNKNOWN → `REQUIRED_CONTEXT_INCOMPLETE` |
+| violation tag | TASK_MISMATCH → `EVIDENCE_TASK_MISMATCH`; RUN_MISMATCH → `EVIDENCE_RUN_MISMATCH`; CANDIDATE_MISMATCH → `EVIDENCE_CANDIDATE_MISMATCH`; PROVENANCE_INVALID → `EVIDENCE_PROVENANCE_INVALID`; DUPLICATE_IDENTITY → `EVIDENCE_DUPLICATE_IDENTITY` |
+| `scope_status` | COMPLIANT → none; VIOLATION → `SCOPE_VIOLATION`; SEMANTIC_UNCERTAIN → `SCOPE_UNCERTAIN`; NOT_EVALUATED → `REQUIRED_CONTEXT_INCOMPLETE` |
+| `approval_status` | VALID → none; MISSING → `APPROVAL_MISSING`; STALE → `APPROVAL_STALE`; UNKNOWN → `APPROVAL_MISSING` (treated as missing; disposition pending OD-S1A-001) |
+| `authority_status` | VALID → none; INVALID → `AUTHORITY_INVALID`; UNKNOWN → `REQUIRED_CONTEXT_INCOMPLETE` |
+| verifier pair | governed by the ordered first-match rule in §15 (total over all 12 combinations) |
+| `evaluation_mode` | ENFORCE → none; SHADOW → none (mode changes `decision_authority`, §8, never the reason set) |
+| `missing_requirement_ids` non-empty | → `REQUIRED_EVIDENCE_MISSING` |
+| `invalid_requirement_ids` non-empty | → `REQUIRED_EVIDENCE_INVALID` |
+| `invalid_provenance_evidence_ids` non-empty | → `EVIDENCE_PROVENANCE_INVALID` |
+| `rejected_evidence_ids` non-empty | → no reason (diagnostic; a benign rejection such as a failed earlier attempt does not taint a satisfied requirement) |
+| `unexpected_evidence_ids` non-empty | → no reason (diagnostic; recommended treatment PENDING_OWNER_DECISION OD-S1A-006) |
+
+The complete reason set of an evaluation is exactly the deduplicated union of the codes
+emitted by this mapping over the supplied facts. `UNKNOWN` never defaults toward
+eligibility.
 
 ## 7. Policy Output
 
-The evaluator returns exactly one immutable **`MergeEligibilityDecision`**:
+The evaluator returns exactly one immutable **`MergeEligibilityDecision`** plus one
+**`EvaluationTrace`** (§18), both as data.
 
-| Field | Authoritative? | Meaning |
-| --- | --- | --- |
-| `disposition` | **AUTHORITATIVE** | exactly one of §8's three values |
-| `primary_reason_code` | **AUTHORITATIVE** | deterministic primary reason (`null` only when eligible) |
-| `complete_reason_codes` | **AUTHORITATIVE** | every independently confirmed reason, sorted lexicographically |
-| `blocking_reason_codes` | **AUTHORITATIVE** | subset of complete set with effective disposition BLOCK |
-| `review_reason_codes` | **AUTHORITATIVE** | subset with effective disposition REVIEW_REQUIRED |
-| `required_evidence_ids` | **AUTHORITATIVE** | requirement ids the policy demanded |
-| `verified_evidence_ids` | **AUTHORITATIVE** | requirement ids satisfied by verified evidence |
-| `missing_evidence_ids` | **AUTHORITATIVE** | required ids with no verified record |
-| `invalid_evidence_ids` | **AUTHORITATIVE** | required ids whose only matching records were rejected |
-| `task_id`, `candidate_binding` | **AUTHORITATIVE** | what this decision is about |
-| `policy_id`, `policy_version`, `policy_digest` | **AUTHORITATIVE** | which policy decided |
-| `evaluation_trace_id` | **AUTHORITATIVE** | link to the trace (§18) |
-| `evaluator_version` | **AUTHORITATIVE** | evaluator software identity |
-| `evaluation_mode` | **AUTHORITATIVE** | ENFORCE or SHADOW; SHADOW never authorizes |
-| `input_digest` | **AUTHORITATIVE** | canonical digest of the full policy input |
-| `decision_digest` | **AUTHORITATIVE** | canonical digest over all authoritative fields excluding itself (same self-excluding pattern as `VerifiedCommandEvidence`) |
-| `unexpected_evidence_ids` | diagnostic | never blocks alone in v1 (OD-S1A-006) |
-| `explanations` | diagnostic | user-facing prose per reason code; NEVER the reason identity (§9) |
-| `fact_summary` | diagnostic | the `EligibilityFacts` values used |
+| Field | Authoritative? | Digest-covered? | Meaning |
+| --- | --- | --- | --- |
+| `disposition` | **AUTHORITATIVE** | yes | exactly one of §8's three values |
+| `decision_authority` | **AUTHORITATIVE** | yes | `AUTHORITATIVE \| ADVISORY_ONLY` (§8) |
+| `primary_reason_code` | **AUTHORITATIVE** | yes | deterministic primary reason (`null` only when the complete set is empty) |
+| `complete_reason_codes` | **AUTHORITATIVE** | yes | every independently confirmed reason, sorted lexicographically |
+| `blocking_reason_codes` / `review_reason_codes` | **AUTHORITATIVE** | yes | partition of the complete set by effective disposition |
+| `required_requirement_ids` / `satisfied_requirement_ids` / `invalid_requirement_ids` / `missing_requirement_ids` | **AUTHORITATIVE** | yes | disjoint requirement accounting (§6.1) |
+| `rejected_evidence_ids` / `invalid_provenance_evidence_ids` / `unexpected_evidence_ids` | diagnostic (deterministic) | yes | record-id diagnostics (§6.2); deterministic, therefore digest-covered |
+| `task_id`, `contract_digest`, `candidate_binding` | **AUTHORITATIVE** | yes | what this decision is about |
+| `policy_id`, `policy_version`, `policy_digest` | **AUTHORITATIVE** | yes | which policy decided |
+| `evaluation_mode` | **AUTHORITATIVE** | yes | ENFORCE or SHADOW |
+| `evaluator_version` | **AUTHORITATIVE** | yes | evaluator software identity |
+| `input_digest` | **AUTHORITATIVE** | yes | canonical digest of `MergeEligibilityPolicyInput` |
+| `decision_digest` | **AUTHORITATIVE** | self-excluding | canonical digest over every digest-covered field above, excluding itself (same self-excluding pattern as `VerifiedCommandEvidence`) |
+| `explanations` | diagnostic | **no** | user-facing prose per reason code; NEVER the reason identity (§9); excluded from the digest so prose can improve without a policy bump |
+| `fact_summary` | diagnostic | no | the `EligibilityFacts` values used (also present in the trace) |
+
+The decision **contains no trace, evaluation, or request identifier** and no timestamp or
+latency. The trace links to the decision through `decision_digest` (§18), never the
+reverse. This is what makes the replay identity of §18 hold.
 
 **Authority boundary:** only the pure evaluator may author a `MergeEligibilityDecision`
 whose `decision_digest` verifies. Any consumer (ProcessGuard-equivalent, CLI, CI adapter)
 must recompute and verify `decision_digest` and reject a decision that fails, exactly as
-`validate_change_gate_decision` refuses a hand-constructed PASS today (golden case 24).
-A caller-authored "eligible" object without a verifying digest is `AUTHORITY_INVALID`.
+`validate_change_gate_decision` refuses a hand-constructed PASS today (golden case
+GC-S1-024). A caller-authored "eligible" object without a verifying digest is
+`AUTHORITY_INVALID`.
 
 ## 8. Disposition Semantics
 
@@ -230,10 +340,28 @@ The authoritative disposition is exactly one of:
   uncertainty requires a human review to resolve (§17).
 - `BLOCK` — at least one blocking reason exists. Fail-closed.
 
+### Decision authority (SHADOW semantics)
+
+A separate authoritative field, `decision_authority`, carries whether the decision can
+authorize anything:
+
+```
+ENFORCE mode → decision_authority = AUTHORITATIVE
+SHADOW  mode → decision_authority = ADVISORY_ONLY
+```
+
+SHADOW computes the same counterfactual disposition and complete reason set as ENFORCE
+over the same facts — but it **never grants merge authorization**. A consumer must not
+infer authorization from an eligible disposition when
+`decision_authority = ADVISORY_ONLY`; any downstream gate must check BOTH
+`disposition == ELIGIBLE_TO_MERGE_UNDER_POLICY` AND
+`decision_authority == AUTHORITATIVE`. Golden cases GC-S1-031/032 pin both counterfactual
+directions.
+
 Forbidden output terms (ADR-001 §5): `SAFE_TO_MERGE` and `VERIFIED_AND_MERGE` must never
-appear as output values; structural `PASS` is never an authority result; `accepted=True` is
-never merge authorization. A genuinely eligible decision has an **empty** complete reason
-set — mirroring today's rule that a genuine ChangeGate `PASS` has no findings.
+appear as output values; structural `PASS` is never an authority result; `accepted=True`
+is never merge authorization. A genuinely eligible decision has an **empty** complete
+reason set — mirroring today's rule that a genuine ChangeGate `PASS` has no findings.
 
 Decision rule (total, deterministic):
 
@@ -241,48 +369,55 @@ Decision rule (total, deterministic):
 if blocking_reason_codes non-empty        → BLOCK
 elif review_reason_codes non-empty        → REVIEW_REQUIRED
 else                                      → ELIGIBLE_TO_MERGE_UNDER_POLICY
+decision_authority = AUTHORITATIVE iff evaluation_mode == ENFORCE else ADVISORY_ONLY
 ```
 
 ## 9. Reason-Code Taxonomy
 
-Reason codes are stable machine-readable identifiers matching `^[A-Z][A-Z0-9_]*$`. The code
-IS the canonical identity; user-facing prose lives only in diagnostic `explanations` and may
-change without a policy version bump. Codes are never renamed in place — a semantic change
-requires a new code and a policy version bump.
+Reason codes are stable machine-readable identifiers matching `^[A-Z][A-Z0-9_]*$`. The
+code IS the canonical identity; user-facing prose lives only in diagnostic `explanations`
+and may change without a policy version bump. Codes are never renamed in place — a
+semantic change requires a new code and a policy version bump.
 
-Legend — Category: INTEGRITY (identity/authority/provenance facts), FRESHNESS,
-EVIDENCE, REPO_STATE, SCOPE, APPROVAL, INDEPENDENCE, CONTEXT. Kind: FACTUAL (observable,
-binary given the input) or SEMANTIC (policy-interpreted). Override: per §17 classes.
+Legend — Category: INTEGRITY (identity/authority/provenance facts), FRESHNESS, EVIDENCE,
+REPO_STATE, SCOPE, APPROVAL, INDEPENDENCE, CONTEXT. Kind: FACTUAL (observable, binary
+given the input) or SEMANTIC (policy-interpreted). Override: per §17 classes.
 
 | Rank | Code | Category | Kind | Default disposition | Overrideable | Minimum evidence to emit | Explanation intent |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| 10 | `AUTHORITY_INVALID` | INTEGRITY | FACTUAL | BLOCK | NOT_OVERRIDEABLE | `authority_status = INVALID`, or a presented decision whose digest fails verification | "The caller or presented decision does not carry valid authority." |
-| 20 | `REQUIRED_CONTEXT_INCOMPLETE` | CONTEXT | FACTUAL | BLOCK | NOT_OVERRIDEABLE | any integrity-mandatory fact of §6 UNKNOWN/underivable | "The policy could not obtain a mandatory fact; eligibility cannot be evaluated." |
-| 30 | `EVIDENCE_TASK_MISMATCH` | INTEGRITY | FACTUAL | BLOCK | NOT_OVERRIDEABLE | an evidence/bundle element whose `task_id` ≠ input `task_id` | "Evidence belongs to a different task." |
-| 40 | `EVIDENCE_RUN_MISMATCH` | INTEGRITY | FACTUAL | BLOCK | NOT_OVERRIDEABLE | evidence whose `run_id` ≠ the input run | "Evidence belongs to a different evidence run." |
-| 50 | `EVIDENCE_CANDIDATE_MISMATCH` | INTEGRITY | FACTUAL | BLOCK | NOT_OVERRIDEABLE | evidence bound to a different `CandidateBinding` | "Evidence was produced for a different candidate." |
-| 60 | `REPOSITORY_CONTEXT_MISMATCH` | INTEGRITY | FACTUAL | BLOCK | NOT_OVERRIDEABLE | `repository_snapshot_current = MISMATCH` (repository id / object format / base divergence) | "The current repository is not the one the candidate belongs to." |
-| 70 | `EVIDENCE_PROVENANCE_INVALID` | INTEGRITY | FACTUAL | BLOCK | NOT_OVERRIDEABLE | a rejected result with status `INVALID_PROVENANCE`/`UNSUPPORTED_SCHEMA`/`UNSUPPORTED_COLLECTOR`, or coherence tag `PROVENANCE_INVALID` | "Evidence provenance is invalid or unsupported." |
-| 80 | `EVIDENCE_DUPLICATE_IDENTITY` | INTEGRITY | FACTUAL | BLOCK | NOT_OVERRIDEABLE | duplicate evidence identity presented (`DUPLICATE_IDENTITY` status or tag) | "Evidence identity is ambiguous." |
-| 90 | `REQUIRED_EVIDENCE_INVALID` | EVIDENCE | FACTUAL | BLOCK | POLICY_EXCEPTION_REQUIRED | a required id in `invalid_evidence_ids` | "A required proof exists but failed structural verification." |
+| 10 | `AUTHORITY_INVALID` | INTEGRITY | FACTUAL | BLOCK | NOT_OVERRIDEABLE | `authority_status = INVALID`, `verifier_identity_status = INVALID`, or a presented decision whose digest fails verification | "The caller, verifier identity, or presented decision does not carry valid authority." |
+| 20 | `REQUIRED_CONTEXT_INCOMPLETE` | CONTEXT | FACTUAL | BLOCK | NOT_OVERRIDEABLE | any integrity-mandatory fact of §6 UNKNOWN / `scope_status = NOT_EVALUATED` / `verifier_identity_status = ABSENT` | "The policy could not obtain a mandatory fact; eligibility cannot be evaluated." |
+| 30 | `EVIDENCE_TASK_MISMATCH` | INTEGRITY | FACTUAL | BLOCK | NOT_OVERRIDEABLE | violation tag TASK_MISMATCH | "Evidence belongs to a different task." |
+| 40 | `EVIDENCE_RUN_MISMATCH` | INTEGRITY | FACTUAL | BLOCK | NOT_OVERRIDEABLE | violation tag RUN_MISMATCH | "Evidence belongs to a different evidence run." |
+| 50 | `EVIDENCE_CANDIDATE_MISMATCH` | INTEGRITY | FACTUAL | BLOCK | NOT_OVERRIDEABLE | violation tag CANDIDATE_MISMATCH | "Evidence was produced for a different candidate." |
+| 60 | `REPOSITORY_CONTEXT_MISMATCH` | INTEGRITY | FACTUAL | BLOCK | NOT_OVERRIDEABLE | `repository_snapshot_current = MISMATCH` | "The current repository is not the one the candidate belongs to." |
+| 70 | `EVIDENCE_PROVENANCE_INVALID` | INTEGRITY | FACTUAL | BLOCK | NOT_OVERRIDEABLE | `invalid_provenance_evidence_ids` non-empty, or violation tag PROVENANCE_INVALID | "Evidence provenance is invalid or unsupported." |
+| 80 | `EVIDENCE_DUPLICATE_IDENTITY` | INTEGRITY | FACTUAL | BLOCK | NOT_OVERRIDEABLE | violation tag DUPLICATE_IDENTITY | "Evidence identity is ambiguous." |
+| 90 | `REQUIRED_EVIDENCE_INVALID` | EVIDENCE | FACTUAL | BLOCK | POLICY_EXCEPTION_REQUIRED | `invalid_requirement_ids` non-empty (§6.1) | "A required proof exists but failed structural verification." |
+| 95 | `TASK_CONTEXT_STALE` | FRESHNESS | FACTUAL | BLOCK | POLICY_EXCEPTION_REQUIRED | `task_context_current = STALE` (contract digest no longer matches the candidate's bound contract digest) | "The governing task contract changed after this candidate was produced." |
 | 100 | `CANDIDATE_STALE` | FRESHNESS | FACTUAL | BLOCK | POLICY_EXCEPTION_REQUIRED | `candidate_binding_current = STALE` | "The repository moved past this candidate; re-run against the current head." |
 | 110 | `POLICY_CONTEXT_STALE` | FRESHNESS | FACTUAL | BLOCK | POLICY_EXCEPTION_REQUIRED | `policy_context_current = STALE` | "The decision would be made under an outdated policy." |
-| 120 | `REQUIRED_EVIDENCE_MISSING` | EVIDENCE | FACTUAL | BLOCK | POLICY_EXCEPTION_REQUIRED | a required id in `missing_evidence_ids` (includes the empty-bundle-with-requirements case, ADR-001 §8) | "A required proof was never verified for this candidate." |
+| 120 | `REQUIRED_EVIDENCE_MISSING` | EVIDENCE | FACTUAL | BLOCK | POLICY_EXCEPTION_REQUIRED | `missing_requirement_ids` non-empty (includes the empty-bundle-with-requirements case, ADR-001 §8) | "A required proof was never verified for this candidate." |
 | 130 | `RELEASE_STATE_NOT_CLEAN` | REPO_STATE | FACTUAL | BLOCK | POLICY_EXCEPTION_REQUIRED | `repository_release_clean = DIRTY` | "The working tree is not release-clean." |
-| 140 | `SCOPE_VIOLATION` | SCOPE | FACTUAL | BLOCK | POLICY_EXCEPTION_REQUIRED (contract amendment path) | `scope_status = VIOLATION` (forbidden path touched or explicit out-of-contract change) | "The change touches paths the contract forbids or does not allow." |
-| 150 | `APPROVAL_MISSING` | APPROVAL | FACTUAL | BLOCK (recommended; PENDING_OWNER_DECISION OD-S1A-001) | HUMAN_REVIEW_RESOLVABLE (by granting the approval itself) | `approval_status = MISSING` while the contract requires approval for merge | "The required human approval has not been granted." |
-| 160 | `APPROVAL_STALE` | APPROVAL | FACTUAL | BLOCK (recommended; PENDING_OWNER_DECISION OD-S1A-002) | HUMAN_REVIEW_RESOLVABLE (by re-approving the current candidate) | `approval_status = STALE` (approval bound to a different candidate/contract/policy digest) | "The approval was for a different version of this change." |
-| 170 | `VERIFIER_NOT_INDEPENDENT` | INDEPENDENCE | FACTUAL | BLOCK | NOT_OVERRIDEABLE | `verifier_independence_status = NOT_INDEPENDENT` (verifier actor == implementer actor, or attested dependence) | "The change was verified by its own author." |
-| 180 | `SCOPE_UNCERTAIN` | SCOPE | SEMANTIC | REVIEW_REQUIRED | HUMAN_REVIEW_RESOLVABLE | `scope_status = UNCERTAIN` (§13) | "A human must judge whether this change is within the contract's intent." |
-| 190 | `VERIFIER_INDEPENDENCE_UNKNOWN` | INDEPENDENCE | SEMANTIC | REVIEW_REQUIRED (boundary PENDING_OWNER_DECISION OD-S1A-003) | HUMAN_REVIEW_RESOLVABLE | `verifier_independence_status = UNKNOWN` with verifier identity present | "Independence could not be established automatically; a human must confirm it." |
+| 140 | `SCOPE_VIOLATION` | SCOPE | FACTUAL | BLOCK | POLICY_EXCEPTION_REQUIRED (contract amendment path) | `scope_status = VIOLATION` | "The change touches paths the contract forbids or does not allow." |
+| 150 | `APPROVAL_MISSING` | APPROVAL | FACTUAL | BLOCK (recommended; PENDING_OWNER_DECISION OD-S1A-001) | HUMAN_REVIEW_RESOLVABLE (by granting the approval itself) | `approval_status ∈ {MISSING, UNKNOWN}` while the contract requires approval for merge | "The required human approval has not been granted." |
+| 160 | `APPROVAL_STALE` | APPROVAL | FACTUAL | BLOCK (recommended; PENDING_OWNER_DECISION OD-S1A-002) | HUMAN_REVIEW_RESOLVABLE (by re-approving the current candidate) | `approval_status = STALE` | "The approval was for a different version of this change." |
+| 170 | `VERIFIER_NOT_INDEPENDENT` | INDEPENDENCE | FACTUAL | BLOCK | NOT_OVERRIDEABLE | `verifier_independence_status = NOT_INDEPENDENT` with identity present | "The change was verified by its own author." |
+| 180 | `SCOPE_UNCERTAIN` | SCOPE | SEMANTIC | REVIEW_REQUIRED | HUMAN_REVIEW_RESOLVABLE | `scope_status = SEMANTIC_UNCERTAIN` | "A human must judge whether this change is within the contract's intent." |
+| 190 | `VERIFIER_INDEPENDENCE_UNKNOWN` | INDEPENDENCE | SEMANTIC | REVIEW_REQUIRED (boundary PENDING_OWNER_DECISION OD-S1A-003) | HUMAN_REVIEW_RESOLVABLE | verifier rule §15 (identity present, independence not established) | "Independence could not be established automatically; a human must confirm it." |
 
-Exactly 19 codes. The set is closed for policy v1: an evaluator may not invent codes, and an
-unknown code in a presented decision fails digest verification.
+Exactly 20 codes. The set is closed for policy v1: an evaluator may not invent codes, and
+an unknown code in a presented decision fails digest verification.
+
+**No overloading (Sol High H-01):** a stale task contract is `TASK_CONTEXT_STALE` and
+nothing else — `POLICY_CONTEXT_STALE` (policy version), `REPOSITORY_CONTEXT_MISMATCH`
+(wrong repository lineage) and `EVIDENCE_TASK_MISMATCH` (foreign evidence) must not be
+reused to represent it.
 
 ## 10. Deterministic Precedence
 
-- The **primary reason** is the emitted code with the **lowest rank** in §9's table. Ranks
-  are unique per code, so the primary reason is total and deterministic.
+- The **primary reason** is the emitted code with the **lowest rank** in §9's table.
+  Ranks are unique per code, so the primary reason is total and deterministic.
 - The **complete reason set** contains every independently confirmed failure, sorted
   **lexicographically by code** (set semantics; independent of input ordering, dictionary
   or set iteration order, and evidence arrival order).
@@ -294,8 +429,11 @@ unknown code in a presented decision fails digest verification.
      trusted outranks everything else);
   2. task/candidate/repository context mismatch → ranks 30–60;
   3. invalid or foreign evidence provenance → ranks 70–90 (duplicate identity ranked with
-     provenance because it is an evidence-identity integrity failure);
-  4. stale candidate or policy context → ranks 100–110;
+     provenance because it is an evidence-identity integrity failure; requirement-level
+     invalidity ranks last in the group because it presupposes an intact record);
+  4. stale task/candidate/policy context → ranks 95–110 (`TASK_CONTEXT_STALE` before
+     `CANDIDATE_STALE`: a stale governing contract invalidates the very requirements the
+     candidate was evaluated against);
   5. missing mandatory evidence → rank 120;
   6. non-release-clean repository → rank 130;
   7. explicit scope violation → rank 140;
@@ -304,14 +442,11 @@ unknown code in a presented decision fails digest verification.
   10. reviewable semantic uncertainty → ranks 180–190 (`SCOPE_UNCERTAIN` before
       `VERIFIER_INDEPENDENCE_UNKNOWN`, mirroring the scope-before-independence order of
       the factual groups).
-- Within group 2 the order task → run → candidate → repository is the narrowing order of
-  identity (most specific foreign-ness first); within group 3, provenance invalidity
-  precedes duplicate identity precedes invalid-but-matching evidence because it moves from
-  "cannot trust the record" to "cannot trust its result". These refinements are explicit
-  policy choices; changing them requires a policy version bump. The exact precedence when
-  two *integrity* failures coexist is additionally listed as OD-S1A-007 for owner
-  confirmation.
-- **Unknown mandatory facts never default to eligible** (§6 mandatory-context rule).
+- These refinements are explicit policy choices; changing them requires a policy version
+  bump. The exact precedence when two *integrity* failures coexist is additionally listed
+  as OD-S1A-007 for owner confirmation (golden cases GC-S1-021 and GC-S1-040 encode the
+  recommended table and are marked pending).
+- **Unknown mandatory facts never default to eligible** (§6.4 mapping).
 
 ## 11. Required Evidence Completeness
 
@@ -321,16 +456,29 @@ Normative rule (ADR-001 §8):
 required evidence  ⊆  valid verified evidence bound to the current task, run and candidate
 ```
 
-- **Matching key:** the stable `requirement_id` — `CommandRequirement.requirement_id` on the
-  declaration side, `VerifiedCommandEvidence.requirement_id` on the proof side. A verified
-  record counts only when its task/run/candidate bindings equal the policy input's (the
-  bundle and run-record models already seal this; the policy re-checks rather than trusts).
+expressed exactly as `missing_requirement_ids = ∅ ∧ invalid_requirement_ids = ∅` under
+the disjoint accounting of §6.1.
+
+- **Matching key:** the stable `requirement_id` — `CommandRequirement.requirement_id` on
+  the declaration side; `VerifiedCommandEvidence.requirement_id` on the satisfied side;
+  the rejected record's `EvidenceProvenance.requirement_id` (via `EvidenceRunRecord`) on
+  the invalid side. A verified record counts only when its task/run/candidate bindings
+  equal the policy context's (the bundle and run-record models already seal this; the
+  derivation layer re-checks rather than trusts).
 - Completeness is **never** inferred from: command display text, command order, report
   prose, `tests_run` strings, filenames, or `accepted=True` alone.
 - A **schema-valid empty bundle** is not inherently invalid; it simply verifies nothing.
-  With a non-empty requirement set it yields `REQUIRED_EVIDENCE_MISSING` for every required
-  id. With an empty requirement set, emptiness alone contributes no reason code (golden
-  case 20) — eligibility then depends only on the other policy conditions.
+  With a non-empty requirement set it yields `REQUIRED_EVIDENCE_MISSING` for every
+  required id. With an empty requirement set, emptiness alone contributes no reason code
+  (golden case GC-S1-020) — eligibility then depends only on the other policy conditions.
+
+Reason-emission rules (normative):
+
+| Code | Emitted iff |
+| --- | --- |
+| `REQUIRED_EVIDENCE_MISSING` | `missing_requirement_ids` non-empty |
+| `REQUIRED_EVIDENCE_INVALID` | `invalid_requirement_ids` non-empty |
+| `EVIDENCE_PROVENANCE_INVALID` | `invalid_provenance_evidence_ids` non-empty (record-level), or violation tag PROVENANCE_INVALID (context-level) — regardless of whether the affected requirement is otherwise satisfied |
 
 Defined behaviors:
 
@@ -339,9 +487,10 @@ Defined behaviors:
 | Duplicate evidence identities | `EVIDENCE_DUPLICATE_IDENTITY` (BLOCK); ambiguous identity satisfies nothing (same rule as ChangeGate Lite and `VerificationStatus.DUPLICATE_IDENTITY`) |
 | Multiple verified records satisfying one requirement | Requirement is satisfied (≥ 1 rule); surplus is recorded in the trace, not a failure |
 | One evidence record claiming multiple requirements | Unrepresentable at the domain layer (`EvidenceProvenance.requirement_id` is single-valued); if presented through any adapter it is `EVIDENCE_PROVENANCE_INVALID` |
-| Unexpected evidence (verified id ∉ required set) | Recorded in `unexpected_evidence_ids` (diagnostic); never satisfies anything and, recommended, never blocks alone — treatment PENDING_OWNER_DECISION OD-S1A-006 |
-| Partially verified bundle (rejected entries present) | Rejected entries satisfy nothing. A required id with at least one matching rejected record and no verified record → `REQUIRED_EVIDENCE_INVALID`; with no record at all → `REQUIRED_EVIDENCE_MISSING` |
-| Evidence from another task / run / candidate | `EVIDENCE_TASK_MISMATCH` / `EVIDENCE_RUN_MISMATCH` / `EVIDENCE_CANDIDATE_MISMATCH` (BLOCK); it also never satisfies a requirement |
+| Unexpected evidence (valid record, requirement_id ∉ required set) | Recorded in `unexpected_evidence_ids` (record ids, diagnostic); never satisfies anything and, recommended, never blocks alone — treatment PENDING_OWNER_DECISION OD-S1A-006 (GC-S1-030) |
+| Rejected-only requirement | `REQUIRED_EVIDENCE_INVALID` (GC-S1-026); NOT also missing (disjoint sets) |
+| Valid AND rejected records for the same requirement | The valid record satisfies the requirement. A benign rejection (e.g. a failed earlier attempt) is diagnostic only (GC-S1-034). Independently confirmed provenance or identity corruption still emits its factual integrity reason even though the requirement is satisfied (GC-S1-035) |
+| Evidence from another task / run / candidate | `EVIDENCE_TASK_MISMATCH` / `EVIDENCE_RUN_MISMATCH` / `EVIDENCE_CANDIDATE_MISMATCH` (BLOCK); such records are unbound and never satisfy or invalidate a requirement (the requirement stays missing) |
 
 ## 12. Candidate and Repository Freshness
 
@@ -349,39 +498,39 @@ Freshness is evaluated with the existing single-source rule
 `candidate_snapshot_mismatches(candidate_binding, current_snapshot)`:
 
 - `repository_id` or `object_format` or `base_commit_sha` divergence →
-  `repository_snapshot_current = MISMATCH` → `REPOSITORY_CONTEXT_MISMATCH` (the evaluation
-  is happening against the wrong repository lineage);
+  `repository_snapshot_current = MISMATCH` → `REPOSITORY_CONTEXT_MISMATCH` (the
+  evaluation is happening against the wrong repository lineage);
 - same repository lineage but `head_commit_sha` ≠ `candidate_commit_sha`, or tree, or
-  changed-files digest divergence → `candidate_binding_current = STALE` → `CANDIDATE_STALE`
-  (the repository moved past the candidate; evidence and eligibility must be re-established
-  against the new head);
-- `current_snapshot.is_release_clean == False` → `RELEASE_STATE_NOT_CLEAN`, even when every
-  structural verification is `VERIFIED` (golden case 22; ADR-001 §7);
-- `policy_context.current == False` → `POLICY_CONTEXT_STALE` — a decision may not be issued
-  under a policy version the deployment no longer considers current.
+  changed-files digest divergence → `candidate_binding_current = STALE` →
+  `CANDIDATE_STALE` (the repository moved past the candidate; evidence and eligibility
+  must be re-established against the new head);
+- contract digest divergence (`contract_digest` ≠ `candidate_binding.contract_digest`) →
+  `task_context_current = STALE` → `TASK_CONTEXT_STALE`;
+- `current_snapshot.is_release_clean == False` → `RELEASE_STATE_NOT_CLEAN`, even when
+  every structural verification is `VERIFIED` (golden case GC-S1-022; ADR-001 §7);
+- `policy_context.current == False` → `POLICY_CONTEXT_STALE` — a decision may not be
+  issued under a policy version the deployment no longer considers current.
 
 The policy never calls Git to check freshness; the caller supplies the current snapshot,
 and the decision is valid only for the snapshot identity recorded in its trace.
 
 ## 13. Scope Semantics
 
-`ScopeFacts` carries the outcome of deterministic scope evaluation (the existing
+`scope_status` carries the outcome of deterministic scope evaluation (the existing
 canonicalized-path, forbidden-before-allowed rules of `evaluate_change_gate` remain the
-mechanism; ChangeGate Lite findings map into facts):
+mechanism; ChangeGate Lite findings map into facts). The four values are exact and total:
 
-- `VIOLATION` (→ `SCOPE_VIOLATION`, BLOCK): a changed path matches a forbidden pattern, is
-  an invalid/traversal path, or falls outside `allowed_paths` when the contract does not
-  allow broad scope. Factual: the paths and patterns are explicit.
-- `UNCERTAIN` (→ `SCOPE_UNCERTAIN`, REVIEW_REQUIRED): policy-defined semantic uncertainty —
-  e.g. dependency-file changes the contract routes to a human, an empty change set, or a
-  contract marked `broad_scope_allowed` where breadth itself demands human judgment.
-- `IN_SCOPE`: neither of the above.
-- `UNKNOWN` → treated as `UNCERTAIN` is **not** allowed for the violation check itself: if
-  changed files could not be determined at all, that is `REQUIRED_CONTEXT_INCOMPLETE`
-  (integrity), not a semantic review.
+| Value | Meaning | Mapping |
+| --- | --- | --- |
+| `COMPLIANT` | scope was evaluated; no violation, no reviewable question | no reason |
+| `VIOLATION` | a changed path matches a forbidden pattern, is an invalid/traversal path, or falls outside `allowed_paths` without broad scope | BLOCK / `SCOPE_VIOLATION` |
+| `SEMANTIC_UNCERTAIN` | scope was evaluated and a policy-designated reviewable question remains (e.g. dependency-file changes the contract routes to a human, an empty change set, or contract-sanctioned broad scope whose breadth demands judgment) | REVIEW_REQUIRED / `SCOPE_UNCERTAIN` |
+| `NOT_EVALUATED` | the changed-file set or scope check could not be performed at all | BLOCK / `REQUIRED_CONTEXT_INCOMPLETE` |
 
-Scope facts must be derived from the same canonical path normalization as ChangeGate Lite
-(no second path grammar).
+There is no scope `UNKNOWN` state: an unevaluated scope is missing mandatory context
+(`NOT_EVALUATED`), never reviewable uncertainty. This removes the former §6/§13
+ambiguity (Sol High H-01.4). Scope facts must be derived from the same canonical path
+normalization as ChangeGate Lite (no second path grammar).
 
 ## 14. Approval and Authority
 
@@ -393,9 +542,11 @@ create one. The application-level facts are:
   the **binding target**: `task_id`, `candidate_commit_sha`/`candidate_tree_sha` (or the
   full `CandidateBinding` digest), `contract_digest`, `policy_digest`. An approval is:
   - `VALID` — binds exactly to the input task/candidate/contract/policy;
-  - `STALE` — exists but binds to a different candidate, contract digest, or policy digest
-    (approving commit A never approves commit B);
-  - `MISSING` — absent while `"merge" ∈ contract.requires_human_approval_for`.
+  - `STALE` — exists but binds to a different candidate, contract digest, or policy
+    digest (approving commit A never approves commit B);
+  - `MISSING` — absent while `"merge" ∈ contract.requires_human_approval_for`;
+  - `UNKNOWN` — the approval state could not be established; treated as `MISSING`
+    (recommended; the disposition itself is PENDING_OWNER_DECISION OD-S1A-001).
   When the contract does **not** require approval for merge, `approval_status = VALID`
   vacuously and no approval code is emitted (the ProcessGuard `READY_FOR_MERGE` path is
   unchanged).
@@ -406,23 +557,36 @@ create one. The application-level facts are:
 
 Dispositions for `APPROVAL_MISSING` and `APPROVAL_STALE` are recommended BLOCK but are
 **PENDING_OWNER_DECISION** (OD-S1A-001, OD-S1A-002; §25). The golden fixture encodes the
-recommended default and marks both cases `owner_decision_pending`.
+recommended default and marks the affected cases in `owner_decisions_pending`.
 
 ## 15. Verifier Independence
 
-`VerifierIndependenceFact` records: opaque `verifier_actor_ref`, opaque
-`implementer_actor_ref`, verifier software identity (`verifier_version`), and an
-independence status:
+**`VerifierIdentityFact`** records: opaque `verifier_actor_ref`, opaque
+`implementer_actor_ref`, verifier software identity (`verifier_version`), an identity
+status, and an independence status. Two facts are derived — both required so the future
+owner-approved OD-S1A-003 rule can be implemented without inventing a new fact:
 
-- `INDEPENDENT` — attested distinct actors (and, when configured, distinct execution
-  environments);
-- `NOT_INDEPENDENT` — verifier and implementer are the same actor, or dependence is
-  attested → `VERIFIER_NOT_INDEPENDENT`, BLOCK, non-overrideable by ordinary approval
-  (self-verification is a protected root-of-trust rule, ADR-001 §9);
-- `UNKNOWN` — identity present but independence not attested →
-  `VERIFIER_INDEPENDENCE_UNKNOWN`, REVIEW_REQUIRED (recommended; exact reviewability
-  boundary PENDING_OWNER_DECISION OD-S1A-003). If even the verifier identity is absent,
-  that is `REQUIRED_CONTEXT_INCOMPLETE`, not reviewable uncertainty.
+- `verifier_identity_status`: `ATTESTED` (identity present and attested) |
+  `PRESENT_UNATTESTED` (identity reference present, attestation absent) | `ABSENT`
+  (no identity reference at all) | `INVALID` (identity reference fails validation);
+- `verifier_independence_status`: `INDEPENDENT` | `NOT_INDEPENDENT` | `UNKNOWN`.
+
+**Ordered first-match combination rule (total over all 12 combinations; normative,
+machine-readable in the fixture's `fact_state_mapping.verifier_rule`):**
+
+1. identity `INVALID` → `AUTHORITY_INVALID` (a corrupt identity is an authority
+   integrity failure);
+2. identity `ABSENT` → `REQUIRED_CONTEXT_INCOMPLETE` (an anonymous verifier is missing
+   mandatory context, never reviewable uncertainty);
+3. independence `NOT_INDEPENDENT` (identity present, attested or not) →
+   `VERIFIER_NOT_INDEPENDENT` (self-verification is a protected root-of-trust rule,
+   ADR-001 §9; an admission does not need attestation);
+4. identity `ATTESTED` + independence `INDEPENDENT` → no reason;
+5. identity `ATTESTED` + independence `UNKNOWN` → `VERIFIER_INDEPENDENCE_UNKNOWN`
+   (REVIEW_REQUIRED recommended; boundary PENDING_OWNER_DECISION OD-S1A-003);
+6. identity `PRESENT_UNATTESTED` + independence `INDEPENDENT` or `UNKNOWN` →
+   `VERIFIER_INDEPENDENCE_UNKNOWN` (an unattested identity cannot ground an independence
+   claim; recommended reviewable, same OD-S1A-003 boundary).
 
 The structural verifier (`EvidenceVerifier` port) remains independent of the policy
 evaluator: the policy consumes its bundle output and never re-implements structural
@@ -432,33 +596,36 @@ verification, and the evaluator must not be the component that produced the evid
 
 When multiple failures coexist:
 
-- every independently confirmed failure appears in `complete_reason_codes` (lexicographic
-  order);
+- every independently confirmed failure appears in `complete_reason_codes`
+  (lexicographic order);
 - exactly one `primary_reason_code` is selected by rank (§10);
-- `blocking_reason_codes` / `review_reason_codes` partition the complete set by each code's
-  effective disposition under the active policy version;
+- `blocking_reason_codes` / `review_reason_codes` partition the complete set by each
+  code's effective disposition under the active policy version;
 - the disposition is computed from the partition (§8) — a reviewable code never dilutes a
-  blocking code;
+  blocking code (golden case GC-S1-033 pins simultaneous BLOCK + REVIEW_REQUIRED
+  reasons);
 - determinism guarantees: no dependence on dict/set iteration order; set-typed inputs are
   canonically sorted before evaluation; two runs over the same input digest must produce
-  byte-identical decisions (same `decision_digest`).
+  byte-identical decisions (same `decision_digest`, §18).
 
-Golden case 21 pins this behavior.
+Golden cases GC-S1-021 (mixed factual failures), GC-S1-033 (block + review) and
+GC-S1-040 (dual integrity failures, OD-S1A-007) pin this behavior.
 
 ## 17. Human Override Boundaries
 
 **Factual integrity failures cannot be overridden by an ordinary approval action.** Wrong
 candidate, invalid provenance, foreign task/run evidence, invalid authority, corrupt
-identity binding, duplicate evidence identity, repository mismatch — no approval, review, or
-feedback changes these facts (override class NOT_OVERRIDEABLE in §9).
+identity binding, duplicate evidence identity, repository mismatch — no approval, review,
+or feedback changes these facts (override class NOT_OVERRIDEABLE in §9).
 
 A policy **requirement** (e.g. which evidence is required, whether a dirty tree may ever
 ship) may change only through:
 
 - a separately authorized **policy exception** — explicit, versioned, attributable to an
-  authorized actor, time-bounded where applicable, bound to a specific task+candidate, and
-  recorded in the evaluation trace and events (exception authority and expiry are
-  PENDING_OWNER_DECISION OD-S1A-005);
+  authorized actor, time-bounded where applicable, bound to a specific task+candidate,
+  and recorded in the evaluation trace and events (exception authority and expiry are
+  PENDING_OWNER_DECISION OD-S1A-005; the event schema already requires an expiry whenever
+  an exception reference is present, without deciding the authority);
 - a **new policy version**; or
 - an explicit **owner-approved contract amendment**.
 
@@ -474,10 +641,32 @@ edit.
 Every future policy evaluation produces a structured, immutable **EvaluationTrace**. The
 pure evaluator **returns the trace as data**; it never writes to SQLite, JSONL, network
 telemetry, or a global logger — persistence is an application-layer duty behind a port.
-Whether strict deployments must require successful trace persistence **before** a decision
-may authorize eligibility is PENDING_OWNER_DECISION OD-S1A-004.
+Whether strict deployments must require successful trace persistence **before** a
+decision may be released to consumers is PENDING_OWNER_DECISION OD-S1A-004 (GC-S1-038).
 
-Minimum trace fields:
+### 18.1 Decision identity vs trace identity (Sol High H-02)
+
+Two digests with strictly separated coverage:
+
+- **`decision_digest`** covers ONLY deterministic policy-decision fields (§7 table:
+  bindings, evaluator version, input digest, disposition, decision authority, reason
+  codes, requirement/record sets, declared-deterministic diagnostics). It must NOT cover:
+  `trace_id`, `evaluation_id`, `request_id`, timestamps, latency, event ids, or storage
+  location.
+- **`trace_digest`** is the canonical digest of the trace payload (which includes the
+  trace identities and caller-supplied timestamp, and embeds `decision_digest` and
+  `input_digest`), excluding itself.
+
+**Replay invariants (normative, executably pinned by the artifact tests):**
+
+1. two evaluations with identical deterministic policy input, policy version and
+   evaluator version reproduce the **same `decision_digest`** even when trace/evaluation/
+   request ids and timestamps differ;
+2. any policy fact change changes `input_digest` and therefore `decision_digest`;
+3. trace metadata changes (ids, timestamp, latency) change `trace_digest` but never
+   `decision_digest`.
+
+### 18.2 Trace contents
 
 | Field | Content |
 | --- | --- |
@@ -490,11 +679,12 @@ Minimum trace fields:
 | `policy_id` / `policy_version` / `policy_digest` | policy binding |
 | `approval_digest` | present when an approval fact was supplied |
 | `actor_ref`, `verifier_ref` | opaque identity references (never emails/names) |
-| `disposition`, `primary_reason_code`, `complete_reason_codes` | outcome |
-| `required/verified/missing/invalid_evidence_ids` | evidence accounting |
+| `disposition`, `decision_authority`, `primary_reason_code`, `complete_reason_codes` | outcome |
+| `required/satisfied/invalid/missing_requirement_ids`, record-id diagnostics | evidence accounting |
 | `evaluation_mode` | ENFORCE / SHADOW |
 | `evaluator_version`, `input_digest`, `decision_digest` | replay identity |
-| `evaluation_latency_ms` | supplied by the application layer (pure evaluator cannot time itself) |
+| `trace_digest` | canonical digest of the trace payload (self-excluding) |
+| `evaluation_latency_ms` | supplied by the application layer (telemetry; part of the trace envelope, never of decision identity) |
 | `redaction_classification` | privacy class of the trace payload (§21) |
 
 Three layers are distinguished and must not be conflated:
@@ -503,17 +693,14 @@ Three layers are distinguished and must not be conflated:
    codes without raw source code, command output, or secrets;
 2. **application telemetry** (latency, sink health, retries) — owned by the application
    layer, references `trace_id`;
-3. **raw debug logs** — never part of the contract, never required for replay, and subject
-   to §21 redaction.
-
-Replay property: given the same `input_digest` and `policy_digest`, an evaluator of the
-same `evaluator_version` must reproduce the same `decision_digest`.
+3. **raw debug logs** — never part of the contract, never required for replay, and
+   subject to §21 redaction.
 
 ## 19. Product Event Schema
 
-Artifact: `data/schemas/changegate_evaluation_event_v1.schema.json` (JSON Schema, fixed
-`schema_version` const `changegate-evaluation-event.v1`). The envelope is sink-agnostic
-(later JSONL, SQLite, or remote sinks consume the same shape).
+Artifact: `data/schemas/changegate_evaluation_event_v1.schema.json` (JSON Schema Draft
+2020-12, fixed `schema_version` const `changegate-evaluation-event.v1`). The envelope is
+sink-agnostic (later JSONL, SQLite, or remote sinks consume the same shape).
 
 Event types (closed set for v1):
 
@@ -522,16 +709,36 @@ Event types (closed set for v1):
 `CHANGEGATE_POST_MERGE_VALIDATION`, `CHANGEGATE_ROLLBACK_RECORDED`,
 `CHANGEGATE_USER_FEEDBACK_RECORDED`.
 
+**Per-event conditional linkage (Sol High H-03).** The schema enforces with Draft
+2020-12 `allOf`/`if`/`then` constraints, minimally:
+
+| Event type | Additionally required (non-null) |
+| --- | --- |
+| `CHANGEGATE_EVALUATION_COMPLETED` | `decision_ref` (with disposition), `context_digest`, `policy_version`, `evaluator_version`, `outcome` (evaluation result object) |
+| `CHANGEGATE_REVIEW_OVERRIDDEN` | `decision_ref` (immutable original), `override` object (actor ref, reason code, new decision digest and/or exception ref; expiry required whenever an exception ref is present — authority value itself stays OD-S1A-005) |
+| `CHANGEGATE_MERGE_ATTEMPTED` | `decision_ref`, `outcome` (attempt status); `subject_ref` is envelope-required |
+| `CHANGEGATE_MERGE_COMPLETED` | `decision_ref`, `outcome`; merged subject/candidate via `subject_ref` |
+| `CHANGEGATE_POST_MERGE_VALIDATION` | `decision_ref`, `merge_event_ref`, validation `outcome` |
+| `CHANGEGATE_ROLLBACK_RECORDED` | `decision_ref`, `merge_event_ref` (prior merge), `outcome` with machine-readable reason code |
+| `CHANGEGATE_USER_FEEDBACK_RECORDED` | `decision_ref`, non-null structured `feedback` (verdict + category code); no policy-mutation field exists |
+
+A minimal common-envelope-only instance is invalid for **every** event type (executably
+tested, positive and negative).
+
 Envelope fields: `event_id`, `event_type`, `occurred_at`, `schema_version`, `product`
-(const `"changegate"`), `project_ref`/`task_ref`/`run_ref`, `subject_ref` (namespace/kind/
-value/digest — shaped after ADR-003 §8 `SubjectRef` as a JSON reference; this does NOT
-implement the kernel `SubjectRef` model), `context_digest`, `policy_version` +
+(const `"changegate"`), `project_ref`/`task_ref`/`run_ref`, `subject_ref` (namespace/
+kind/value/digest — shaped after ADR-003 §8 `SubjectRef` as a JSON reference; this does
+NOT implement the kernel `SubjectRef` model), `context_digest`, `policy_version` +
 `evaluator_version`, `decision_ref` (evaluation id, decision digest, disposition,
-primary reason), `evidence_refs` (ids + digests only), `outcome`, `feedback`, `provenance`
-(emitter + emitter version + trace linkage), `privacy_classification`.
+decision authority, primary reason), `evidence_refs` (ids + digests only), `outcome`
+(status + machine-readable `detail_code`; empty objects are invalid), `feedback`
+(structured: verdict + category code + optional reason code + opaque redacted-comment
+digest; no raw text), `override`, `merge_event_ref`, `provenance` (emitter + emitter
+version + trace linkage), `privacy_classification`.
 
 The schema **must not require** and does not define fields for: raw prompts, source file
-contents, secrets, credentials, or entire command output. Digest-and-reference only.
+contents, secrets, credentials, or entire command output. All identifier/reference fields
+use bounded no-whitespace grammars (§21), so raw source-like content is rejected.
 
 ## 20. Outcome and Feedback Linkage
 
@@ -562,78 +769,116 @@ Explicitly forbidden (protected roots of trust, ADR-001 §9):
 - `negative feedback → direct active-policy mutation`.
 
 A feedback event about a valid BLOCK records the disagreement and feeds episode labeling;
-the active policy version is unchanged until a proposal passes the full pipeline including
-owner approval (golden case 25). Slice 1 artifacts support controlled improvement
-proposals, not autonomous self-modification.
+the active policy version is unchanged until a proposal passes the full pipeline
+including owner approval (golden case GC-S1-025). Slice 1 artifacts support controlled
+improvement proposals, not autonomous self-modification.
 
 ## 21. Privacy, Security and Redaction
 
 - Traces and events carry **digests and identifiers only**: no raw stdout/stderr (the
   provenance layer already stores `stdout_digest`/`stderr_digest`), no file contents, no
   prompts, no secrets, no credentials, no private keys.
-- Actor references are **opaque ids** (`actor_ref`), never emails or display names, in both
-  traces and events.
+- **Bounded reference grammars (Sol High M-03):** every opaque identifier/reference field
+  in the event envelope (`event_id`, `task_ref`, `project_ref`, `run_ref`,
+  `subject_ref.value`, actor/verifier refs, `merge_event_ref`, emitter and version
+  fields, exception refs) uses a stable restricted grammar with bounded length and **no
+  whitespace or newlines** — raw prose and source-like multiline content are
+  schema-invalid. Digests use the exact 64-hex-char sha256 grammar. Sinks must reject
+  noncanonical references.
+- Actor references are **opaque ids** (`actor_ref`), never emails or display names, in
+  both traces and events.
 - `privacy_classification` (event) and `redaction_classification` (trace) are mandatory,
-  from the closed set `PUBLIC`, `INTERNAL`, `SENSITIVE`; sinks must refuse an event without
-  a classification.
+  from the closed set `PUBLIC`, `INTERNAL`, `SENSITIVE`; sinks must refuse an event
+  without a classification.
+- Feedback is structured (verdict + category code + optional reason code + optional
+  opaque redacted-comment digest); unrestricted raw feedback text is not representable in
+  the envelope.
+- Outcome objects cannot be empty: each required outcome carries at least a `status` and
+  a machine-readable `detail_code`.
 - Command `argv` may appear in diagnostics only after the application layer's redaction
   pass; the policy trace itself references commands by `requirement_id`/`command_digest`.
 - Golden fixtures and schemas in this slice must contain no real secrets, credentials, or
-  private keys (executably enforced by the Slice 1A artifact tests).
+  private keys (executably enforced by the artifact tests).
 - Raw debug logs are outside the policy contract and must never be required to replay a
   decision (§18).
 
 ## 22. Golden Evaluation Matrix
 
 Artifact: `data/evals/changegate_merge_eligibility_golden_cases.json` (deterministic,
-versioned; 25 cases GC-S1-001 … GC-S1-025). Summary:
+versioned `changegate-merge-eligibility-golden.v2`; 40 cases GC-S1-001 … GC-S1-040). The
+fixture embeds the normative `fact_state_mapping`, and the artifact tests derive every
+case's complete reason set independently from its facts via a test-only oracle (never
+from the case's own expectations). Every closed reason code appears as an expected reason
+in at least one case; every OD-S1A decision that controls an expected result has at least
+one case marked in `owner_decisions_pending`.
 
-| Case | Scenario | Expected disposition | Expected primary reason |
-| --- | --- | --- | --- |
-| GC-S1-001 | complete / current / clean / authorized | ELIGIBLE_TO_MERGE_UNDER_POLICY | — |
-| GC-S1-002 | empty bundle, mandatory evidence required | BLOCK | REQUIRED_EVIDENCE_MISSING |
-| GC-S1-003 | partial mandatory evidence | BLOCK | REQUIRED_EVIDENCE_MISSING |
-| GC-S1-004 | evidence from another task | BLOCK | EVIDENCE_TASK_MISMATCH |
-| GC-S1-005 | evidence from another run | BLOCK | EVIDENCE_RUN_MISMATCH |
-| GC-S1-006 | evidence from another candidate | BLOCK | EVIDENCE_CANDIDATE_MISMATCH |
-| GC-S1-007 | duplicate evidence identity | BLOCK | EVIDENCE_DUPLICATE_IDENTITY |
-| GC-S1-008 | candidate stale | BLOCK | CANDIDATE_STALE |
-| GC-S1-009 | repository context mismatch | BLOCK | REPOSITORY_CONTEXT_MISMATCH |
-| GC-S1-010 | repository dirty | BLOCK | RELEASE_STATE_NOT_CLEAN |
-| GC-S1-011 | explicit scope violation | BLOCK | SCOPE_VIOLATION |
-| GC-S1-012 | semantic scope uncertainty | REVIEW_REQUIRED | SCOPE_UNCERTAIN |
-| GC-S1-013 | approval missing (recommended default; OD-S1A-001) | BLOCK | APPROVAL_MISSING |
-| GC-S1-014 | approval stale (recommended default; OD-S1A-002) | BLOCK | APPROVAL_STALE |
-| GC-S1-015 | authority invalid | BLOCK | AUTHORITY_INVALID |
-| GC-S1-016 | verifier not independent | BLOCK | VERIFIER_NOT_INDEPENDENT |
-| GC-S1-017 | verifier independence unknown | REVIEW_REQUIRED | VERIFIER_INDEPENDENCE_UNKNOWN |
-| GC-S1-018 | stale policy context | BLOCK | POLICY_CONTEXT_STALE |
-| GC-S1-019 | required context unknown (mandatory-context rule §6) | BLOCK | REQUIRED_CONTEXT_INCOMPLETE |
-| GC-S1-020 | no evidence requirement + empty explicit-context bundle | ELIGIBLE_TO_MERGE_UNDER_POLICY | — |
-| GC-S1-021 | multiple failures (task-mismatch + dirty + approval missing) | BLOCK | EVIDENCE_TASK_MISMATCH |
-| GC-S1-022 | structural VERIFIED but release state dirty | BLOCK | RELEASE_STATE_NOT_CLEAN |
-| GC-S1-023 | structural VERIFIED but approval stale (non-eligible) | BLOCK | APPROVAL_STALE |
-| GC-S1-024 | caller authors an "eligible" decision directly | BLOCK | AUTHORITY_INVALID |
-| GC-S1-025 | feedback claims a valid block was wrong | BLOCK (unchanged) | SCOPE_VIOLATION (original) |
+Authority column: AUTH. = AUTHORITATIVE (ENFORCE), ADVISORY_ONLY = SHADOW.
 
-Each fixture case carries: `case_id`, `summary`, `policy_input_facts` (the §6 vocabulary),
-`expected_disposition`, `expected_primary_reason`, `expected_complete_reason_codes`,
-`override_class`, `expected_event_assertions`, and `owner_decision_pending` where a
-PENDING_OWNER_DECISION default is encoded (GC-S1-013/014/023). If the owner decides
-differently in §25, the fixture and this table are updated in the same owner-reviewed
-change.
+| Case | Scenario | Disposition | Primary reason | Authority | Pending ODs |
+| --- | --- | --- | --- | --- | --- |
+| GC-S1-001 | Complete, current, clean, authorized | ELIGIBLE_TO_MERGE_UNDER_POLICY | — | AUTH. | — |
+| GC-S1-002 | Empty bundle with mandatory evidence | BLOCK | REQUIRED_EVIDENCE_MISSING | AUTH. | — |
+| GC-S1-003 | Partial mandatory evidence | BLOCK | REQUIRED_EVIDENCE_MISSING | AUTH. | — |
+| GC-S1-004 | Evidence from another task | BLOCK | EVIDENCE_TASK_MISMATCH | AUTH. | — |
+| GC-S1-005 | Evidence from another run | BLOCK | EVIDENCE_RUN_MISMATCH | AUTH. | — |
+| GC-S1-006 | Evidence from another candidate | BLOCK | EVIDENCE_CANDIDATE_MISMATCH | AUTH. | — |
+| GC-S1-007 | Duplicate evidence identity | BLOCK | EVIDENCE_DUPLICATE_IDENTITY | AUTH. | — |
+| GC-S1-008 | Candidate stale | BLOCK | CANDIDATE_STALE | AUTH. | — |
+| GC-S1-009 | Repository context mismatch | BLOCK | REPOSITORY_CONTEXT_MISMATCH | AUTH. | — |
+| GC-S1-010 | Repository dirty | BLOCK | RELEASE_STATE_NOT_CLEAN | AUTH. | — |
+| GC-S1-011 | Explicit scope violation | BLOCK | SCOPE_VIOLATION | AUTH. | — |
+| GC-S1-012 | Semantic scope uncertainty | REVIEW_REQUIRED | SCOPE_UNCERTAIN | AUTH. | — |
+| GC-S1-013 | Approval missing (recommended default) | BLOCK | APPROVAL_MISSING | AUTH. | OD-S1A-001 |
+| GC-S1-014 | Approval stale (recommended default) | BLOCK | APPROVAL_STALE | AUTH. | OD-S1A-002 |
+| GC-S1-015 | Caller authority invalid | BLOCK | AUTHORITY_INVALID | AUTH. | — |
+| GC-S1-016 | Verifier not independent | BLOCK | VERIFIER_NOT_INDEPENDENT | AUTH. | — |
+| GC-S1-017 | Independence unknown, identity ATTESTED | REVIEW_REQUIRED | VERIFIER_INDEPENDENCE_UNKNOWN | AUTH. | OD-S1A-003 |
+| GC-S1-018 | Stale policy context | BLOCK | POLICY_CONTEXT_STALE | AUTH. | — |
+| GC-S1-019 | Required context unknown (mandatory-context rule) | BLOCK | REQUIRED_CONTEXT_INCOMPLETE | AUTH. | — |
+| GC-S1-020 | No requirement + empty explicit-context bundle | ELIGIBLE_TO_MERGE_UNDER_POLICY | — | AUTH. | — |
+| GC-S1-021 | Multiple failures (foreign task + dirty + no approval) | BLOCK | EVIDENCE_TASK_MISMATCH | AUTH. | OD-S1A-001, OD-S1A-007 |
+| GC-S1-022 | Structural VERIFIED but release state dirty | BLOCK | RELEASE_STATE_NOT_CLEAN | AUTH. | — |
+| GC-S1-023 | Structural VERIFIED but approval stale | BLOCK | APPROVAL_STALE | AUTH. | OD-S1A-002 |
+| GC-S1-024 | Caller authors an "eligible" decision directly | BLOCK | AUTHORITY_INVALID | AUTH. | — |
+| GC-S1-025 | Feedback claims a valid block was wrong | BLOCK (unchanged) | SCOPE_VIOLATION | AUTH. | — |
+| GC-S1-026 | Rejected-only requirement | BLOCK | REQUIRED_EVIDENCE_INVALID | AUTH. | — |
+| GC-S1-027 | Invalid-provenance record on a required id, no valid record | BLOCK | EVIDENCE_PROVENANCE_INVALID | AUTH. | — |
+| GC-S1-028 | Task context stale | BLOCK | TASK_CONTEXT_STALE | AUTH. | — |
+| GC-S1-029 | Scope not evaluated | BLOCK | REQUIRED_CONTEXT_INCOMPLETE | AUTH. | — |
+| GC-S1-030 | Unexpected but valid evidence (diagnostic only) | ELIGIBLE_TO_MERGE_UNDER_POLICY | — | AUTH. | OD-S1A-006 |
+| GC-S1-031 | SHADOW eligible counterfactual | ELIGIBLE_TO_MERGE_UNDER_POLICY | — | ADVISORY_ONLY | — |
+| GC-S1-032 | SHADOW block counterfactual | BLOCK | RELEASE_STATE_NOT_CLEAN | ADVISORY_ONLY | — |
+| GC-S1-033 | Simultaneous BLOCK + REVIEW_REQUIRED reasons | BLOCK | RELEASE_STATE_NOT_CLEAN | AUTH. | — |
+| GC-S1-034 | Valid + benign-rejected records, same requirement | ELIGIBLE_TO_MERGE_UNDER_POLICY | — | AUTH. | — |
+| GC-S1-035 | Satisfied requirement + invalid-provenance record | BLOCK | EVIDENCE_PROVENANCE_INVALID | AUTH. | — |
+| GC-S1-036 | Verifier identity absent | BLOCK | REQUIRED_CONTEXT_INCOMPLETE | AUTH. | OD-S1A-003 |
+| GC-S1-037 | Verifier identity present-unattested | REVIEW_REQUIRED | VERIFIER_INDEPENDENCE_UNKNOWN | AUTH. | OD-S1A-003 |
+| GC-S1-038 | Strict-mode trace persistence gating | ELIGIBLE_TO_MERGE_UNDER_POLICY | — | AUTH. | OD-S1A-004 |
+| GC-S1-039 | Policy exception lifecycle (expiry required) | BLOCK | SCOPE_VIOLATION | AUTH. | OD-S1A-005 |
+| GC-S1-040 | Dual integrity failure (authority + foreign task) | BLOCK | AUTHORITY_INVALID | AUTH. | OD-S1A-007 |
+
+Each fixture case carries: `case_id`, `summary`, complete `policy_input_facts` (§6),
+`expected_disposition`, `expected_decision_authority`, `expected_primary_reason`,
+`expected_complete_reason_codes`, `override_class`, `expected_event_assertions`, `tags`,
+and `owner_decisions_pending`. If the owner decides differently in §25, the fixture and
+this table are updated in the same owner-reviewed change.
 
 ## 23. Proposed A2 Implementation Scope
 
-Proposed (NOT executed in 1A; requires owner approval of this spec first):
+Proposed (NOT executed in 1A/R1; requires owner approval of this spec first):
 
-- `agent_core/build_harness/eligibility_facts.py` — `EligibilityFacts` + the §5 application
-  fact DTOs + pure derivation from existing contracts;
+- `agent_core/build_harness/eligibility_facts.py` — `EligibilityFacts` + the §5
+  application fact DTOs + the A3 pure derivation (`EligibilityFactDerivationInput →
+  EligibilityFacts`) from existing contracts, including the run-record-based requirement
+  binding for rejected records and a declared mapping from
+  `TaskContract.required_evidence` display strings to stable `CommandRequirement`
+  declarations;
 - `agent_core/build_harness/merge_eligibility.py` — `MergeEligibilityPolicyInput`,
-  `MergeEligibilityDecision`, `EvaluationTrace`, reason-code table, pure
-  `evaluate_merge_eligibility()` returning `(decision, trace)` as data;
-- `tests/build_harness/test_merge_eligibility_policy.py` — unit tests + golden-case runner
-  over `data/evals/changegate_merge_eligibility_golden_cases.json`;
+  `MergeEligibilityDecision`, `EvaluationTrace`, the reason-code table, pure
+  `evaluate_merge_eligibility()` returning `(decision, trace)` as data with the §18
+  digest separation;
+- `tests/build_harness/test_merge_eligibility_policy.py` — unit tests + golden-case
+  runner over `data/evals/changegate_merge_eligibility_golden_cases.json`;
 - a read-only CLI subcommand (`merge-eligibility`) consuming explicit JSON inputs,
   preserving the standalone path (ADR-002 §8);
 - no adapters, no persistence, no event emission in A2 (those are A3+ behind ports).
@@ -643,47 +888,51 @@ Proposed (NOT executed in 1A; requires owner approval of this spec first):
 This spec cites and does **not** resolve (register:
 `docs/architecture/GATE_1_DEFERRED_OWNER_DECISIONS.md`):
 
-- **OD-G1-001** — TaskContract generalization: the policy input references the existing
-  software-delivery `TaskContract` by digest; no generalized or duplicate contract is
-  introduced.
+- **OD-G1-001** — TaskContract generalization: the derivation input references the
+  existing software-delivery `TaskContract` by digest; no generalized or duplicate
+  contract is introduced.
 - **OD-G1-002** — TaskState generalization: eligibility is a separate decision object;
-  execution status is not overloaded with authorization (matches ADR-003 §9 axes).
+  execution status is not overloaded with authorization (matches ADR-003 §9 axes;
+  `decision_authority` is a property of the decision, not a task state).
 - **OD-G1-003** — Capability ownership: authority facts use opaque actor/role references
   and a validity status; no Capability model is created or claimed.
 - **OD-G1-004** — Decision model disposition: `MergeEligibilityDecision` is a
   ChangeGate-local application decision, explicitly not the canonical cross-domain
   `DecisionRecord`; the six existing `*Decision` types are untouched.
-- **OD-G1-005/006/007** — untouched (no package migration, no composition layer, no track
-  allocation change).
+- **OD-G1-005/006/007** — untouched (no package migration, no composition layer, no
+  track allocation change).
 
 ## 25. Owner Decision Points
 
 Each item below is **PENDING_OWNER_DECISION**. A recommended default with rationale is
-given so review is concrete; the recommendation is not a resolution, and the golden fixture
-marks the affected cases.
+given so review is concrete; the recommendation is not a resolution, and the golden
+fixture marks every case whose expected result depends on one of these decisions
+(`owner_decisions_pending`).
 
-| ID | Question | Recommended default | Rationale |
-| --- | --- | --- | --- |
-| OD-S1A-001 | Is missing approval BLOCK or REVIEW_REQUIRED? | BLOCK | ProcessGuard already hard-blocks push/deploy without approval; a wedge whose default leaks unapproved merges is unsellable. REVIEW_REQUIRED would be tolerable UX-wise but weakens the fail-closed story |
-| OD-S1A-002 | Is stale approval always BLOCK? | Always BLOCK | An approval for commit A must never carry to commit B; "mostly the same change" is exactly the judgment a re-approval exists to capture |
-| OD-S1A-003 | When is verifier-independence UNKNOWN reviewable (vs BLOCK)? | REVIEW_REQUIRED only when verifier identity is present and attested but the independence attestation is absent; missing identity is REQUIRED_CONTEXT_INCOMPLETE (BLOCK) | Keeps early deployments usable (independence attestation infra may lag) without ever reviewing an anonymous verifier |
-| OD-S1A-004 | Do strict deployments require successful trace persistence before eligibility may be consumed? | Yes in strict mode: the application layer must persist the trace and only then release the decision; the pure evaluator stays side-effect free | An unauditable authorization is a liability; keeping it in the application layer preserves evaluator purity |
-| OD-S1A-005 | Policy exception authority and expiry | Only the owner (or an owner-designated role) may authorize exceptions; every exception has a mandatory expiry and binds to one task+candidate | Unbounded exceptions become the de-facto policy |
-| OD-S1A-006 | Treatment of unexpected but valid evidence | Diagnostic only (`unexpected_evidence_ids`); never satisfies requirements, never blocks alone | Punishing extra proof discourages evidence; ignoring it silently hides drift — recording it is the middle path |
-| OD-S1A-007 | Exact precedence where two integrity failures coexist | The §9/§10 rank table as written (authority > context-incomplete > task > run > candidate > repository > provenance > duplicate) | Most-specific-foreign-identity-first gives the operator the most actionable primary reason; any total order is acceptable as long as it is fixed |
+| ID | Question | Recommended default | Rationale | Golden cases |
+| --- | --- | --- | --- | --- |
+| OD-S1A-001 | Is missing approval BLOCK or REVIEW_REQUIRED? | BLOCK | ProcessGuard already hard-blocks push/deploy without approval; a wedge whose default leaks unapproved merges is unsellable. REVIEW_REQUIRED would be tolerable UX-wise but weakens the fail-closed story | GC-S1-013, GC-S1-021 |
+| OD-S1A-002 | Is stale approval always BLOCK? | Always BLOCK | An approval for commit A must never carry to commit B; "mostly the same change" is exactly the judgment a re-approval exists to capture | GC-S1-014, GC-S1-023 |
+| OD-S1A-003 | When is verifier-independence UNKNOWN reviewable (vs BLOCK)? | REVIEW_REQUIRED only when a verifier identity is present (`ATTESTED` or `PRESENT_UNATTESTED`); `ABSENT` identity is `REQUIRED_CONTEXT_INCOMPLETE` (BLOCK); `INVALID` identity is `AUTHORITY_INVALID` (BLOCK) | Keeps early deployments usable (independence attestation infra may lag) without ever reviewing an anonymous verifier; the `verifier_identity_status` fact carries exactly the information the final rule needs | GC-S1-017, GC-S1-036, GC-S1-037 |
+| OD-S1A-004 | Do strict deployments require successful trace persistence before a decision may be released to consumers? | Yes in strict mode: the application layer must persist the trace and only then release the decision; the pure evaluator stays side-effect free | An unauditable authorization is a liability; keeping it in the application layer preserves evaluator purity | GC-S1-038 |
+| OD-S1A-005 | Policy exception authority and expiry | Only the owner (or an owner-designated role) may authorize exceptions; every exception has a mandatory expiry and binds to one task+candidate. The event schema already requires an expiry whenever an exception reference is present | Unbounded exceptions become the de-facto policy | GC-S1-039 |
+| OD-S1A-006 | Treatment of unexpected but valid evidence | Diagnostic only (`unexpected_evidence_ids`); never satisfies requirements, never blocks alone | Punishing extra proof discourages evidence; ignoring it silently hides drift — recording it is the middle path | GC-S1-030 |
+| OD-S1A-007 | Exact precedence where two integrity failures coexist | The §9/§10 rank table as written (authority > context-incomplete > task > run > candidate > repository > provenance > duplicate) | Most-specific-foreign-identity-first gives the operator the most actionable primary reason; any total order is acceptable as long as it is fixed | GC-S1-021, GC-S1-040 |
 
-Nothing in this table is chosen merely to finish the document; every recommended default is
-reversible before A2 begins.
+Nothing in this table is chosen merely to finish the document; every recommended default
+is reversible before A2 begins.
 
 ## 26. Exit Criteria
 
-Slice 1A exits when:
+Slice 1A (as revised by R1) exits when:
 
-1. the Slice 1A artifact tests pass (spec present and DRAFT_FOR_OWNER_REVIEW, schema valid,
-   fixture valid, 25+ cases, all dispositions covered, forbidden terms absent);
+1. the artifact tests pass (spec present and DRAFT_FOR_OWNER_REVIEW; schema
+   meta-validated with per-event positive and negative instances; fixture valid with
+   full reason-code coverage, disjoint accounting, total fact-state mapping, independent
+   oracle agreement, mutation-negative detection, and replay invariants);
 2. the full existing suite, architecture tests, and conversation eval remain green with
    zero production files changed;
-3. Codex Sol High independent verification completes;
+3. fresh Codex Sol High independent re-verification completes;
 4. TranBac either accepts this spec (flipping Status in a separate owner-reviewed change)
    or returns decisions for OD-S1A-001 … OD-S1A-007;
 5. only then may Slice 1-A2 (pure evaluator implementation) be scheduled.
