@@ -7,8 +7,9 @@ Technical Author: Claude Code Fable 5
 Independent Verification: PENDING
 Baseline: 3e72e93bfac8da2ecdb7960a55ae0357135eb61e
 Production Implementation: NOT_STARTED
-Revision: R1 (contract completeness, replay and evaluation hardening after Sol High
-review of candidate 07bc5b7be43a275c8484cdc633579ecfda657ffd)
+Revision: R2 (trace binding, canonical digest and causal event hardening after Sol High
+reverify of candidate 40d57188bb984ba047fa0c730fbe34749e4d9d7f; supersedes R1, which
+superseded 07bc5b7be43a275c8484cdc633579ecfda657ffd)
 
 > This document is a specification-and-contract artifact only. It defines the deterministic
 > merge-eligibility policy contract for ChangeGate Slice 1. It implements nothing. It remains
@@ -174,15 +175,30 @@ evidence, the filesystem, or any external system.
 | Field | Content |
 | --- | --- |
 | `task_id` | validated task id |
-| `contract_digest` | exact task-contract binding |
-| `candidate_binding` | `CandidateBinding` (or its canonical digest plus identifying fields) |
-| `policy_context` | policy id, version, digest |
+| `task_contract_digest` | exact task-contract binding |
+| `candidate_digest` | canonical digest of the `CandidateBinding` |
+| `repository_snapshot_digest` | canonical digest of the current `RepositorySnapshot` the facts were derived from |
+| `verification_bundle_digest` | `EvidenceVerificationBundle.bundle_digest` the facts were derived from |
+| `approval_digest` | canonical digest of the `ApprovalFact`, **or** the explicit sentinel `NO_APPROVAL_SUPPLIED` — the absence of an approval is an explicit deterministic input value, never a missing field |
+| `authority_binding_digest` | canonical digest of the `AuthorityFact` (actor/role refs + validity status) |
+| `verifier_binding_digest` | canonical digest of the `VerifierIdentityFact` (verifier/implementer refs + identity/independence statuses) |
+| `policy_digest`, `policy_version` | which policy decides |
 | `facts` | validated `EligibilityFacts` (§6) — the complete typed fact set |
 | `evaluation_mode` | `ENFORCE \| SHADOW` (deterministic input, digest-covered) |
 | `evaluator_version` | evaluator software identity |
 
-`input_digest` is the canonical digest of this structure (it is deterministic policy
-input only — it contains no trace/request/timestamp identity, see §18).
+Every field above is deterministic and caller-supplied. **A2 must not inspect the
+filesystem, storage, raw evidence, clocks, or request metadata**, and the input carries no
+`trace_id`, `evaluation_id`, `request_id`, timestamp, or latency (§18).
+
+`input_digest` = `canonical_digest(MergeEligibilityPolicyInput)`. Because the input binds
+every **source digest** (snapshot, bundle, approval, authority, verifier, contract,
+candidate, policy), a change in any source that could change the meaning of the decision
+necessarily changes `input_digest` and therefore `decision_digest` (§7, §18.3). A source
+digest is **not** excluded from the decision merely because it also appears in the
+application's trace envelope.
+
+All digest fields use the repository's single canonical representation (§7.1).
 
 For every proposed NEW concept:
 
@@ -196,7 +212,9 @@ For every proposed NEW concept:
 | `PolicyContextFact` | No policy-version concept exists in the repository | Yes | Yes | Yes |
 | `EligibilityFacts` (§6) | Nothing maps raw contracts to policy-consumable facts | Yes | Yes | Yes — pure derivation |
 | `MergeEligibilityDecision` (§7) | `ChangeGateDecision` is structural and its vocabulary (`PASS`) is explicitly not merge authority | Yes | Yes | n/a (evaluator output) |
-| `EvaluationTrace` (§18) | No trace/audit model exists | Yes (v1) | Yes — `AuditEvent` remains kernel-future | n/a (evaluator output) |
+| `PolicyEvaluationRecord` (§7.3) | Nothing carries a deterministic, replayable policy record separate from application trace metadata | Yes | Yes | n/a (evaluator output) |
+| `EvaluationTraceEnvelope` (§18) | No trace/audit model exists | Yes (v1) | Yes — `AuditEvent` remains kernel-future | n/a (application-layer output) |
+| `RequirementDeclarationSet` (§25, OD-S1A-008) | `TaskContract.required_evidence` holds display strings; `CommandRequirement.requirement_id` is the stable key, and nothing declares the mapping | Yes | Yes | Yes — an A3 declaration bound to the exact contract digest; **PENDING_OWNER_DECISION OD-S1A-008** |
 
 Deferred-decision guard: none of these DTOs generalizes `TaskContract` (OD-G1-001),
 creates a second `TaskState` or overloads execution status with eligibility (OD-G1-002 —
@@ -241,8 +259,22 @@ invalid, not missing; a foreign or unbound record leaves the requirement missing
 | `invalid_provenance_evidence_ids` | ⊆ rejected: record ids whose rejection is a provenance/schema/collector integrity failure (`INVALID_PROVENANCE`, `UNSUPPORTED_SCHEMA`, `UNSUPPORTED_COLLECTOR`) |
 | `unexpected_evidence_ids` | record ids of VALID verified records whose `requirement_id` is not in `required_requirement_ids` |
 
-Requirement ids and evidence-record ids are never interchangeable: `*_requirement_ids`
-sets hold requirement ids; `*_evidence_ids` sets hold record ids.
+**Identifier namespaces (normative).** Requirement ids and evidence-record ids inhabit two
+**disjoint universes** and are never interchangeable: `*_requirement_ids` sets hold only
+requirement ids, `*_evidence_ids` sets hold only evidence-record ids, and no identifier may
+appear in both universes. A3's typed sources make this structural (`CommandRequirement`
+vs. `EvidenceProvenance`), and every golden case declares its two universes explicitly
+(`identifier_universes`) so the boundary is executably enforced rather than merely
+asserted in prose:
+
+```
+required/satisfied/invalid/missing_requirement_ids  ⊆ requirement_id_universe
+rejected/invalid_provenance/unexpected_evidence_ids ⊆ evidence_record_id_universe
+requirement_id_universe ∩ evidence_record_id_universe = ∅
+```
+
+No production identifier prefix is mandated — the existing contracts do not require one;
+only disjointness is required.
 
 ### 6.3 Context, scope, approval, authority, verifier and mode facts
 
@@ -296,8 +328,34 @@ eligibility.
 
 ## 7. Policy Output
 
-The evaluator returns exactly one immutable **`MergeEligibilityDecision`** plus one
-**`EvaluationTrace`** (§18), both as data.
+The pure evaluator returns exactly two immutable values, **both deterministic data**:
+
+```
+evaluate_merge_eligibility(MergeEligibilityPolicyInput)
+    -> (MergeEligibilityDecision, PolicyEvaluationRecord)
+```
+
+It returns **no** trace envelope. Trace/request/evaluation identities, timestamps, latency
+and event ids are **constructed by the application layer afterwards** (§18). The evaluator
+generates no nondeterministic metadata of any kind.
+
+### 7.1 Canonical digest representation (one representation, everywhere)
+
+The sole canonical digest representation across this spec, the fixture, the event schema,
+decision/source references and the test helpers is:
+
+```
+sha256:<64 lowercase hexadecimal characters>
+```
+
+This is exactly what `agent_core.build_harness.canonical.canonical_digest()` already
+emits and what `validate_sha256_digest()` already accepts. **Bare 64-hex digests are not a
+valid representation.** No component may strip, add back, or otherwise reconstruct the
+`sha256:` prefix; a digest that crosses any boundary crosses it prefixed. Invalid forms
+include bare hex, uppercase `SHA256:` prefixes, uppercase hex, another algorithm prefix,
+wrong length, and any value carrying whitespace or a newline.
+
+### 7.2 MergeEligibilityDecision (deterministic authoritative policy output)
 
 | Field | Authoritative? | Digest-covered? | Meaning |
 | --- | --- | --- | --- |
@@ -307,19 +365,40 @@ The evaluator returns exactly one immutable **`MergeEligibilityDecision`** plus 
 | `complete_reason_codes` | **AUTHORITATIVE** | yes | every independently confirmed reason, sorted lexicographically |
 | `blocking_reason_codes` / `review_reason_codes` | **AUTHORITATIVE** | yes | partition of the complete set by effective disposition |
 | `required_requirement_ids` / `satisfied_requirement_ids` / `invalid_requirement_ids` / `missing_requirement_ids` | **AUTHORITATIVE** | yes | disjoint requirement accounting (§6.1) |
-| `rejected_evidence_ids` / `invalid_provenance_evidence_ids` / `unexpected_evidence_ids` | diagnostic (deterministic) | yes | record-id diagnostics (§6.2); deterministic, therefore digest-covered |
-| `task_id`, `contract_digest`, `candidate_binding` | **AUTHORITATIVE** | yes | what this decision is about |
-| `policy_id`, `policy_version`, `policy_digest` | **AUTHORITATIVE** | yes | which policy decided |
+| `rejected_evidence_ids` / `invalid_provenance_evidence_ids` / `unexpected_evidence_ids` | diagnostic (deterministic) | yes | record-id diagnostics (§6.2); deterministic and policy-meaningful, therefore digest-covered |
+| `task_id` | **AUTHORITATIVE** | yes | what this decision is about |
+| **source bindings**: `task_contract_digest`, `candidate_digest`, `repository_snapshot_digest`, `verification_bundle_digest`, `approval_digest` (or `NO_APPROVAL_SUPPLIED`), `authority_binding_digest`, `verifier_binding_digest` | **AUTHORITATIVE** | yes | every deterministic source the facts were derived from (§5.2) |
+| `policy_version`, `policy_digest` | **AUTHORITATIVE** | yes | which policy decided |
 | `evaluation_mode` | **AUTHORITATIVE** | yes | ENFORCE or SHADOW |
 | `evaluator_version` | **AUTHORITATIVE** | yes | evaluator software identity |
-| `input_digest` | **AUTHORITATIVE** | yes | canonical digest of `MergeEligibilityPolicyInput` |
+| `input_digest` | **AUTHORITATIVE** | yes | `canonical_digest(MergeEligibilityPolicyInput)` |
 | `decision_digest` | **AUTHORITATIVE** | self-excluding | canonical digest over every digest-covered field above, excluding itself (same self-excluding pattern as `VerifiedCommandEvidence`) |
-| `explanations` | diagnostic | **no** | user-facing prose per reason code; NEVER the reason identity (§9); excluded from the digest so prose can improve without a policy bump |
-| `fact_summary` | diagnostic | no | the `EligibilityFacts` values used (also present in the trace) |
+| `explanations` | diagnostic | **no** | user-facing prose per reason code; NEVER the reason identity (§9); excluded so prose can improve without a policy bump |
 
-The decision **contains no trace, evaluation, or request identifier** and no timestamp or
-latency. The trace links to the decision through `decision_digest` (§18), never the
-reverse. This is what makes the replay identity of §18 hold.
+The decision **contains no trace, evaluation, or request identifier**, no timestamp, no
+latency, no event id and no storage location. Linkage runs one way only: the trace
+envelope points at the decision through `decision_digest`, never the reverse.
+
+### 7.3 PolicyEvaluationRecord (deterministic replayable policy record)
+
+A deterministic, replayable record of the evaluation itself, returned by the pure
+evaluator alongside the decision:
+
+| Field | Content |
+| --- | --- |
+| `input_digest` | canonical digest of the deterministic A2 input |
+| `decision_digest` | canonical digest of the decision |
+| source digests | `task_contract_digest`, `candidate_digest`, `repository_snapshot_digest`, `verification_bundle_digest`, `approval_digest` (or sentinel), `authority_binding_digest`, `verifier_binding_digest`, `policy_digest` |
+| `policy_version`, `evaluator_version` | versions that decided |
+| `disposition`, `decision_authority` | outcome |
+| `primary_reason_code`, `complete_reason_codes` | reasons |
+| requirement accounting + record diagnostics | §6.1/§6.2 sets |
+| `redaction_classification` | privacy class of this record (§21) |
+| `policy_record_digest` | canonical digest of the record payload, excluding itself |
+
+It **must not contain**: `request_id`, `trace_id`, an application-generated
+`evaluation_id`, a timestamp, a latency, an event id, or a storage location. Two
+evaluations of the same deterministic input produce byte-identical records.
 
 **Authority boundary:** only the pure evaluator may author a `MergeEligibilityDecision`
 whose `decision_digest` verifies. Any consumer (ProcessGuard-equivalent, CLI, CI adapter)
@@ -415,6 +494,13 @@ nothing else — `POLICY_CONTEXT_STALE` (policy version), `REPOSITORY_CONTEXT_MI
 reused to represent it.
 
 ## 10. Deterministic Precedence
+
+> **Status of the rank table: DRAFT PROPOSAL, PENDING_OWNER_DECISION OD-S1A-007.** The
+> ranks in §9 are the currently proposed draft. Owner acceptance may change them. Any
+> change requires an explicit **owner-acceptance patch that updates the spec, the fixture
+> taxonomy AND the independently pinned rank table in the artifact tests together** — the
+> tests pin their own copy of the complete table precisely so a rank change made in the
+> fixture alone (even with expectations recomputed consistently) fails.
 
 - The **primary reason** is the emitted code with the **lowest rank** in §9's table.
   Ranks are unique per code, so the primary reason is total and deterministic.
@@ -636,63 +722,71 @@ the question, it does not rewrite facts, and the resolution is recorded as a
 decision and trace are immutable; an override produces a new decision context, never an
 edit.
 
-## 18. EvaluationTrace
+## 18. EvaluationTraceEnvelope
 
-Every future policy evaluation produces a structured, immutable **EvaluationTrace**. The
-pure evaluator **returns the trace as data**; it never writes to SQLite, JSONL, network
-telemetry, or a global logger — persistence is an application-layer duty behind a port.
-Whether strict deployments must require successful trace persistence **before** a
-decision may be released to consumers is PENDING_OWNER_DECISION OD-S1A-004 (GC-S1-038).
+The **application layer** — not the pure evaluator — constructs the trace envelope, after
+policy evaluation has returned. The evaluator never writes to SQLite, JSONL, network
+telemetry, or a global logger, and it never mints a trace/request/evaluation identity, a
+timestamp, or a latency. Whether strict deployments must require successful trace
+persistence **before** a decision may be released to consumers is PENDING_OWNER_DECISION
+OD-S1A-004 (GC-S1-038).
 
-### 18.1 Decision identity vs trace identity (Sol High H-02)
+### 18.1 Construction boundary (normative)
 
-Two digests with strictly separated coverage:
+```
+A3-derived validated facts and source bindings
+→ A2 pure evaluator
+→ MergeEligibilityDecision + PolicyEvaluationRecord      (deterministic, no clock, no ids)
+→ application EvaluationTraceEnvelope                    (ids, timestamp, latency)
+→ event sink                                             (§19)
+```
 
-- **`decision_digest`** covers ONLY deterministic policy-decision fields (§7 table:
-  bindings, evaluator version, input digest, disposition, decision authority, reason
-  codes, requirement/record sets, declared-deterministic diagnostics). It must NOT cover:
-  `trace_id`, `evaluation_id`, `request_id`, timestamps, latency, event ids, or storage
-  location.
-- **`trace_digest`** is the canonical digest of the trace payload (which includes the
-  trace identities and caller-supplied timestamp, and embeds `decision_digest` and
-  `input_digest`), excluding itself.
+Any statement that the pure evaluator produces request ids, timestamps, latency, or a
+trace envelope is superseded by this section.
 
-**Replay invariants (normative, executably pinned by the artifact tests):**
+### 18.2 EvaluationTraceEnvelope contents
 
-1. two evaluations with identical deterministic policy input, policy version and
-   evaluator version reproduce the **same `decision_digest`** even when trace/evaluation/
-   request ids and timestamps differ;
-2. any policy fact change changes `input_digest` and therefore `decision_digest`;
-3. trace metadata changes (ids, timestamp, latency) change `trace_digest` but never
-   `decision_digest`.
+| Field | Content | Source |
+| --- | --- | --- |
+| `trace_id`, `evaluation_id`, `request_id` | trace identities | application layer |
+| `timestamp` | RFC 3339 UTC | application layer (caller clock) |
+| `evaluation_latency_ms` | measured duration | application layer |
+| `decision_digest` | canonical digest of the decision | pure evaluator |
+| `policy_record_digest` | canonical digest of the `PolicyEvaluationRecord` | pure evaluator |
+| `input_digest` | canonical digest of the A2 input | pure evaluator |
+| `policy_evaluation_record` | the deterministic record (§7.3), embedded verbatim | pure evaluator |
+| `event_provenance` | emitter, emitter version, sink metadata | application layer |
+| `redaction_classification` | privacy class (§21) | application layer |
+| `trace_digest` | canonical digest of the trace payload, excluding itself | application layer |
 
-### 18.2 Trace contents
+The envelope embeds the deterministic record; it never edits it. `trace_digest` therefore
+covers both the deterministic policy content and the application metadata, while
+`decision_digest` and `policy_record_digest` cover only deterministic content.
 
-| Field | Content |
+### 18.3 Digest replay invariants (normative; executably pinned by the artifact tests)
+
+| # | Invariant |
 | --- | --- |
-| `trace_id`, `evaluation_id`, `request_id` | identities (caller-supplied or application-generated; never generated inside the pure evaluator) |
-| `timestamp` | caller-supplied (the evaluator has no clock) |
-| `task_id`, `task_contract_digest` | task binding |
-| `candidate_digest` | canonical digest of `CandidateBinding` |
-| `repository_snapshot_digest` | canonical digest of the current snapshot |
-| `verification_bundle_digest` | `EvidenceVerificationBundle.bundle_digest` |
-| `policy_id` / `policy_version` / `policy_digest` | policy binding |
-| `approval_digest` | present when an approval fact was supplied |
-| `actor_ref`, `verifier_ref` | opaque identity references (never emails/names) |
-| `disposition`, `decision_authority`, `primary_reason_code`, `complete_reason_codes` | outcome |
-| `required/satisfied/invalid/missing_requirement_ids`, record-id diagnostics | evidence accounting |
-| `evaluation_mode` | ENFORCE / SHADOW |
-| `evaluator_version`, `input_digest`, `decision_digest` | replay identity |
-| `trace_digest` | canonical digest of the trace payload (self-excluding) |
-| `evaluation_latency_ms` | supplied by the application layer (telemetry; part of the trace envelope, never of decision identity) |
-| `redaction_classification` | privacy class of the trace payload (§21) |
+| 1 | same deterministic A2 input → same `input_digest` |
+| 2 | same deterministic A2 input → same `decision_digest` |
+| 3 | `request_id` / `trace_id` / `evaluation_id` change → `decision_digest` unchanged |
+| 4 | timestamp or latency change → `decision_digest` unchanged |
+| 5 | `repository_snapshot_digest` change → `decision_digest` changes |
+| 6 | `verification_bundle_digest` change → `decision_digest` changes |
+| 7 | `approval_digest` change (including to/from `NO_APPROVAL_SUPPLIED`) → `decision_digest` changes |
+| 8 | `authority_binding_digest` or `verifier_binding_digest` change → `decision_digest` changes |
+| 9 | `policy_version`/`policy_digest` or `evaluator_version` change → `decision_digest` changes |
+| 10 | application trace metadata change → `trace_digest` changes |
+
+A deterministic source digest is **never** excluded from decision identity merely because
+it also appears in the trace envelope (invariants 5–8).
 
 Three layers are distinguished and must not be conflated:
 
-1. **deterministic policy trace** (this contract) — replayable from digests and reason
-   codes without raw source code, command output, or secrets;
+1. **deterministic policy record** (§7.3) — replayable from digests and reason codes
+   without raw source code, command output, or secrets;
 2. **application telemetry** (latency, sink health, retries) — owned by the application
-   layer, references `trace_id`;
+   layer, carried in the trace envelope, referenced by `trace_id`;
 3. **raw debug logs** — never part of the contract, never required for replay, and
    subject to §21 redaction.
 
@@ -709,36 +803,70 @@ Event types (closed set for v1):
 `CHANGEGATE_POST_MERGE_VALIDATION`, `CHANGEGATE_ROLLBACK_RECORDED`,
 `CHANGEGATE_USER_FEEDBACK_RECORDED`.
 
-**Per-event conditional linkage (Sol High H-03).** The schema enforces with Draft
-2020-12 `allOf`/`if`/`then` constraints, minimally:
+### 19.1 Causal chain (deterministically reconstructable)
+
+Every event after the evaluation names the **exact** earlier event it descends from,
+through a bounded `eventRef` grammar that is distinct from content-bearing values (an
+event reference may only ever name an event):
+
+```
+CHANGEGATE_EVALUATION_COMPLETED
+        ↓ evaluation_event_ref
+CHANGEGATE_REVIEW_OVERRIDDEN          optional branch (+ original decision_ref)
+        ↓ evaluation_event_ref
+CHANGEGATE_MERGE_ATTEMPTED
+        ↓ attempt_event_ref
+CHANGEGATE_MERGE_COMPLETED
+        ↓ merge_event_ref
+CHANGEGATE_POST_MERGE_VALIDATION
+        ↓ merge_event_ref (+ validation_event_ref where applicable)
+CHANGEGATE_ROLLBACK_RECORDED          optional
+        ↓ target_event_ref (+ target_event_type)
+CHANGEGATE_USER_FEEDBACK_RECORDED
+```
+
+**Per-event conditional linkage.** The schema enforces with Draft 2020-12
+`allOf`/`if`/`then` constraints, minimally:
 
 | Event type | Additionally required (non-null) |
 | --- | --- |
-| `CHANGEGATE_EVALUATION_COMPLETED` | `decision_ref` (with disposition), `context_digest`, `policy_version`, `evaluator_version`, `outcome` (evaluation result object) |
-| `CHANGEGATE_REVIEW_OVERRIDDEN` | `decision_ref` (immutable original), `override` object (actor ref, reason code, new decision digest and/or exception ref; expiry required whenever an exception ref is present — authority value itself stays OD-S1A-005) |
-| `CHANGEGATE_MERGE_ATTEMPTED` | `decision_ref`, `outcome` (attempt status); `subject_ref` is envelope-required |
-| `CHANGEGATE_MERGE_COMPLETED` | `decision_ref`, `outcome`; merged subject/candidate via `subject_ref` |
-| `CHANGEGATE_POST_MERGE_VALIDATION` | `decision_ref`, `merge_event_ref`, validation `outcome` |
-| `CHANGEGATE_ROLLBACK_RECORDED` | `decision_ref`, `merge_event_ref` (prior merge), `outcome` with machine-readable reason code |
-| `CHANGEGATE_USER_FEEDBACK_RECORDED` | `decision_ref`, non-null structured `feedback` (verdict + category code); no policy-mutation field exists |
+| `CHANGEGATE_EVALUATION_COMPLETED` | `decision_ref` (with `disposition` **and** `decision_authority`), `context_digest` (= A2 `input_digest`), `policy_version`, `evaluator_version`, `outcome` |
+| `CHANGEGATE_REVIEW_OVERRIDDEN` | `decision_ref` (immutable original), `evaluation_event_ref`, `override` {actor ref, reason code, new decision digest and/or exception ref; expiry required whenever an exception ref is present — the authority value itself stays OD-S1A-005} |
+| `CHANGEGATE_MERGE_ATTEMPTED` | `decision_ref` (decision digest), `evaluation_event_ref` (originating evaluation), `outcome` (attempt status); candidate/subject via envelope-required `subject_ref` |
+| `CHANGEGATE_MERGE_COMPLETED` | `decision_ref`, **`attempt_event_ref`** (the exact attempt this resolves — this is what makes multiple attempts deterministically pairable with their result), `outcome` with **`resulting_commit_sha`** (dedicated lowercase-hex field) |
+| `CHANGEGATE_POST_MERGE_VALIDATION` | `decision_ref`, `merge_event_ref` (exact completion), validation `outcome` |
+| `CHANGEGATE_ROLLBACK_RECORDED` | `decision_ref`, `merge_event_ref` (exact completion), `outcome` with machine-readable `detail_code`; `validation_event_ref` where a validation motivated it |
+| `CHANGEGATE_USER_FEEDBACK_RECORDED` | `decision_ref`, **`target_event_ref`** (the exact prior event being judged), **`target_event_type`** (eligibility decision / override / merge outcome / validation / rollback), structured `feedback` with a mandatory **`feedback.actor_ref`** (the human/source identity — `provenance.emitter` identifies the emitting application and is never the feedback actor); no policy-mutation field exists |
 
 A minimal common-envelope-only instance is invalid for **every** event type (executably
-tested, positive and negative).
+tested, positive and negative), and a full valid chain is reconstructable end to end:
+every reference resolves to an earlier event of the correct type, the decision digest
+stays consistent across the chain, and attempt/result/validation/feedback pair
+deterministically (executably tested by a test-only cross-event chain validator; JSON
+Schema itself validates local shape only).
 
-Envelope fields: `event_id`, `event_type`, `occurred_at`, `schema_version`, `product`
-(const `"changegate"`), `project_ref`/`task_ref`/`run_ref`, `subject_ref` (namespace/
-kind/value/digest — shaped after ADR-003 §8 `SubjectRef` as a JSON reference; this does
-NOT implement the kernel `SubjectRef` model), `context_digest`, `policy_version` +
-`evaluator_version`, `decision_ref` (evaluation id, decision digest, disposition,
-decision authority, primary reason), `evidence_refs` (ids + digests only), `outcome`
-(status + machine-readable `detail_code`; empty objects are invalid), `feedback`
-(structured: verdict + category code + optional reason code + opaque redacted-comment
-digest; no raw text), `override`, `merge_event_ref`, `provenance` (emitter + emitter
-version + trace linkage), `privacy_classification`.
+### 19.2 Envelope fields
+
+`event_id`, `event_type`, `occurred_at`, `schema_version`, `product` (const
+`"changegate"`), `project_ref`/`task_ref`/`run_ref`, `subject_ref` (namespace + closed
+machine-readable `kind` enum + opaque `value` + dedicated `commit_sha` + canonical
+`digest` — shaped after ADR-003 §8 `SubjectRef` as a JSON reference; this does NOT
+implement the kernel `SubjectRef` model), `context_digest`, `policy_version` +
+`evaluator_version`, `decision_ref` (evaluation id, canonical `decision_digest`, optional
+`policy_record_digest`/`input_digest`, disposition, decision authority, primary reason,
+evaluation mode), the causal references `evaluation_event_ref` / `attempt_event_ref` /
+`merge_event_ref` / `validation_event_ref` / `target_event_ref` + `target_event_type`,
+`evidence_refs` (ids + canonical digests only), `outcome` (status + machine-readable
+`detail_code` + optional `resulting_commit_sha`; empty objects are invalid), `feedback`
+(structured: actor ref + verdict + category code + optional reason code + optional opaque
+redacted-comment digest; no raw text), `override`, `provenance` (emitter + emitter version
++ trace linkage), `privacy_classification`.
+
+Every digest field uses the canonical `sha256:<64 lowercase hex>` representation of §7.1,
+so a real `canonical_digest()` value is directly carriable with no conversion.
 
 The schema **must not require** and does not define fields for: raw prompts, source file
-contents, secrets, credentials, or entire command output. All identifier/reference fields
-use bounded no-whitespace grammars (§21), so raw source-like content is rejected.
+contents, secrets, credentials, or entire command output.
 
 ## 20. Outcome and Feedback Linkage
 
@@ -775,37 +903,69 @@ improvement proposals, not autonomous self-modification.
 
 ## 21. Privacy, Security and Redaction
 
+### 21.1 Division of responsibility (what the schema can and cannot do)
+
+```
+Schema-level controls:
+    shape, grammar, length and forbidden content-bearing structures.
+
+Application sink controls:
+    redaction, secret scanning, allowlist validation and access policy.
+```
+
+**The schema does not, and cannot, identify every possible secret value.** A bounded
+identifier grammar plus a deny-list of the most common credential shapes rejects the
+obvious cases; it is not a secret scanner. Any claim that the event contract alone
+guarantees the absence of secrets or source-like content is out of scope and must not be
+made. Sinks remain responsible for redaction, scanning and access control.
+
+### 21.2 Schema-level controls (enforced, executably tested)
+
 - Traces and events carry **digests and identifiers only**: no raw stdout/stderr (the
   provenance layer already stores `stdout_digest`/`stderr_digest`), no file contents, no
-  prompts, no secrets, no credentials, no private keys.
-- **Bounded reference grammars (Sol High M-03):** every opaque identifier/reference field
-  in the event envelope (`event_id`, `task_ref`, `project_ref`, `run_ref`,
-  `subject_ref.value`, actor/verifier refs, `merge_event_ref`, emitter and version
-  fields, exception refs) uses a stable restricted grammar with bounded length and **no
-  whitespace or newlines** — raw prose and source-like multiline content are
-  schema-invalid. Digests use the exact 64-hex-char sha256 grammar. Sinks must reject
-  noncanonical references.
-- Actor references are **opaque ids** (`actor_ref`), never emails or display names, in
-  both traces and events.
-- `privacy_classification` (event) and `redaction_classification` (trace) are mandatory,
-  from the closed set `PUBLIC`, `INTERNAL`, `SENSITIVE`; sinks must refuse an event
-  without a classification.
-- Feedback is structured (verdict + category code + optional reason code + optional
-  opaque redacted-comment digest); unrestricted raw feedback text is not representable in
-  the envelope.
+  prompts, no command output. No field for such content exists.
+- **Narrow reference grammar:** every opaque identifier/reference field (`event_id`,
+  `project_ref`, `run_ref`, `subject_ref.namespace`/`value`, actor refs, exception refs,
+  emitter, and every `*_event_ref`) permits only letters, digits, `_`, `-` and `.`, with
+  bounded length. This rejects whitespace and newlines, path separators, `..` traversal,
+  URLs and URL schemes, diff/code fragments, and overlong values. `task_ref` keeps the
+  existing `TaskContract.task_id` grammar so current TOMTIT task ids stay representable;
+  generated ids (`[a-z0-9][a-z0-9-]{0,63}`) are representable unchanged.
+- A defensive **deny-list** additionally rejects the most common credential shapes
+  (`ghp_`, `github_pat_`, `xox*-`, `sk-`, `AKIA`, `AIza`, JWT prefixes) in opaque
+  references. This is a guard, not a guarantee (§21.1).
+- **Structured values get dedicated fields** instead of being packed into an opaque
+  string: a Git commit uses the lowercase-hex `commit_sha` / `resulting_commit_sha`
+  fields; a canonical digest uses a `sha256:<hex>` digest field; an event id uses the
+  bounded `eventRef` grammar; `subject_ref.kind` is a closed machine-readable enum.
+- `privacy_classification` (event) and `redaction_classification` (policy record / trace)
+  are mandatory, from the closed set `PUBLIC`, `INTERNAL`, `SENSITIVE`; sinks must refuse
+  an event without a classification.
+- Feedback is structured (actor ref + verdict + category code + optional reason code +
+  optional opaque redacted-comment digest); unrestricted raw feedback text is not
+  representable in the envelope.
 - Outcome objects cannot be empty: each required outcome carries at least a `status` and
   a machine-readable `detail_code`.
-- Command `argv` may appear in diagnostics only after the application layer's redaction
-  pass; the policy trace itself references commands by `requirement_id`/`command_digest`.
-- Golden fixtures and schemas in this slice must contain no real secrets, credentials, or
-  private keys (executably enforced by the artifact tests).
-- Raw debug logs are outside the policy contract and must never be required to replay a
-  decision (§18).
+- Actor references are **opaque ids**, never emails or display names, in both records and
+  events.
+
+### 21.3 Application sink controls (not enforced by this schema)
+
+- Redaction of any free text before it is stored anywhere outside the envelope;
+- secret scanning of values that are grammatically valid but semantically sensitive;
+- allowlist validation of actor/project/run references against real identity systems;
+- access policy and retention per `privacy_classification`.
+
+Command `argv` may appear in diagnostics only after the application layer's redaction
+pass; the policy record itself references commands by `requirement_id`/`command_digest`.
+Golden fixtures and schemas in this slice contain no real secrets, credentials, or private
+keys (executably enforced by the artifact tests). Raw debug logs are outside the policy
+contract and must never be required to replay a decision (§18).
 
 ## 22. Golden Evaluation Matrix
 
 Artifact: `data/evals/changegate_merge_eligibility_golden_cases.json` (deterministic,
-versioned `changegate-merge-eligibility-golden.v2`; 40 cases GC-S1-001 … GC-S1-040). The
+versioned `changegate-merge-eligibility-golden.v3`; 41 cases GC-S1-001 … GC-S1-041). The
 fixture embeds the normative `fact_state_mapping`, and the artifact tests derive every
 case's complete reason set independently from its facts via a test-only oracle (never
 from the case's own expectations). Every closed reason code appears as an expected reason
@@ -856,32 +1016,41 @@ Authority column: AUTH. = AUTHORITATIVE (ENFORCE), ADVISORY_ONLY = SHADOW.
 | GC-S1-038 | Strict-mode trace persistence gating | ELIGIBLE_TO_MERGE_UNDER_POLICY | — | AUTH. | OD-S1A-004 |
 | GC-S1-039 | Policy exception lifecycle (expiry required) | BLOCK | SCOPE_VIOLATION | AUTH. | OD-S1A-005 |
 | GC-S1-040 | Dual integrity failure (authority + foreign task) | BLOCK | AUTHORITY_INVALID | AUTH. | OD-S1A-007 |
+| GC-S1-041 | Requirement declarations are external to A2 (OD-S1A-008) | ELIGIBLE_TO_MERGE_UNDER_POLICY | — | AUTH. | OD-S1A-008 |
 
-Each fixture case carries: `case_id`, `summary`, complete `policy_input_facts` (§6),
-`expected_disposition`, `expected_decision_authority`, `expected_primary_reason`,
+Each fixture case carries: `case_id`, `summary`, `identifier_universes` (disjoint
+requirement-id and evidence-record-id universes, §6.2), `policy_input_bindings` (the
+deterministic source digests of §5.2, in the canonical `sha256:<hex>` representation),
+the complete `policy_input_facts` (§6), `expected_disposition`,
+`expected_decision_authority`, `expected_primary_reason`,
 `expected_complete_reason_codes`, `override_class`, `expected_event_assertions`, `tags`,
-and `owner_decisions_pending`. If the owner decides differently in §25, the fixture and
-this table are updated in the same owner-reviewed change.
+and `owner_decisions_pending`. If the owner decides differently in §25, the fixture, this
+table AND the independently pinned test tables are updated in the same owner-reviewed
+change.
 
 ## 23. Proposed A2 Implementation Scope
 
-Proposed (NOT executed in 1A/R1; requires owner approval of this spec first):
+Proposed (NOT executed in 1A/R1/R2; requires owner approval of this spec first):
 
-- `agent_core/build_harness/eligibility_facts.py` — `EligibilityFacts` + the §5
-  application fact DTOs + the A3 pure derivation (`EligibilityFactDerivationInput →
-  EligibilityFacts`) from existing contracts, including the run-record-based requirement
-  binding for rejected records and a declared mapping from
-  `TaskContract.required_evidence` display strings to stable `CommandRequirement`
-  declarations;
-- `agent_core/build_harness/merge_eligibility.py` — `MergeEligibilityPolicyInput`,
-  `MergeEligibilityDecision`, `EvaluationTrace`, the reason-code table, pure
-  `evaluate_merge_eligibility()` returning `(decision, trace)` as data with the §18
-  digest separation;
+- `agent_core/build_harness/merge_eligibility.py` (**A2**) — `MergeEligibilityPolicyInput`,
+  `MergeEligibilityDecision`, `PolicyEvaluationRecord`, the reason-code table, and the
+  pure `evaluate_merge_eligibility()` returning `(decision, record)` as data with the §7.1
+  canonical digests and the §18.3 replay invariants. A2 consumes **validated facts +
+  source bindings only** — no storage, filesystem, raw evidence, clock, or request
+  metadata — and is therefore **not blocked** by OD-S1A-008.
+- `agent_core/build_harness/eligibility_facts.py` (**A3**) — `EligibilityFacts`, the §5
+  application fact DTOs, and the pure derivation `EligibilityFactDerivationInput →
+  EligibilityFacts`, including the run-record-based requirement binding for rejected
+  records. **A3 is BLOCKED UNTIL OD-S1A-008 IS ACCEPTED**, because it needs the declared
+  `RequirementDeclarationSet` mapping (§25) rather than an inferred one.
+- application layer (A3+) — `EvaluationTraceEnvelope` construction, trace persistence
+  behind a port, and event emission against
+  `data/schemas/changegate_evaluation_event_v1.schema.json`.
 - `tests/build_harness/test_merge_eligibility_policy.py` — unit tests + golden-case
   runner over `data/evals/changegate_merge_eligibility_golden_cases.json`;
 - a read-only CLI subcommand (`merge-eligibility`) consuming explicit JSON inputs,
   preserving the standalone path (ADR-002 §8);
-- no adapters, no persistence, no event emission in A2 (those are A3+ behind ports).
+- no adapters, no persistence, no event emission in A2.
 
 ## 24. Deferred Decisions
 
@@ -918,24 +1087,67 @@ fixture marks every case whose expected result depends on one of these decisions
 | OD-S1A-005 | Policy exception authority and expiry | Only the owner (or an owner-designated role) may authorize exceptions; every exception has a mandatory expiry and binds to one task+candidate. The event schema already requires an expiry whenever an exception reference is present | Unbounded exceptions become the de-facto policy | GC-S1-039 |
 | OD-S1A-006 | Treatment of unexpected but valid evidence | Diagnostic only (`unexpected_evidence_ids`); never satisfies requirements, never blocks alone | Punishing extra proof discourages evidence; ignoring it silently hides drift — recording it is the middle path | GC-S1-030 |
 | OD-S1A-007 | Exact precedence where two integrity failures coexist | The §9/§10 rank table as written (authority > context-incomplete > task > run > candidate > repository > provenance > duplicate) | Most-specific-foreign-identity-first gives the operator the most actionable primary reason; any total order is acceptable as long as it is fixed | GC-S1-021, GC-S1-040 |
+| OD-S1A-008 | Stable Requirement Declaration Mapping (§25.1) | A ChangeGate-local `RequirementDeclarationSet` bound to the exact TaskContract digest; requirement ids are **declared**, never hashed/normalized/inferred from `TaskContract.required_evidence` display strings | Inferring an authority-bearing identity from a display string makes evidence completeness silently renameable; declaring it keeps the mapping reviewable and keeps `TaskContract` unmodified (OD-G1-001) | GC-S1-041 |
 
 Nothing in this table is chosen merely to finish the document; every recommended default
 is reversible before A2 begins.
 
+### 25.1 OD-S1A-008 — Stable Requirement Declaration Mapping
+
+```
+OD-S1A-008 — Stable Requirement Declaration Mapping
+Status: PENDING_OWNER_DECISION
+```
+
+**Decision question.** How does ChangeGate derive stable
+`CommandRequirement.requirement_id` declarations from the governing `TaskContract`, whose
+current `required_evidence` field contains display strings?
+
+**Recommended draft:**
+
+- do **not** hash, normalize or infer requirement ids from display strings;
+- do **not** generalize or modify `TaskContract` in Slice 1 (OD-G1-001 stays deferred);
+- define a ChangeGate-local **`RequirementDeclarationSet`**;
+- bind the declaration set to the **exact TaskContract digest** (a different contract
+  digest is a different declaration set — and `TASK_CONTEXT_STALE` if it no longer matches
+  the candidate, §12);
+- each declaration carries the stable `requirement_id` plus display/command metadata
+  (argv, working directory, timeout — i.e. the existing `CommandRequirement` shape);
+- **A3 requires this explicit declaration set** and may not synthesize it;
+- **A2 remains independent**, because it consumes validated requirement *facts*
+  (`required/satisfied/invalid/missing_requirement_ids`), never
+  `TaskContract.required_evidence`.
+
+**Classification:**
+
+```
+Slice 1A owner review:   NOT BLOCKED
+A2 implementation:       NOT BLOCKED
+A3 implementation:       BLOCKED UNTIL OD-S1A-008 ACCEPTED
+```
+
+Golden case **GC-S1-041** demonstrates that the mapping is external to A2: the same
+validated facts produce the same decision regardless of how the declarations were
+produced, and the case asserts
+`requirement_ids_derived_from_display_strings = false`.
+
 ## 26. Exit Criteria
 
-Slice 1A (as revised by R1) exits when:
+Slice 1A (as revised by R1 and R2) exits when:
 
 1. the artifact tests pass (spec present and DRAFT_FOR_OWNER_REVIEW; schema
-   meta-validated with per-event positive and negative instances; fixture valid with
-   full reason-code coverage, disjoint accounting, total fact-state mapping, independent
-   oracle agreement, mutation-negative detection, and replay invariants);
+   meta-validated with per-event positive and negative instances and a full valid causal
+   chain; canonical `canonical_digest()` output accepted by every digest field; fixture
+   valid with full reason-code coverage, disjoint accounting, disjoint identifier
+   universes, total fact-state mapping, independently pinned precedence, independent
+   oracle agreement, mutation-negative detection, and the ten replay invariants);
 2. the full existing suite, architecture tests, and conversation eval remain green with
    zero production files changed;
 3. fresh Codex Sol High independent re-verification completes;
 4. TranBac either accepts this spec (flipping Status in a separate owner-reviewed change)
-   or returns decisions for OD-S1A-001 … OD-S1A-007;
-5. only then may Slice 1-A2 (pure evaluator implementation) be scheduled.
+   or returns decisions for OD-S1A-001 … OD-S1A-008;
+5. only then may Slice 1-A2 (pure evaluator implementation) be scheduled. Slice 1-A3
+   additionally requires OD-S1A-008 to be accepted.
 
 The forbidden output terms remain forbidden after acceptance: `SAFE_TO_MERGE` and
 `VERIFIED_AND_MERGE` must never appear as output values of any ChangeGate component.

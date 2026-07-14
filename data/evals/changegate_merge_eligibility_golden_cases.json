@@ -1,10 +1,10 @@
 {
   "suite_id": "changegate_merge_eligibility_golden_cases",
-  "schema_version": "changegate-merge-eligibility-golden.v2",
+  "schema_version": "changegate-merge-eligibility-golden.v3",
   "status": "DRAFT_FOR_OWNER_REVIEW",
-  "description": "Golden evaluation cases for the ChangeGate Slice 1 merge-eligibility policy (R1-hardened). Each case supplies the complete typed EligibilityFacts (spec §6) and pins the expected disposition, decision authority, deterministic primary reason, complete reason set, override class and product-event assertions. fact_state_mapping is the normative machine-readable total mapping from every fact state to its reason code; the test-only oracle in tests/build_harness/test_changegate_slice_1_spec_artifacts.py derives every case's reasons independently from its facts. No production evaluator exists yet.",
+  "description": "Golden evaluation cases for the ChangeGate Slice 1 merge-eligibility policy (R2-hardened). Each case supplies the complete typed EligibilityFacts (spec §6), the deterministic source bindings the A2 decision digest must cover (spec §5.2/§7), and explicit identifier universes separating requirement ids from evidence-record ids (spec §6.2). fact_state_mapping is the normative machine-readable total mapping from every fact state to its reason code. The precedence table below is the DRAFT proposal pending OD-S1A-007; the artifact tests pin an independent copy of it, so a coordinated rank change in this file alone fails. All digests use the repository's canonical representation sha256:<64 lowercase hex> as produced by agent_core.build_harness.canonical.canonical_digest(). No production evaluator exists yet.",
   "policy_spec": "docs/strategy/CHANGEGATE_VERTICAL_MVP_SLICE_1_POLICY_SPEC.md",
-  "policy_version_ref": "changegate-merge-eligibility-policy.v2-draft",
+  "policy_version_ref": "changegate-merge-eligibility-policy.v3-draft",
   "event_schema": "data/schemas/changegate_evaluation_event_v1.schema.json",
   "dispositions": [
     "ELIGIBLE_TO_MERGE_UNDER_POLICY",
@@ -337,6 +337,34 @@
       "SHADOW": "ADVISORY_ONLY"
     }
   },
+  "digest_representation": "sha256:<64 lowercase hex>",
+  "precedence_status": "DRAFT_PENDING_OD_S1A_007",
+  "no_approval_sentinel": "NO_APPROVAL_SUPPLIED",
+  "identifier_universes": {
+    "requirement_id_universe": [
+      "req-compileall",
+      "req-pytest-full"
+    ],
+    "evidence_record_id_universe": [
+      "ev-compileall-1",
+      "ev-extra-benchmark",
+      "ev-foreign-1",
+      "ev-pytest-1",
+      "ev-pytest-bad",
+      "ev-pytest-forged",
+      "ev-pytest-try1"
+    ]
+  },
+  "owner_decisions": [
+    "OD-S1A-001",
+    "OD-S1A-002",
+    "OD-S1A-003",
+    "OD-S1A-004",
+    "OD-S1A-005",
+    "OD-S1A-006",
+    "OD-S1A-007",
+    "OD-S1A-008"
+  ],
   "cases": [
     {
       "case_id": "GC-S1-001",
@@ -344,6 +372,34 @@
       "tags": [
         "happy_path"
       ],
+      "identifier_universes": {
+        "requirement_id_universe": [
+          "req-compileall",
+          "req-pytest-full"
+        ],
+        "evidence_record_id_universe": [
+          "ev-compileall-1",
+          "ev-extra-benchmark",
+          "ev-foreign-1",
+          "ev-pytest-1",
+          "ev-pytest-bad",
+          "ev-pytest-forged",
+          "ev-pytest-try1"
+        ]
+      },
+      "policy_input_bindings": {
+        "task_id": "changegate-slice1a-demo",
+        "task_contract_digest": "sha256:864a42cb0a655da8739eee18a2a16cf6aafde32df8c3f485ec1faa4b9da63a51",
+        "candidate_digest": "sha256:d54b4b5d5c4d6f694e5e24a90e1199cbb6047c5b182f4defae537da0b3dd5246",
+        "repository_snapshot_digest": "sha256:d60ff0950c57275a542f9fea6f259fb6fb4d0f96582d164cb94eb16f508f9104",
+        "verification_bundle_digest": "sha256:9305cc24dcc296e5fb5ed85bd0e82c2707f0a7d3642841ea9366aa384b5d8f78",
+        "approval_digest": "sha256:007dfeb478183fbe4bee118d33a76b3cb0678a0d02bd6a33dcef33896b0465bb",
+        "authority_binding_digest": "sha256:dd2150d35050a6e7d59c7642e67e583e44392df0eea2e30b3539cf1843ee46b9",
+        "verifier_binding_digest": "sha256:efe616a1d165ab728aebb15a6aa1e2d4d30ef01bf339f4cf9c25f293147634ee",
+        "policy_digest": "sha256:88304ee85d7d10c2124d75b0de11cb8d8f91a8707945cabc651c0cbdedc71934",
+        "policy_version": "changegate-merge-eligibility-policy.v2-draft",
+        "evaluator_version": "changegate-merge-eligibility-evaluator.0-unimplemented"
+      },
       "policy_input_facts": {
         "task_context_current": "CURRENT",
         "candidate_binding_current": "CURRENT",
@@ -394,6 +450,34 @@
       "tags": [
         "empty_bundle_with_requirements"
       ],
+      "identifier_universes": {
+        "requirement_id_universe": [
+          "req-compileall",
+          "req-pytest-full"
+        ],
+        "evidence_record_id_universe": [
+          "ev-compileall-1",
+          "ev-extra-benchmark",
+          "ev-foreign-1",
+          "ev-pytest-1",
+          "ev-pytest-bad",
+          "ev-pytest-forged",
+          "ev-pytest-try1"
+        ]
+      },
+      "policy_input_bindings": {
+        "task_id": "changegate-slice1a-demo",
+        "task_contract_digest": "sha256:864a42cb0a655da8739eee18a2a16cf6aafde32df8c3f485ec1faa4b9da63a51",
+        "candidate_digest": "sha256:d54b4b5d5c4d6f694e5e24a90e1199cbb6047c5b182f4defae537da0b3dd5246",
+        "repository_snapshot_digest": "sha256:d60ff0950c57275a542f9fea6f259fb6fb4d0f96582d164cb94eb16f508f9104",
+        "verification_bundle_digest": "sha256:363f760f208bcbd31b7fa3c916434a73f64ba21bf4945528be39967e0c47bcfd",
+        "approval_digest": "sha256:007dfeb478183fbe4bee118d33a76b3cb0678a0d02bd6a33dcef33896b0465bb",
+        "authority_binding_digest": "sha256:dd2150d35050a6e7d59c7642e67e583e44392df0eea2e30b3539cf1843ee46b9",
+        "verifier_binding_digest": "sha256:efe616a1d165ab728aebb15a6aa1e2d4d30ef01bf339f4cf9c25f293147634ee",
+        "policy_digest": "sha256:88304ee85d7d10c2124d75b0de11cb8d8f91a8707945cabc651c0cbdedc71934",
+        "policy_version": "changegate-merge-eligibility-policy.v2-draft",
+        "evaluator_version": "changegate-merge-eligibility-evaluator.0-unimplemented"
+      },
       "policy_input_facts": {
         "task_context_current": "CURRENT",
         "candidate_binding_current": "CURRENT",
@@ -446,6 +530,34 @@
       "tags": [
         "partial_evidence"
       ],
+      "identifier_universes": {
+        "requirement_id_universe": [
+          "req-compileall",
+          "req-pytest-full"
+        ],
+        "evidence_record_id_universe": [
+          "ev-compileall-1",
+          "ev-extra-benchmark",
+          "ev-foreign-1",
+          "ev-pytest-1",
+          "ev-pytest-bad",
+          "ev-pytest-forged",
+          "ev-pytest-try1"
+        ]
+      },
+      "policy_input_bindings": {
+        "task_id": "changegate-slice1a-demo",
+        "task_contract_digest": "sha256:864a42cb0a655da8739eee18a2a16cf6aafde32df8c3f485ec1faa4b9da63a51",
+        "candidate_digest": "sha256:d54b4b5d5c4d6f694e5e24a90e1199cbb6047c5b182f4defae537da0b3dd5246",
+        "repository_snapshot_digest": "sha256:d60ff0950c57275a542f9fea6f259fb6fb4d0f96582d164cb94eb16f508f9104",
+        "verification_bundle_digest": "sha256:e4da9d0ff8b02479a1ee89c45b15d9fda861681808f484f85ec9aa1675b6009d",
+        "approval_digest": "sha256:007dfeb478183fbe4bee118d33a76b3cb0678a0d02bd6a33dcef33896b0465bb",
+        "authority_binding_digest": "sha256:dd2150d35050a6e7d59c7642e67e583e44392df0eea2e30b3539cf1843ee46b9",
+        "verifier_binding_digest": "sha256:efe616a1d165ab728aebb15a6aa1e2d4d30ef01bf339f4cf9c25f293147634ee",
+        "policy_digest": "sha256:88304ee85d7d10c2124d75b0de11cb8d8f91a8707945cabc651c0cbdedc71934",
+        "policy_version": "changegate-merge-eligibility-policy.v2-draft",
+        "evaluator_version": "changegate-merge-eligibility-evaluator.0-unimplemented"
+      },
       "policy_input_facts": {
         "task_context_current": "CURRENT",
         "candidate_binding_current": "CURRENT",
@@ -499,6 +611,34 @@
       "tags": [
         "foreign_task_evidence"
       ],
+      "identifier_universes": {
+        "requirement_id_universe": [
+          "req-compileall",
+          "req-pytest-full"
+        ],
+        "evidence_record_id_universe": [
+          "ev-compileall-1",
+          "ev-extra-benchmark",
+          "ev-foreign-1",
+          "ev-pytest-1",
+          "ev-pytest-bad",
+          "ev-pytest-forged",
+          "ev-pytest-try1"
+        ]
+      },
+      "policy_input_bindings": {
+        "task_id": "changegate-slice1a-demo",
+        "task_contract_digest": "sha256:864a42cb0a655da8739eee18a2a16cf6aafde32df8c3f485ec1faa4b9da63a51",
+        "candidate_digest": "sha256:d54b4b5d5c4d6f694e5e24a90e1199cbb6047c5b182f4defae537da0b3dd5246",
+        "repository_snapshot_digest": "sha256:d60ff0950c57275a542f9fea6f259fb6fb4d0f96582d164cb94eb16f508f9104",
+        "verification_bundle_digest": "sha256:484ce88f5a4c75e1931fcfbc839939847346e9239e3ea2666d9a5dc95b30e55c",
+        "approval_digest": "sha256:007dfeb478183fbe4bee118d33a76b3cb0678a0d02bd6a33dcef33896b0465bb",
+        "authority_binding_digest": "sha256:dd2150d35050a6e7d59c7642e67e583e44392df0eea2e30b3539cf1843ee46b9",
+        "verifier_binding_digest": "sha256:efe616a1d165ab728aebb15a6aa1e2d4d30ef01bf339f4cf9c25f293147634ee",
+        "policy_digest": "sha256:88304ee85d7d10c2124d75b0de11cb8d8f91a8707945cabc651c0cbdedc71934",
+        "policy_version": "changegate-merge-eligibility-policy.v2-draft",
+        "evaluator_version": "changegate-merge-eligibility-evaluator.0-unimplemented"
+      },
       "policy_input_facts": {
         "task_context_current": "CURRENT",
         "candidate_binding_current": "CURRENT",
@@ -554,6 +694,34 @@
       "tags": [
         "foreign_run_evidence"
       ],
+      "identifier_universes": {
+        "requirement_id_universe": [
+          "req-compileall",
+          "req-pytest-full"
+        ],
+        "evidence_record_id_universe": [
+          "ev-compileall-1",
+          "ev-extra-benchmark",
+          "ev-foreign-1",
+          "ev-pytest-1",
+          "ev-pytest-bad",
+          "ev-pytest-forged",
+          "ev-pytest-try1"
+        ]
+      },
+      "policy_input_bindings": {
+        "task_id": "changegate-slice1a-demo",
+        "task_contract_digest": "sha256:864a42cb0a655da8739eee18a2a16cf6aafde32df8c3f485ec1faa4b9da63a51",
+        "candidate_digest": "sha256:d54b4b5d5c4d6f694e5e24a90e1199cbb6047c5b182f4defae537da0b3dd5246",
+        "repository_snapshot_digest": "sha256:d60ff0950c57275a542f9fea6f259fb6fb4d0f96582d164cb94eb16f508f9104",
+        "verification_bundle_digest": "sha256:62bad2e45f91d9a5db1c99b3b0eba3f26117694bce2dde30cc362e405ada65d5",
+        "approval_digest": "sha256:007dfeb478183fbe4bee118d33a76b3cb0678a0d02bd6a33dcef33896b0465bb",
+        "authority_binding_digest": "sha256:dd2150d35050a6e7d59c7642e67e583e44392df0eea2e30b3539cf1843ee46b9",
+        "verifier_binding_digest": "sha256:efe616a1d165ab728aebb15a6aa1e2d4d30ef01bf339f4cf9c25f293147634ee",
+        "policy_digest": "sha256:88304ee85d7d10c2124d75b0de11cb8d8f91a8707945cabc651c0cbdedc71934",
+        "policy_version": "changegate-merge-eligibility-policy.v2-draft",
+        "evaluator_version": "changegate-merge-eligibility-evaluator.0-unimplemented"
+      },
       "policy_input_facts": {
         "task_context_current": "CURRENT",
         "candidate_binding_current": "CURRENT",
@@ -609,6 +777,34 @@
       "tags": [
         "foreign_candidate_evidence"
       ],
+      "identifier_universes": {
+        "requirement_id_universe": [
+          "req-compileall",
+          "req-pytest-full"
+        ],
+        "evidence_record_id_universe": [
+          "ev-compileall-1",
+          "ev-extra-benchmark",
+          "ev-foreign-1",
+          "ev-pytest-1",
+          "ev-pytest-bad",
+          "ev-pytest-forged",
+          "ev-pytest-try1"
+        ]
+      },
+      "policy_input_bindings": {
+        "task_id": "changegate-slice1a-demo",
+        "task_contract_digest": "sha256:864a42cb0a655da8739eee18a2a16cf6aafde32df8c3f485ec1faa4b9da63a51",
+        "candidate_digest": "sha256:d54b4b5d5c4d6f694e5e24a90e1199cbb6047c5b182f4defae537da0b3dd5246",
+        "repository_snapshot_digest": "sha256:d60ff0950c57275a542f9fea6f259fb6fb4d0f96582d164cb94eb16f508f9104",
+        "verification_bundle_digest": "sha256:f90e9eea9994347dc59e7f761e4ad9b3bdf0d9a1bacd4cc9dd29c445469f2285",
+        "approval_digest": "sha256:007dfeb478183fbe4bee118d33a76b3cb0678a0d02bd6a33dcef33896b0465bb",
+        "authority_binding_digest": "sha256:dd2150d35050a6e7d59c7642e67e583e44392df0eea2e30b3539cf1843ee46b9",
+        "verifier_binding_digest": "sha256:efe616a1d165ab728aebb15a6aa1e2d4d30ef01bf339f4cf9c25f293147634ee",
+        "policy_digest": "sha256:88304ee85d7d10c2124d75b0de11cb8d8f91a8707945cabc651c0cbdedc71934",
+        "policy_version": "changegate-merge-eligibility-policy.v2-draft",
+        "evaluator_version": "changegate-merge-eligibility-evaluator.0-unimplemented"
+      },
       "policy_input_facts": {
         "task_context_current": "CURRENT",
         "candidate_binding_current": "CURRENT",
@@ -664,6 +860,34 @@
       "tags": [
         "duplicate_evidence_identity"
       ],
+      "identifier_universes": {
+        "requirement_id_universe": [
+          "req-compileall",
+          "req-pytest-full"
+        ],
+        "evidence_record_id_universe": [
+          "ev-compileall-1",
+          "ev-extra-benchmark",
+          "ev-foreign-1",
+          "ev-pytest-1",
+          "ev-pytest-bad",
+          "ev-pytest-forged",
+          "ev-pytest-try1"
+        ]
+      },
+      "policy_input_bindings": {
+        "task_id": "changegate-slice1a-demo",
+        "task_contract_digest": "sha256:864a42cb0a655da8739eee18a2a16cf6aafde32df8c3f485ec1faa4b9da63a51",
+        "candidate_digest": "sha256:d54b4b5d5c4d6f694e5e24a90e1199cbb6047c5b182f4defae537da0b3dd5246",
+        "repository_snapshot_digest": "sha256:d60ff0950c57275a542f9fea6f259fb6fb4d0f96582d164cb94eb16f508f9104",
+        "verification_bundle_digest": "sha256:f343410a2932de636d259b6c42cea2b5fdec03b224371a184353db5c70d5dac4",
+        "approval_digest": "sha256:007dfeb478183fbe4bee118d33a76b3cb0678a0d02bd6a33dcef33896b0465bb",
+        "authority_binding_digest": "sha256:dd2150d35050a6e7d59c7642e67e583e44392df0eea2e30b3539cf1843ee46b9",
+        "verifier_binding_digest": "sha256:efe616a1d165ab728aebb15a6aa1e2d4d30ef01bf339f4cf9c25f293147634ee",
+        "policy_digest": "sha256:88304ee85d7d10c2124d75b0de11cb8d8f91a8707945cabc651c0cbdedc71934",
+        "policy_version": "changegate-merge-eligibility-policy.v2-draft",
+        "evaluator_version": "changegate-merge-eligibility-evaluator.0-unimplemented"
+      },
       "policy_input_facts": {
         "task_context_current": "CURRENT",
         "candidate_binding_current": "CURRENT",
@@ -719,6 +943,34 @@
       "tags": [
         "candidate_stale"
       ],
+      "identifier_universes": {
+        "requirement_id_universe": [
+          "req-compileall",
+          "req-pytest-full"
+        ],
+        "evidence_record_id_universe": [
+          "ev-compileall-1",
+          "ev-extra-benchmark",
+          "ev-foreign-1",
+          "ev-pytest-1",
+          "ev-pytest-bad",
+          "ev-pytest-forged",
+          "ev-pytest-try1"
+        ]
+      },
+      "policy_input_bindings": {
+        "task_id": "changegate-slice1a-demo",
+        "task_contract_digest": "sha256:864a42cb0a655da8739eee18a2a16cf6aafde32df8c3f485ec1faa4b9da63a51",
+        "candidate_digest": "sha256:d54b4b5d5c4d6f694e5e24a90e1199cbb6047c5b182f4defae537da0b3dd5246",
+        "repository_snapshot_digest": "sha256:c023515055a91eec5d394bc7fba92115d2938c85eb7b3ad62661d6e76a50f9df",
+        "verification_bundle_digest": "sha256:9305cc24dcc296e5fb5ed85bd0e82c2707f0a7d3642841ea9366aa384b5d8f78",
+        "approval_digest": "sha256:007dfeb478183fbe4bee118d33a76b3cb0678a0d02bd6a33dcef33896b0465bb",
+        "authority_binding_digest": "sha256:dd2150d35050a6e7d59c7642e67e583e44392df0eea2e30b3539cf1843ee46b9",
+        "verifier_binding_digest": "sha256:efe616a1d165ab728aebb15a6aa1e2d4d30ef01bf339f4cf9c25f293147634ee",
+        "policy_digest": "sha256:88304ee85d7d10c2124d75b0de11cb8d8f91a8707945cabc651c0cbdedc71934",
+        "policy_version": "changegate-merge-eligibility-policy.v2-draft",
+        "evaluator_version": "changegate-merge-eligibility-evaluator.0-unimplemented"
+      },
       "policy_input_facts": {
         "task_context_current": "CURRENT",
         "candidate_binding_current": "STALE",
@@ -771,6 +1023,34 @@
       "tags": [
         "repository_mismatch"
       ],
+      "identifier_universes": {
+        "requirement_id_universe": [
+          "req-compileall",
+          "req-pytest-full"
+        ],
+        "evidence_record_id_universe": [
+          "ev-compileall-1",
+          "ev-extra-benchmark",
+          "ev-foreign-1",
+          "ev-pytest-1",
+          "ev-pytest-bad",
+          "ev-pytest-forged",
+          "ev-pytest-try1"
+        ]
+      },
+      "policy_input_bindings": {
+        "task_id": "changegate-slice1a-demo",
+        "task_contract_digest": "sha256:864a42cb0a655da8739eee18a2a16cf6aafde32df8c3f485ec1faa4b9da63a51",
+        "candidate_digest": "sha256:d54b4b5d5c4d6f694e5e24a90e1199cbb6047c5b182f4defae537da0b3dd5246",
+        "repository_snapshot_digest": "sha256:cebbf322fb9025d75bd397956091437d3dfc3e91439ef9b75823d9248f67c1f4",
+        "verification_bundle_digest": "sha256:9305cc24dcc296e5fb5ed85bd0e82c2707f0a7d3642841ea9366aa384b5d8f78",
+        "approval_digest": "sha256:007dfeb478183fbe4bee118d33a76b3cb0678a0d02bd6a33dcef33896b0465bb",
+        "authority_binding_digest": "sha256:dd2150d35050a6e7d59c7642e67e583e44392df0eea2e30b3539cf1843ee46b9",
+        "verifier_binding_digest": "sha256:efe616a1d165ab728aebb15a6aa1e2d4d30ef01bf339f4cf9c25f293147634ee",
+        "policy_digest": "sha256:88304ee85d7d10c2124d75b0de11cb8d8f91a8707945cabc651c0cbdedc71934",
+        "policy_version": "changegate-merge-eligibility-policy.v2-draft",
+        "evaluator_version": "changegate-merge-eligibility-evaluator.0-unimplemented"
+      },
       "policy_input_facts": {
         "task_context_current": "CURRENT",
         "candidate_binding_current": "CURRENT",
@@ -823,6 +1103,34 @@
       "tags": [
         "repository_dirty"
       ],
+      "identifier_universes": {
+        "requirement_id_universe": [
+          "req-compileall",
+          "req-pytest-full"
+        ],
+        "evidence_record_id_universe": [
+          "ev-compileall-1",
+          "ev-extra-benchmark",
+          "ev-foreign-1",
+          "ev-pytest-1",
+          "ev-pytest-bad",
+          "ev-pytest-forged",
+          "ev-pytest-try1"
+        ]
+      },
+      "policy_input_bindings": {
+        "task_id": "changegate-slice1a-demo",
+        "task_contract_digest": "sha256:864a42cb0a655da8739eee18a2a16cf6aafde32df8c3f485ec1faa4b9da63a51",
+        "candidate_digest": "sha256:d54b4b5d5c4d6f694e5e24a90e1199cbb6047c5b182f4defae537da0b3dd5246",
+        "repository_snapshot_digest": "sha256:7fbc681798865ba3a9ca9f1382d3082388904e0132816e698677acf74cabc7c8",
+        "verification_bundle_digest": "sha256:9305cc24dcc296e5fb5ed85bd0e82c2707f0a7d3642841ea9366aa384b5d8f78",
+        "approval_digest": "sha256:007dfeb478183fbe4bee118d33a76b3cb0678a0d02bd6a33dcef33896b0465bb",
+        "authority_binding_digest": "sha256:dd2150d35050a6e7d59c7642e67e583e44392df0eea2e30b3539cf1843ee46b9",
+        "verifier_binding_digest": "sha256:efe616a1d165ab728aebb15a6aa1e2d4d30ef01bf339f4cf9c25f293147634ee",
+        "policy_digest": "sha256:88304ee85d7d10c2124d75b0de11cb8d8f91a8707945cabc651c0cbdedc71934",
+        "policy_version": "changegate-merge-eligibility-policy.v2-draft",
+        "evaluator_version": "changegate-merge-eligibility-evaluator.0-unimplemented"
+      },
       "policy_input_facts": {
         "task_context_current": "CURRENT",
         "candidate_binding_current": "CURRENT",
@@ -875,6 +1183,34 @@
       "tags": [
         "scope_violation"
       ],
+      "identifier_universes": {
+        "requirement_id_universe": [
+          "req-compileall",
+          "req-pytest-full"
+        ],
+        "evidence_record_id_universe": [
+          "ev-compileall-1",
+          "ev-extra-benchmark",
+          "ev-foreign-1",
+          "ev-pytest-1",
+          "ev-pytest-bad",
+          "ev-pytest-forged",
+          "ev-pytest-try1"
+        ]
+      },
+      "policy_input_bindings": {
+        "task_id": "changegate-slice1a-demo",
+        "task_contract_digest": "sha256:864a42cb0a655da8739eee18a2a16cf6aafde32df8c3f485ec1faa4b9da63a51",
+        "candidate_digest": "sha256:d54b4b5d5c4d6f694e5e24a90e1199cbb6047c5b182f4defae537da0b3dd5246",
+        "repository_snapshot_digest": "sha256:d60ff0950c57275a542f9fea6f259fb6fb4d0f96582d164cb94eb16f508f9104",
+        "verification_bundle_digest": "sha256:9305cc24dcc296e5fb5ed85bd0e82c2707f0a7d3642841ea9366aa384b5d8f78",
+        "approval_digest": "sha256:007dfeb478183fbe4bee118d33a76b3cb0678a0d02bd6a33dcef33896b0465bb",
+        "authority_binding_digest": "sha256:dd2150d35050a6e7d59c7642e67e583e44392df0eea2e30b3539cf1843ee46b9",
+        "verifier_binding_digest": "sha256:efe616a1d165ab728aebb15a6aa1e2d4d30ef01bf339f4cf9c25f293147634ee",
+        "policy_digest": "sha256:88304ee85d7d10c2124d75b0de11cb8d8f91a8707945cabc651c0cbdedc71934",
+        "policy_version": "changegate-merge-eligibility-policy.v2-draft",
+        "evaluator_version": "changegate-merge-eligibility-evaluator.0-unimplemented"
+      },
       "policy_input_facts": {
         "task_context_current": "CURRENT",
         "candidate_binding_current": "CURRENT",
@@ -927,6 +1263,34 @@
       "tags": [
         "scope_semantic_uncertain"
       ],
+      "identifier_universes": {
+        "requirement_id_universe": [
+          "req-compileall",
+          "req-pytest-full"
+        ],
+        "evidence_record_id_universe": [
+          "ev-compileall-1",
+          "ev-extra-benchmark",
+          "ev-foreign-1",
+          "ev-pytest-1",
+          "ev-pytest-bad",
+          "ev-pytest-forged",
+          "ev-pytest-try1"
+        ]
+      },
+      "policy_input_bindings": {
+        "task_id": "changegate-slice1a-demo",
+        "task_contract_digest": "sha256:864a42cb0a655da8739eee18a2a16cf6aafde32df8c3f485ec1faa4b9da63a51",
+        "candidate_digest": "sha256:d54b4b5d5c4d6f694e5e24a90e1199cbb6047c5b182f4defae537da0b3dd5246",
+        "repository_snapshot_digest": "sha256:d60ff0950c57275a542f9fea6f259fb6fb4d0f96582d164cb94eb16f508f9104",
+        "verification_bundle_digest": "sha256:9305cc24dcc296e5fb5ed85bd0e82c2707f0a7d3642841ea9366aa384b5d8f78",
+        "approval_digest": "sha256:007dfeb478183fbe4bee118d33a76b3cb0678a0d02bd6a33dcef33896b0465bb",
+        "authority_binding_digest": "sha256:dd2150d35050a6e7d59c7642e67e583e44392df0eea2e30b3539cf1843ee46b9",
+        "verifier_binding_digest": "sha256:efe616a1d165ab728aebb15a6aa1e2d4d30ef01bf339f4cf9c25f293147634ee",
+        "policy_digest": "sha256:88304ee85d7d10c2124d75b0de11cb8d8f91a8707945cabc651c0cbdedc71934",
+        "policy_version": "changegate-merge-eligibility-policy.v2-draft",
+        "evaluator_version": "changegate-merge-eligibility-evaluator.0-unimplemented"
+      },
       "policy_input_facts": {
         "task_context_current": "CURRENT",
         "candidate_binding_current": "CURRENT",
@@ -979,6 +1343,34 @@
       "tags": [
         "approval_missing"
       ],
+      "identifier_universes": {
+        "requirement_id_universe": [
+          "req-compileall",
+          "req-pytest-full"
+        ],
+        "evidence_record_id_universe": [
+          "ev-compileall-1",
+          "ev-extra-benchmark",
+          "ev-foreign-1",
+          "ev-pytest-1",
+          "ev-pytest-bad",
+          "ev-pytest-forged",
+          "ev-pytest-try1"
+        ]
+      },
+      "policy_input_bindings": {
+        "task_id": "changegate-slice1a-demo",
+        "task_contract_digest": "sha256:864a42cb0a655da8739eee18a2a16cf6aafde32df8c3f485ec1faa4b9da63a51",
+        "candidate_digest": "sha256:d54b4b5d5c4d6f694e5e24a90e1199cbb6047c5b182f4defae537da0b3dd5246",
+        "repository_snapshot_digest": "sha256:d60ff0950c57275a542f9fea6f259fb6fb4d0f96582d164cb94eb16f508f9104",
+        "verification_bundle_digest": "sha256:9305cc24dcc296e5fb5ed85bd0e82c2707f0a7d3642841ea9366aa384b5d8f78",
+        "approval_digest": "NO_APPROVAL_SUPPLIED",
+        "authority_binding_digest": "sha256:dd2150d35050a6e7d59c7642e67e583e44392df0eea2e30b3539cf1843ee46b9",
+        "verifier_binding_digest": "sha256:efe616a1d165ab728aebb15a6aa1e2d4d30ef01bf339f4cf9c25f293147634ee",
+        "policy_digest": "sha256:88304ee85d7d10c2124d75b0de11cb8d8f91a8707945cabc651c0cbdedc71934",
+        "policy_version": "changegate-merge-eligibility-policy.v2-draft",
+        "evaluator_version": "changegate-merge-eligibility-evaluator.0-unimplemented"
+      },
       "policy_input_facts": {
         "task_context_current": "CURRENT",
         "candidate_binding_current": "CURRENT",
@@ -1033,6 +1425,34 @@
       "tags": [
         "approval_stale"
       ],
+      "identifier_universes": {
+        "requirement_id_universe": [
+          "req-compileall",
+          "req-pytest-full"
+        ],
+        "evidence_record_id_universe": [
+          "ev-compileall-1",
+          "ev-extra-benchmark",
+          "ev-foreign-1",
+          "ev-pytest-1",
+          "ev-pytest-bad",
+          "ev-pytest-forged",
+          "ev-pytest-try1"
+        ]
+      },
+      "policy_input_bindings": {
+        "task_id": "changegate-slice1a-demo",
+        "task_contract_digest": "sha256:864a42cb0a655da8739eee18a2a16cf6aafde32df8c3f485ec1faa4b9da63a51",
+        "candidate_digest": "sha256:d54b4b5d5c4d6f694e5e24a90e1199cbb6047c5b182f4defae537da0b3dd5246",
+        "repository_snapshot_digest": "sha256:d60ff0950c57275a542f9fea6f259fb6fb4d0f96582d164cb94eb16f508f9104",
+        "verification_bundle_digest": "sha256:9305cc24dcc296e5fb5ed85bd0e82c2707f0a7d3642841ea9366aa384b5d8f78",
+        "approval_digest": "sha256:1fc9a8612c9d0986a15be18b36440e65f86685b45f3eb207dc6d8be62e855d43",
+        "authority_binding_digest": "sha256:dd2150d35050a6e7d59c7642e67e583e44392df0eea2e30b3539cf1843ee46b9",
+        "verifier_binding_digest": "sha256:efe616a1d165ab728aebb15a6aa1e2d4d30ef01bf339f4cf9c25f293147634ee",
+        "policy_digest": "sha256:88304ee85d7d10c2124d75b0de11cb8d8f91a8707945cabc651c0cbdedc71934",
+        "policy_version": "changegate-merge-eligibility-policy.v2-draft",
+        "evaluator_version": "changegate-merge-eligibility-evaluator.0-unimplemented"
+      },
       "policy_input_facts": {
         "task_context_current": "CURRENT",
         "candidate_binding_current": "CURRENT",
@@ -1087,6 +1507,34 @@
       "tags": [
         "authority_invalid"
       ],
+      "identifier_universes": {
+        "requirement_id_universe": [
+          "req-compileall",
+          "req-pytest-full"
+        ],
+        "evidence_record_id_universe": [
+          "ev-compileall-1",
+          "ev-extra-benchmark",
+          "ev-foreign-1",
+          "ev-pytest-1",
+          "ev-pytest-bad",
+          "ev-pytest-forged",
+          "ev-pytest-try1"
+        ]
+      },
+      "policy_input_bindings": {
+        "task_id": "changegate-slice1a-demo",
+        "task_contract_digest": "sha256:864a42cb0a655da8739eee18a2a16cf6aafde32df8c3f485ec1faa4b9da63a51",
+        "candidate_digest": "sha256:d54b4b5d5c4d6f694e5e24a90e1199cbb6047c5b182f4defae537da0b3dd5246",
+        "repository_snapshot_digest": "sha256:d60ff0950c57275a542f9fea6f259fb6fb4d0f96582d164cb94eb16f508f9104",
+        "verification_bundle_digest": "sha256:9305cc24dcc296e5fb5ed85bd0e82c2707f0a7d3642841ea9366aa384b5d8f78",
+        "approval_digest": "sha256:007dfeb478183fbe4bee118d33a76b3cb0678a0d02bd6a33dcef33896b0465bb",
+        "authority_binding_digest": "sha256:ca6cab898094a769c634d5d369f2f54da6af6f165fde5db38590afbb6b7c295b",
+        "verifier_binding_digest": "sha256:efe616a1d165ab728aebb15a6aa1e2d4d30ef01bf339f4cf9c25f293147634ee",
+        "policy_digest": "sha256:88304ee85d7d10c2124d75b0de11cb8d8f91a8707945cabc651c0cbdedc71934",
+        "policy_version": "changegate-merge-eligibility-policy.v2-draft",
+        "evaluator_version": "changegate-merge-eligibility-evaluator.0-unimplemented"
+      },
       "policy_input_facts": {
         "task_context_current": "CURRENT",
         "candidate_binding_current": "CURRENT",
@@ -1139,6 +1587,34 @@
       "tags": [
         "verifier_not_independent"
       ],
+      "identifier_universes": {
+        "requirement_id_universe": [
+          "req-compileall",
+          "req-pytest-full"
+        ],
+        "evidence_record_id_universe": [
+          "ev-compileall-1",
+          "ev-extra-benchmark",
+          "ev-foreign-1",
+          "ev-pytest-1",
+          "ev-pytest-bad",
+          "ev-pytest-forged",
+          "ev-pytest-try1"
+        ]
+      },
+      "policy_input_bindings": {
+        "task_id": "changegate-slice1a-demo",
+        "task_contract_digest": "sha256:864a42cb0a655da8739eee18a2a16cf6aafde32df8c3f485ec1faa4b9da63a51",
+        "candidate_digest": "sha256:d54b4b5d5c4d6f694e5e24a90e1199cbb6047c5b182f4defae537da0b3dd5246",
+        "repository_snapshot_digest": "sha256:d60ff0950c57275a542f9fea6f259fb6fb4d0f96582d164cb94eb16f508f9104",
+        "verification_bundle_digest": "sha256:9305cc24dcc296e5fb5ed85bd0e82c2707f0a7d3642841ea9366aa384b5d8f78",
+        "approval_digest": "sha256:007dfeb478183fbe4bee118d33a76b3cb0678a0d02bd6a33dcef33896b0465bb",
+        "authority_binding_digest": "sha256:dd2150d35050a6e7d59c7642e67e583e44392df0eea2e30b3539cf1843ee46b9",
+        "verifier_binding_digest": "sha256:4e68df79bb7d9ed8166509f49770ea0a0007d92fac431eb165c6b3dd6c53b93b",
+        "policy_digest": "sha256:88304ee85d7d10c2124d75b0de11cb8d8f91a8707945cabc651c0cbdedc71934",
+        "policy_version": "changegate-merge-eligibility-policy.v2-draft",
+        "evaluator_version": "changegate-merge-eligibility-evaluator.0-unimplemented"
+      },
       "policy_input_facts": {
         "task_context_current": "CURRENT",
         "candidate_binding_current": "CURRENT",
@@ -1191,6 +1667,34 @@
       "tags": [
         "verifier_independence_unknown"
       ],
+      "identifier_universes": {
+        "requirement_id_universe": [
+          "req-compileall",
+          "req-pytest-full"
+        ],
+        "evidence_record_id_universe": [
+          "ev-compileall-1",
+          "ev-extra-benchmark",
+          "ev-foreign-1",
+          "ev-pytest-1",
+          "ev-pytest-bad",
+          "ev-pytest-forged",
+          "ev-pytest-try1"
+        ]
+      },
+      "policy_input_bindings": {
+        "task_id": "changegate-slice1a-demo",
+        "task_contract_digest": "sha256:864a42cb0a655da8739eee18a2a16cf6aafde32df8c3f485ec1faa4b9da63a51",
+        "candidate_digest": "sha256:d54b4b5d5c4d6f694e5e24a90e1199cbb6047c5b182f4defae537da0b3dd5246",
+        "repository_snapshot_digest": "sha256:d60ff0950c57275a542f9fea6f259fb6fb4d0f96582d164cb94eb16f508f9104",
+        "verification_bundle_digest": "sha256:9305cc24dcc296e5fb5ed85bd0e82c2707f0a7d3642841ea9366aa384b5d8f78",
+        "approval_digest": "sha256:007dfeb478183fbe4bee118d33a76b3cb0678a0d02bd6a33dcef33896b0465bb",
+        "authority_binding_digest": "sha256:dd2150d35050a6e7d59c7642e67e583e44392df0eea2e30b3539cf1843ee46b9",
+        "verifier_binding_digest": "sha256:bc3f8a5f0f40e6987a82abf73e39d2173fc2566948ee18ac08e2adf5a1c2bbfb",
+        "policy_digest": "sha256:88304ee85d7d10c2124d75b0de11cb8d8f91a8707945cabc651c0cbdedc71934",
+        "policy_version": "changegate-merge-eligibility-policy.v2-draft",
+        "evaluator_version": "changegate-merge-eligibility-evaluator.0-unimplemented"
+      },
       "policy_input_facts": {
         "task_context_current": "CURRENT",
         "candidate_binding_current": "CURRENT",
@@ -1245,6 +1749,34 @@
       "tags": [
         "policy_context_stale"
       ],
+      "identifier_universes": {
+        "requirement_id_universe": [
+          "req-compileall",
+          "req-pytest-full"
+        ],
+        "evidence_record_id_universe": [
+          "ev-compileall-1",
+          "ev-extra-benchmark",
+          "ev-foreign-1",
+          "ev-pytest-1",
+          "ev-pytest-bad",
+          "ev-pytest-forged",
+          "ev-pytest-try1"
+        ]
+      },
+      "policy_input_bindings": {
+        "task_id": "changegate-slice1a-demo",
+        "task_contract_digest": "sha256:864a42cb0a655da8739eee18a2a16cf6aafde32df8c3f485ec1faa4b9da63a51",
+        "candidate_digest": "sha256:d54b4b5d5c4d6f694e5e24a90e1199cbb6047c5b182f4defae537da0b3dd5246",
+        "repository_snapshot_digest": "sha256:d60ff0950c57275a542f9fea6f259fb6fb4d0f96582d164cb94eb16f508f9104",
+        "verification_bundle_digest": "sha256:9305cc24dcc296e5fb5ed85bd0e82c2707f0a7d3642841ea9366aa384b5d8f78",
+        "approval_digest": "sha256:007dfeb478183fbe4bee118d33a76b3cb0678a0d02bd6a33dcef33896b0465bb",
+        "authority_binding_digest": "sha256:dd2150d35050a6e7d59c7642e67e583e44392df0eea2e30b3539cf1843ee46b9",
+        "verifier_binding_digest": "sha256:efe616a1d165ab728aebb15a6aa1e2d4d30ef01bf339f4cf9c25f293147634ee",
+        "policy_digest": "sha256:9b2460a983b6b8222da7d2bd0fc344891a75468fe87f41064f817cdd94bcac48",
+        "policy_version": "changegate-merge-eligibility-policy.v2-draft",
+        "evaluator_version": "changegate-merge-eligibility-evaluator.0-unimplemented"
+      },
       "policy_input_facts": {
         "task_context_current": "CURRENT",
         "candidate_binding_current": "CURRENT",
@@ -1298,6 +1830,34 @@
         "mandatory_context_rule",
         "required_context_unknown"
       ],
+      "identifier_universes": {
+        "requirement_id_universe": [
+          "req-compileall",
+          "req-pytest-full"
+        ],
+        "evidence_record_id_universe": [
+          "ev-compileall-1",
+          "ev-extra-benchmark",
+          "ev-foreign-1",
+          "ev-pytest-1",
+          "ev-pytest-bad",
+          "ev-pytest-forged",
+          "ev-pytest-try1"
+        ]
+      },
+      "policy_input_bindings": {
+        "task_id": "changegate-slice1a-demo",
+        "task_contract_digest": "sha256:864a42cb0a655da8739eee18a2a16cf6aafde32df8c3f485ec1faa4b9da63a51",
+        "candidate_digest": "sha256:d54b4b5d5c4d6f694e5e24a90e1199cbb6047c5b182f4defae537da0b3dd5246",
+        "repository_snapshot_digest": "sha256:d60ff0950c57275a542f9fea6f259fb6fb4d0f96582d164cb94eb16f508f9104",
+        "verification_bundle_digest": "sha256:9305cc24dcc296e5fb5ed85bd0e82c2707f0a7d3642841ea9366aa384b5d8f78",
+        "approval_digest": "sha256:007dfeb478183fbe4bee118d33a76b3cb0678a0d02bd6a33dcef33896b0465bb",
+        "authority_binding_digest": "sha256:dd2150d35050a6e7d59c7642e67e583e44392df0eea2e30b3539cf1843ee46b9",
+        "verifier_binding_digest": "sha256:efe616a1d165ab728aebb15a6aa1e2d4d30ef01bf339f4cf9c25f293147634ee",
+        "policy_digest": "sha256:88304ee85d7d10c2124d75b0de11cb8d8f91a8707945cabc651c0cbdedc71934",
+        "policy_version": "changegate-merge-eligibility-policy.v2-draft",
+        "evaluator_version": "changegate-merge-eligibility-evaluator.0-unimplemented"
+      },
       "policy_input_facts": {
         "task_context_current": "UNKNOWN",
         "candidate_binding_current": "CURRENT",
@@ -1350,6 +1910,34 @@
       "tags": [
         "no_requirement_empty_bundle"
       ],
+      "identifier_universes": {
+        "requirement_id_universe": [
+          "req-compileall",
+          "req-pytest-full"
+        ],
+        "evidence_record_id_universe": [
+          "ev-compileall-1",
+          "ev-extra-benchmark",
+          "ev-foreign-1",
+          "ev-pytest-1",
+          "ev-pytest-bad",
+          "ev-pytest-forged",
+          "ev-pytest-try1"
+        ]
+      },
+      "policy_input_bindings": {
+        "task_id": "changegate-slice1a-demo",
+        "task_contract_digest": "sha256:864a42cb0a655da8739eee18a2a16cf6aafde32df8c3f485ec1faa4b9da63a51",
+        "candidate_digest": "sha256:d54b4b5d5c4d6f694e5e24a90e1199cbb6047c5b182f4defae537da0b3dd5246",
+        "repository_snapshot_digest": "sha256:d60ff0950c57275a542f9fea6f259fb6fb4d0f96582d164cb94eb16f508f9104",
+        "verification_bundle_digest": "sha256:363f760f208bcbd31b7fa3c916434a73f64ba21bf4945528be39967e0c47bcfd",
+        "approval_digest": "NO_APPROVAL_SUPPLIED",
+        "authority_binding_digest": "sha256:dd2150d35050a6e7d59c7642e67e583e44392df0eea2e30b3539cf1843ee46b9",
+        "verifier_binding_digest": "sha256:efe616a1d165ab728aebb15a6aa1e2d4d30ef01bf339f4cf9c25f293147634ee",
+        "policy_digest": "sha256:88304ee85d7d10c2124d75b0de11cb8d8f91a8707945cabc651c0cbdedc71934",
+        "policy_version": "changegate-merge-eligibility-policy.v2-draft",
+        "evaluator_version": "changegate-merge-eligibility-evaluator.0-unimplemented"
+      },
       "policy_input_facts": {
         "task_context_current": "CURRENT",
         "candidate_binding_current": "CURRENT",
@@ -1395,6 +1983,34 @@
       "tags": [
         "multiple_failure_precedence"
       ],
+      "identifier_universes": {
+        "requirement_id_universe": [
+          "req-compileall",
+          "req-pytest-full"
+        ],
+        "evidence_record_id_universe": [
+          "ev-compileall-1",
+          "ev-extra-benchmark",
+          "ev-foreign-1",
+          "ev-pytest-1",
+          "ev-pytest-bad",
+          "ev-pytest-forged",
+          "ev-pytest-try1"
+        ]
+      },
+      "policy_input_bindings": {
+        "task_id": "changegate-slice1a-demo",
+        "task_contract_digest": "sha256:864a42cb0a655da8739eee18a2a16cf6aafde32df8c3f485ec1faa4b9da63a51",
+        "candidate_digest": "sha256:d54b4b5d5c4d6f694e5e24a90e1199cbb6047c5b182f4defae537da0b3dd5246",
+        "repository_snapshot_digest": "sha256:7fbc681798865ba3a9ca9f1382d3082388904e0132816e698677acf74cabc7c8",
+        "verification_bundle_digest": "sha256:484ce88f5a4c75e1931fcfbc839939847346e9239e3ea2666d9a5dc95b30e55c",
+        "approval_digest": "NO_APPROVAL_SUPPLIED",
+        "authority_binding_digest": "sha256:dd2150d35050a6e7d59c7642e67e583e44392df0eea2e30b3539cf1843ee46b9",
+        "verifier_binding_digest": "sha256:efe616a1d165ab728aebb15a6aa1e2d4d30ef01bf339f4cf9c25f293147634ee",
+        "policy_digest": "sha256:88304ee85d7d10c2124d75b0de11cb8d8f91a8707945cabc651c0cbdedc71934",
+        "policy_version": "changegate-merge-eligibility-policy.v2-draft",
+        "evaluator_version": "changegate-merge-eligibility-evaluator.0-unimplemented"
+      },
       "policy_input_facts": {
         "task_context_current": "CURRENT",
         "candidate_binding_current": "CURRENT",
@@ -1456,6 +2072,34 @@
         "structural_verified_dirty_repository",
         "verified_is_not_eligibility"
       ],
+      "identifier_universes": {
+        "requirement_id_universe": [
+          "req-compileall",
+          "req-pytest-full"
+        ],
+        "evidence_record_id_universe": [
+          "ev-compileall-1",
+          "ev-extra-benchmark",
+          "ev-foreign-1",
+          "ev-pytest-1",
+          "ev-pytest-bad",
+          "ev-pytest-forged",
+          "ev-pytest-try1"
+        ]
+      },
+      "policy_input_bindings": {
+        "task_id": "changegate-slice1a-demo",
+        "task_contract_digest": "sha256:864a42cb0a655da8739eee18a2a16cf6aafde32df8c3f485ec1faa4b9da63a51",
+        "candidate_digest": "sha256:d54b4b5d5c4d6f694e5e24a90e1199cbb6047c5b182f4defae537da0b3dd5246",
+        "repository_snapshot_digest": "sha256:7fbc681798865ba3a9ca9f1382d3082388904e0132816e698677acf74cabc7c8",
+        "verification_bundle_digest": "sha256:9305cc24dcc296e5fb5ed85bd0e82c2707f0a7d3642841ea9366aa384b5d8f78",
+        "approval_digest": "sha256:007dfeb478183fbe4bee118d33a76b3cb0678a0d02bd6a33dcef33896b0465bb",
+        "authority_binding_digest": "sha256:dd2150d35050a6e7d59c7642e67e583e44392df0eea2e30b3539cf1843ee46b9",
+        "verifier_binding_digest": "sha256:efe616a1d165ab728aebb15a6aa1e2d4d30ef01bf339f4cf9c25f293147634ee",
+        "policy_digest": "sha256:88304ee85d7d10c2124d75b0de11cb8d8f91a8707945cabc651c0cbdedc71934",
+        "policy_version": "changegate-merge-eligibility-policy.v2-draft",
+        "evaluator_version": "changegate-merge-eligibility-evaluator.0-unimplemented"
+      },
       "policy_input_facts": {
         "task_context_current": "CURRENT",
         "candidate_binding_current": "CURRENT",
@@ -1509,6 +2153,34 @@
         "structural_verified_not_eligible",
         "verified_is_not_eligibility"
       ],
+      "identifier_universes": {
+        "requirement_id_universe": [
+          "req-compileall",
+          "req-pytest-full"
+        ],
+        "evidence_record_id_universe": [
+          "ev-compileall-1",
+          "ev-extra-benchmark",
+          "ev-foreign-1",
+          "ev-pytest-1",
+          "ev-pytest-bad",
+          "ev-pytest-forged",
+          "ev-pytest-try1"
+        ]
+      },
+      "policy_input_bindings": {
+        "task_id": "changegate-slice1a-demo",
+        "task_contract_digest": "sha256:864a42cb0a655da8739eee18a2a16cf6aafde32df8c3f485ec1faa4b9da63a51",
+        "candidate_digest": "sha256:d54b4b5d5c4d6f694e5e24a90e1199cbb6047c5b182f4defae537da0b3dd5246",
+        "repository_snapshot_digest": "sha256:d60ff0950c57275a542f9fea6f259fb6fb4d0f96582d164cb94eb16f508f9104",
+        "verification_bundle_digest": "sha256:9305cc24dcc296e5fb5ed85bd0e82c2707f0a7d3642841ea9366aa384b5d8f78",
+        "approval_digest": "sha256:1fc9a8612c9d0986a15be18b36440e65f86685b45f3eb207dc6d8be62e855d43",
+        "authority_binding_digest": "sha256:dd2150d35050a6e7d59c7642e67e583e44392df0eea2e30b3539cf1843ee46b9",
+        "verifier_binding_digest": "sha256:efe616a1d165ab728aebb15a6aa1e2d4d30ef01bf339f4cf9c25f293147634ee",
+        "policy_digest": "sha256:88304ee85d7d10c2124d75b0de11cb8d8f91a8707945cabc651c0cbdedc71934",
+        "policy_version": "changegate-merge-eligibility-policy.v2-draft",
+        "evaluator_version": "changegate-merge-eligibility-evaluator.0-unimplemented"
+      },
       "policy_input_facts": {
         "task_context_current": "CURRENT",
         "candidate_binding_current": "CURRENT",
@@ -1564,6 +2236,34 @@
         "authority_boundary",
         "caller_authored_decision"
       ],
+      "identifier_universes": {
+        "requirement_id_universe": [
+          "req-compileall",
+          "req-pytest-full"
+        ],
+        "evidence_record_id_universe": [
+          "ev-compileall-1",
+          "ev-extra-benchmark",
+          "ev-foreign-1",
+          "ev-pytest-1",
+          "ev-pytest-bad",
+          "ev-pytest-forged",
+          "ev-pytest-try1"
+        ]
+      },
+      "policy_input_bindings": {
+        "task_id": "changegate-slice1a-demo",
+        "task_contract_digest": "sha256:864a42cb0a655da8739eee18a2a16cf6aafde32df8c3f485ec1faa4b9da63a51",
+        "candidate_digest": "sha256:d54b4b5d5c4d6f694e5e24a90e1199cbb6047c5b182f4defae537da0b3dd5246",
+        "repository_snapshot_digest": "sha256:d60ff0950c57275a542f9fea6f259fb6fb4d0f96582d164cb94eb16f508f9104",
+        "verification_bundle_digest": "sha256:9305cc24dcc296e5fb5ed85bd0e82c2707f0a7d3642841ea9366aa384b5d8f78",
+        "approval_digest": "sha256:007dfeb478183fbe4bee118d33a76b3cb0678a0d02bd6a33dcef33896b0465bb",
+        "authority_binding_digest": "sha256:ca6cab898094a769c634d5d369f2f54da6af6f165fde5db38590afbb6b7c295b",
+        "verifier_binding_digest": "sha256:efe616a1d165ab728aebb15a6aa1e2d4d30ef01bf339f4cf9c25f293147634ee",
+        "policy_digest": "sha256:88304ee85d7d10c2124d75b0de11cb8d8f91a8707945cabc651c0cbdedc71934",
+        "policy_version": "changegate-merge-eligibility-policy.v2-draft",
+        "evaluator_version": "changegate-merge-eligibility-evaluator.0-unimplemented"
+      },
       "policy_input_facts": {
         "task_context_current": "CURRENT",
         "candidate_binding_current": "CURRENT",
@@ -1617,6 +2317,34 @@
       "tags": [
         "feedback_no_policy_mutation"
       ],
+      "identifier_universes": {
+        "requirement_id_universe": [
+          "req-compileall",
+          "req-pytest-full"
+        ],
+        "evidence_record_id_universe": [
+          "ev-compileall-1",
+          "ev-extra-benchmark",
+          "ev-foreign-1",
+          "ev-pytest-1",
+          "ev-pytest-bad",
+          "ev-pytest-forged",
+          "ev-pytest-try1"
+        ]
+      },
+      "policy_input_bindings": {
+        "task_id": "changegate-slice1a-demo",
+        "task_contract_digest": "sha256:864a42cb0a655da8739eee18a2a16cf6aafde32df8c3f485ec1faa4b9da63a51",
+        "candidate_digest": "sha256:d54b4b5d5c4d6f694e5e24a90e1199cbb6047c5b182f4defae537da0b3dd5246",
+        "repository_snapshot_digest": "sha256:d60ff0950c57275a542f9fea6f259fb6fb4d0f96582d164cb94eb16f508f9104",
+        "verification_bundle_digest": "sha256:9305cc24dcc296e5fb5ed85bd0e82c2707f0a7d3642841ea9366aa384b5d8f78",
+        "approval_digest": "sha256:007dfeb478183fbe4bee118d33a76b3cb0678a0d02bd6a33dcef33896b0465bb",
+        "authority_binding_digest": "sha256:dd2150d35050a6e7d59c7642e67e583e44392df0eea2e30b3539cf1843ee46b9",
+        "verifier_binding_digest": "sha256:efe616a1d165ab728aebb15a6aa1e2d4d30ef01bf339f4cf9c25f293147634ee",
+        "policy_digest": "sha256:88304ee85d7d10c2124d75b0de11cb8d8f91a8707945cabc651c0cbdedc71934",
+        "policy_version": "changegate-merge-eligibility-policy.v2-draft",
+        "evaluator_version": "changegate-merge-eligibility-evaluator.0-unimplemented"
+      },
       "policy_input_facts": {
         "task_context_current": "CURRENT",
         "candidate_binding_current": "CURRENT",
@@ -1674,6 +2402,34 @@
       "tags": [
         "rejected_only_requirement"
       ],
+      "identifier_universes": {
+        "requirement_id_universe": [
+          "req-compileall",
+          "req-pytest-full"
+        ],
+        "evidence_record_id_universe": [
+          "ev-compileall-1",
+          "ev-extra-benchmark",
+          "ev-foreign-1",
+          "ev-pytest-1",
+          "ev-pytest-bad",
+          "ev-pytest-forged",
+          "ev-pytest-try1"
+        ]
+      },
+      "policy_input_bindings": {
+        "task_id": "changegate-slice1a-demo",
+        "task_contract_digest": "sha256:864a42cb0a655da8739eee18a2a16cf6aafde32df8c3f485ec1faa4b9da63a51",
+        "candidate_digest": "sha256:d54b4b5d5c4d6f694e5e24a90e1199cbb6047c5b182f4defae537da0b3dd5246",
+        "repository_snapshot_digest": "sha256:d60ff0950c57275a542f9fea6f259fb6fb4d0f96582d164cb94eb16f508f9104",
+        "verification_bundle_digest": "sha256:5c4c52f2bcb2c63d3beeac6abe54d1400f171d1ccbc04cfd08f24ae78de121a6",
+        "approval_digest": "sha256:007dfeb478183fbe4bee118d33a76b3cb0678a0d02bd6a33dcef33896b0465bb",
+        "authority_binding_digest": "sha256:dd2150d35050a6e7d59c7642e67e583e44392df0eea2e30b3539cf1843ee46b9",
+        "verifier_binding_digest": "sha256:efe616a1d165ab728aebb15a6aa1e2d4d30ef01bf339f4cf9c25f293147634ee",
+        "policy_digest": "sha256:88304ee85d7d10c2124d75b0de11cb8d8f91a8707945cabc651c0cbdedc71934",
+        "policy_version": "changegate-merge-eligibility-policy.v2-draft",
+        "evaluator_version": "changegate-merge-eligibility-evaluator.0-unimplemented"
+      },
       "policy_input_facts": {
         "task_context_current": "CURRENT",
         "candidate_binding_current": "CURRENT",
@@ -1729,6 +2485,34 @@
       "tags": [
         "invalid_provenance_required"
       ],
+      "identifier_universes": {
+        "requirement_id_universe": [
+          "req-compileall",
+          "req-pytest-full"
+        ],
+        "evidence_record_id_universe": [
+          "ev-compileall-1",
+          "ev-extra-benchmark",
+          "ev-foreign-1",
+          "ev-pytest-1",
+          "ev-pytest-bad",
+          "ev-pytest-forged",
+          "ev-pytest-try1"
+        ]
+      },
+      "policy_input_bindings": {
+        "task_id": "changegate-slice1a-demo",
+        "task_contract_digest": "sha256:864a42cb0a655da8739eee18a2a16cf6aafde32df8c3f485ec1faa4b9da63a51",
+        "candidate_digest": "sha256:d54b4b5d5c4d6f694e5e24a90e1199cbb6047c5b182f4defae537da0b3dd5246",
+        "repository_snapshot_digest": "sha256:d60ff0950c57275a542f9fea6f259fb6fb4d0f96582d164cb94eb16f508f9104",
+        "verification_bundle_digest": "sha256:5a1669ca069f00cb09aced05d467a5a2651d81b9af948e2ffa3996a75a096f29",
+        "approval_digest": "sha256:007dfeb478183fbe4bee118d33a76b3cb0678a0d02bd6a33dcef33896b0465bb",
+        "authority_binding_digest": "sha256:dd2150d35050a6e7d59c7642e67e583e44392df0eea2e30b3539cf1843ee46b9",
+        "verifier_binding_digest": "sha256:efe616a1d165ab728aebb15a6aa1e2d4d30ef01bf339f4cf9c25f293147634ee",
+        "policy_digest": "sha256:88304ee85d7d10c2124d75b0de11cb8d8f91a8707945cabc651c0cbdedc71934",
+        "policy_version": "changegate-merge-eligibility-policy.v2-draft",
+        "evaluator_version": "changegate-merge-eligibility-evaluator.0-unimplemented"
+      },
       "policy_input_facts": {
         "task_context_current": "CURRENT",
         "candidate_binding_current": "CURRENT",
@@ -1787,6 +2571,34 @@
       "tags": [
         "task_context_stale"
       ],
+      "identifier_universes": {
+        "requirement_id_universe": [
+          "req-compileall",
+          "req-pytest-full"
+        ],
+        "evidence_record_id_universe": [
+          "ev-compileall-1",
+          "ev-extra-benchmark",
+          "ev-foreign-1",
+          "ev-pytest-1",
+          "ev-pytest-bad",
+          "ev-pytest-forged",
+          "ev-pytest-try1"
+        ]
+      },
+      "policy_input_bindings": {
+        "task_id": "changegate-slice1a-demo",
+        "task_contract_digest": "sha256:5495583eb53b1639f4bbcf3b116f8d65b812999443283a0b1f6582c788f3dc71",
+        "candidate_digest": "sha256:d54b4b5d5c4d6f694e5e24a90e1199cbb6047c5b182f4defae537da0b3dd5246",
+        "repository_snapshot_digest": "sha256:d60ff0950c57275a542f9fea6f259fb6fb4d0f96582d164cb94eb16f508f9104",
+        "verification_bundle_digest": "sha256:9305cc24dcc296e5fb5ed85bd0e82c2707f0a7d3642841ea9366aa384b5d8f78",
+        "approval_digest": "sha256:007dfeb478183fbe4bee118d33a76b3cb0678a0d02bd6a33dcef33896b0465bb",
+        "authority_binding_digest": "sha256:dd2150d35050a6e7d59c7642e67e583e44392df0eea2e30b3539cf1843ee46b9",
+        "verifier_binding_digest": "sha256:efe616a1d165ab728aebb15a6aa1e2d4d30ef01bf339f4cf9c25f293147634ee",
+        "policy_digest": "sha256:88304ee85d7d10c2124d75b0de11cb8d8f91a8707945cabc651c0cbdedc71934",
+        "policy_version": "changegate-merge-eligibility-policy.v2-draft",
+        "evaluator_version": "changegate-merge-eligibility-evaluator.0-unimplemented"
+      },
       "policy_input_facts": {
         "task_context_current": "STALE",
         "candidate_binding_current": "CURRENT",
@@ -1840,6 +2652,34 @@
         "mandatory_context_rule",
         "scope_not_evaluated"
       ],
+      "identifier_universes": {
+        "requirement_id_universe": [
+          "req-compileall",
+          "req-pytest-full"
+        ],
+        "evidence_record_id_universe": [
+          "ev-compileall-1",
+          "ev-extra-benchmark",
+          "ev-foreign-1",
+          "ev-pytest-1",
+          "ev-pytest-bad",
+          "ev-pytest-forged",
+          "ev-pytest-try1"
+        ]
+      },
+      "policy_input_bindings": {
+        "task_id": "changegate-slice1a-demo",
+        "task_contract_digest": "sha256:864a42cb0a655da8739eee18a2a16cf6aafde32df8c3f485ec1faa4b9da63a51",
+        "candidate_digest": "sha256:d54b4b5d5c4d6f694e5e24a90e1199cbb6047c5b182f4defae537da0b3dd5246",
+        "repository_snapshot_digest": "sha256:d60ff0950c57275a542f9fea6f259fb6fb4d0f96582d164cb94eb16f508f9104",
+        "verification_bundle_digest": "sha256:9305cc24dcc296e5fb5ed85bd0e82c2707f0a7d3642841ea9366aa384b5d8f78",
+        "approval_digest": "sha256:007dfeb478183fbe4bee118d33a76b3cb0678a0d02bd6a33dcef33896b0465bb",
+        "authority_binding_digest": "sha256:dd2150d35050a6e7d59c7642e67e583e44392df0eea2e30b3539cf1843ee46b9",
+        "verifier_binding_digest": "sha256:efe616a1d165ab728aebb15a6aa1e2d4d30ef01bf339f4cf9c25f293147634ee",
+        "policy_digest": "sha256:88304ee85d7d10c2124d75b0de11cb8d8f91a8707945cabc651c0cbdedc71934",
+        "policy_version": "changegate-merge-eligibility-policy.v2-draft",
+        "evaluator_version": "changegate-merge-eligibility-evaluator.0-unimplemented"
+      },
       "policy_input_facts": {
         "task_context_current": "CURRENT",
         "candidate_binding_current": "CURRENT",
@@ -1892,6 +2732,34 @@
       "tags": [
         "unexpected_valid_evidence"
       ],
+      "identifier_universes": {
+        "requirement_id_universe": [
+          "req-compileall",
+          "req-pytest-full"
+        ],
+        "evidence_record_id_universe": [
+          "ev-compileall-1",
+          "ev-extra-benchmark",
+          "ev-foreign-1",
+          "ev-pytest-1",
+          "ev-pytest-bad",
+          "ev-pytest-forged",
+          "ev-pytest-try1"
+        ]
+      },
+      "policy_input_bindings": {
+        "task_id": "changegate-slice1a-demo",
+        "task_contract_digest": "sha256:864a42cb0a655da8739eee18a2a16cf6aafde32df8c3f485ec1faa4b9da63a51",
+        "candidate_digest": "sha256:d54b4b5d5c4d6f694e5e24a90e1199cbb6047c5b182f4defae537da0b3dd5246",
+        "repository_snapshot_digest": "sha256:d60ff0950c57275a542f9fea6f259fb6fb4d0f96582d164cb94eb16f508f9104",
+        "verification_bundle_digest": "sha256:9305cc24dcc296e5fb5ed85bd0e82c2707f0a7d3642841ea9366aa384b5d8f78",
+        "approval_digest": "sha256:007dfeb478183fbe4bee118d33a76b3cb0678a0d02bd6a33dcef33896b0465bb",
+        "authority_binding_digest": "sha256:dd2150d35050a6e7d59c7642e67e583e44392df0eea2e30b3539cf1843ee46b9",
+        "verifier_binding_digest": "sha256:efe616a1d165ab728aebb15a6aa1e2d4d30ef01bf339f4cf9c25f293147634ee",
+        "policy_digest": "sha256:88304ee85d7d10c2124d75b0de11cb8d8f91a8707945cabc651c0cbdedc71934",
+        "policy_version": "changegate-merge-eligibility-policy.v2-draft",
+        "evaluator_version": "changegate-merge-eligibility-evaluator.0-unimplemented"
+      },
       "policy_input_facts": {
         "task_context_current": "CURRENT",
         "candidate_binding_current": "CURRENT",
@@ -1947,6 +2815,34 @@
         "shadow_eligible_counterfactual",
         "shadow_mode"
       ],
+      "identifier_universes": {
+        "requirement_id_universe": [
+          "req-compileall",
+          "req-pytest-full"
+        ],
+        "evidence_record_id_universe": [
+          "ev-compileall-1",
+          "ev-extra-benchmark",
+          "ev-foreign-1",
+          "ev-pytest-1",
+          "ev-pytest-bad",
+          "ev-pytest-forged",
+          "ev-pytest-try1"
+        ]
+      },
+      "policy_input_bindings": {
+        "task_id": "changegate-slice1a-demo",
+        "task_contract_digest": "sha256:864a42cb0a655da8739eee18a2a16cf6aafde32df8c3f485ec1faa4b9da63a51",
+        "candidate_digest": "sha256:d54b4b5d5c4d6f694e5e24a90e1199cbb6047c5b182f4defae537da0b3dd5246",
+        "repository_snapshot_digest": "sha256:d60ff0950c57275a542f9fea6f259fb6fb4d0f96582d164cb94eb16f508f9104",
+        "verification_bundle_digest": "sha256:9305cc24dcc296e5fb5ed85bd0e82c2707f0a7d3642841ea9366aa384b5d8f78",
+        "approval_digest": "sha256:007dfeb478183fbe4bee118d33a76b3cb0678a0d02bd6a33dcef33896b0465bb",
+        "authority_binding_digest": "sha256:dd2150d35050a6e7d59c7642e67e583e44392df0eea2e30b3539cf1843ee46b9",
+        "verifier_binding_digest": "sha256:efe616a1d165ab728aebb15a6aa1e2d4d30ef01bf339f4cf9c25f293147634ee",
+        "policy_digest": "sha256:88304ee85d7d10c2124d75b0de11cb8d8f91a8707945cabc651c0cbdedc71934",
+        "policy_version": "changegate-merge-eligibility-policy.v2-draft",
+        "evaluator_version": "changegate-merge-eligibility-evaluator.0-unimplemented"
+      },
       "policy_input_facts": {
         "task_context_current": "CURRENT",
         "candidate_binding_current": "CURRENT",
@@ -1998,6 +2894,34 @@
         "shadow_block_counterfactual",
         "shadow_mode"
       ],
+      "identifier_universes": {
+        "requirement_id_universe": [
+          "req-compileall",
+          "req-pytest-full"
+        ],
+        "evidence_record_id_universe": [
+          "ev-compileall-1",
+          "ev-extra-benchmark",
+          "ev-foreign-1",
+          "ev-pytest-1",
+          "ev-pytest-bad",
+          "ev-pytest-forged",
+          "ev-pytest-try1"
+        ]
+      },
+      "policy_input_bindings": {
+        "task_id": "changegate-slice1a-demo",
+        "task_contract_digest": "sha256:864a42cb0a655da8739eee18a2a16cf6aafde32df8c3f485ec1faa4b9da63a51",
+        "candidate_digest": "sha256:d54b4b5d5c4d6f694e5e24a90e1199cbb6047c5b182f4defae537da0b3dd5246",
+        "repository_snapshot_digest": "sha256:7fbc681798865ba3a9ca9f1382d3082388904e0132816e698677acf74cabc7c8",
+        "verification_bundle_digest": "sha256:9305cc24dcc296e5fb5ed85bd0e82c2707f0a7d3642841ea9366aa384b5d8f78",
+        "approval_digest": "sha256:007dfeb478183fbe4bee118d33a76b3cb0678a0d02bd6a33dcef33896b0465bb",
+        "authority_binding_digest": "sha256:dd2150d35050a6e7d59c7642e67e583e44392df0eea2e30b3539cf1843ee46b9",
+        "verifier_binding_digest": "sha256:efe616a1d165ab728aebb15a6aa1e2d4d30ef01bf339f4cf9c25f293147634ee",
+        "policy_digest": "sha256:88304ee85d7d10c2124d75b0de11cb8d8f91a8707945cabc651c0cbdedc71934",
+        "policy_version": "changegate-merge-eligibility-policy.v2-draft",
+        "evaluator_version": "changegate-merge-eligibility-evaluator.0-unimplemented"
+      },
       "policy_input_facts": {
         "task_context_current": "CURRENT",
         "candidate_binding_current": "CURRENT",
@@ -2050,6 +2974,34 @@
       "tags": [
         "mixed_block_and_review"
       ],
+      "identifier_universes": {
+        "requirement_id_universe": [
+          "req-compileall",
+          "req-pytest-full"
+        ],
+        "evidence_record_id_universe": [
+          "ev-compileall-1",
+          "ev-extra-benchmark",
+          "ev-foreign-1",
+          "ev-pytest-1",
+          "ev-pytest-bad",
+          "ev-pytest-forged",
+          "ev-pytest-try1"
+        ]
+      },
+      "policy_input_bindings": {
+        "task_id": "changegate-slice1a-demo",
+        "task_contract_digest": "sha256:864a42cb0a655da8739eee18a2a16cf6aafde32df8c3f485ec1faa4b9da63a51",
+        "candidate_digest": "sha256:d54b4b5d5c4d6f694e5e24a90e1199cbb6047c5b182f4defae537da0b3dd5246",
+        "repository_snapshot_digest": "sha256:7fbc681798865ba3a9ca9f1382d3082388904e0132816e698677acf74cabc7c8",
+        "verification_bundle_digest": "sha256:9305cc24dcc296e5fb5ed85bd0e82c2707f0a7d3642841ea9366aa384b5d8f78",
+        "approval_digest": "sha256:007dfeb478183fbe4bee118d33a76b3cb0678a0d02bd6a33dcef33896b0465bb",
+        "authority_binding_digest": "sha256:dd2150d35050a6e7d59c7642e67e583e44392df0eea2e30b3539cf1843ee46b9",
+        "verifier_binding_digest": "sha256:efe616a1d165ab728aebb15a6aa1e2d4d30ef01bf339f4cf9c25f293147634ee",
+        "policy_digest": "sha256:88304ee85d7d10c2124d75b0de11cb8d8f91a8707945cabc651c0cbdedc71934",
+        "policy_version": "changegate-merge-eligibility-policy.v2-draft",
+        "evaluator_version": "changegate-merge-eligibility-evaluator.0-unimplemented"
+      },
       "policy_input_facts": {
         "task_context_current": "CURRENT",
         "candidate_binding_current": "CURRENT",
@@ -2103,6 +3055,34 @@
       "tags": [
         "valid_and_rejected_same_requirement"
       ],
+      "identifier_universes": {
+        "requirement_id_universe": [
+          "req-compileall",
+          "req-pytest-full"
+        ],
+        "evidence_record_id_universe": [
+          "ev-compileall-1",
+          "ev-extra-benchmark",
+          "ev-foreign-1",
+          "ev-pytest-1",
+          "ev-pytest-bad",
+          "ev-pytest-forged",
+          "ev-pytest-try1"
+        ]
+      },
+      "policy_input_bindings": {
+        "task_id": "changegate-slice1a-demo",
+        "task_contract_digest": "sha256:864a42cb0a655da8739eee18a2a16cf6aafde32df8c3f485ec1faa4b9da63a51",
+        "candidate_digest": "sha256:d54b4b5d5c4d6f694e5e24a90e1199cbb6047c5b182f4defae537da0b3dd5246",
+        "repository_snapshot_digest": "sha256:d60ff0950c57275a542f9fea6f259fb6fb4d0f96582d164cb94eb16f508f9104",
+        "verification_bundle_digest": "sha256:33231d8a533f0f08eebb40d3c7ac2d24cab4ae9dc1b32ca7617de3d1178f94ce",
+        "approval_digest": "sha256:007dfeb478183fbe4bee118d33a76b3cb0678a0d02bd6a33dcef33896b0465bb",
+        "authority_binding_digest": "sha256:dd2150d35050a6e7d59c7642e67e583e44392df0eea2e30b3539cf1843ee46b9",
+        "verifier_binding_digest": "sha256:efe616a1d165ab728aebb15a6aa1e2d4d30ef01bf339f4cf9c25f293147634ee",
+        "policy_digest": "sha256:88304ee85d7d10c2124d75b0de11cb8d8f91a8707945cabc651c0cbdedc71934",
+        "policy_version": "changegate-merge-eligibility-policy.v2-draft",
+        "evaluator_version": "changegate-merge-eligibility-evaluator.0-unimplemented"
+      },
       "policy_input_facts": {
         "task_context_current": "CURRENT",
         "candidate_binding_current": "CURRENT",
@@ -2156,6 +3136,34 @@
       "tags": [
         "satisfied_with_invalid_provenance"
       ],
+      "identifier_universes": {
+        "requirement_id_universe": [
+          "req-compileall",
+          "req-pytest-full"
+        ],
+        "evidence_record_id_universe": [
+          "ev-compileall-1",
+          "ev-extra-benchmark",
+          "ev-foreign-1",
+          "ev-pytest-1",
+          "ev-pytest-bad",
+          "ev-pytest-forged",
+          "ev-pytest-try1"
+        ]
+      },
+      "policy_input_bindings": {
+        "task_id": "changegate-slice1a-demo",
+        "task_contract_digest": "sha256:864a42cb0a655da8739eee18a2a16cf6aafde32df8c3f485ec1faa4b9da63a51",
+        "candidate_digest": "sha256:d54b4b5d5c4d6f694e5e24a90e1199cbb6047c5b182f4defae537da0b3dd5246",
+        "repository_snapshot_digest": "sha256:d60ff0950c57275a542f9fea6f259fb6fb4d0f96582d164cb94eb16f508f9104",
+        "verification_bundle_digest": "sha256:3a56a452e9a8037a75a184632ec54c45a5748051c0b8844e35a2e32ae8653abb",
+        "approval_digest": "sha256:007dfeb478183fbe4bee118d33a76b3cb0678a0d02bd6a33dcef33896b0465bb",
+        "authority_binding_digest": "sha256:dd2150d35050a6e7d59c7642e67e583e44392df0eea2e30b3539cf1843ee46b9",
+        "verifier_binding_digest": "sha256:efe616a1d165ab728aebb15a6aa1e2d4d30ef01bf339f4cf9c25f293147634ee",
+        "policy_digest": "sha256:88304ee85d7d10c2124d75b0de11cb8d8f91a8707945cabc651c0cbdedc71934",
+        "policy_version": "changegate-merge-eligibility-policy.v2-draft",
+        "evaluator_version": "changegate-merge-eligibility-evaluator.0-unimplemented"
+      },
       "policy_input_facts": {
         "task_context_current": "CURRENT",
         "candidate_binding_current": "CURRENT",
@@ -2213,6 +3221,34 @@
         "mandatory_context_rule",
         "verifier_identity_absent"
       ],
+      "identifier_universes": {
+        "requirement_id_universe": [
+          "req-compileall",
+          "req-pytest-full"
+        ],
+        "evidence_record_id_universe": [
+          "ev-compileall-1",
+          "ev-extra-benchmark",
+          "ev-foreign-1",
+          "ev-pytest-1",
+          "ev-pytest-bad",
+          "ev-pytest-forged",
+          "ev-pytest-try1"
+        ]
+      },
+      "policy_input_bindings": {
+        "task_id": "changegate-slice1a-demo",
+        "task_contract_digest": "sha256:864a42cb0a655da8739eee18a2a16cf6aafde32df8c3f485ec1faa4b9da63a51",
+        "candidate_digest": "sha256:d54b4b5d5c4d6f694e5e24a90e1199cbb6047c5b182f4defae537da0b3dd5246",
+        "repository_snapshot_digest": "sha256:d60ff0950c57275a542f9fea6f259fb6fb4d0f96582d164cb94eb16f508f9104",
+        "verification_bundle_digest": "sha256:9305cc24dcc296e5fb5ed85bd0e82c2707f0a7d3642841ea9366aa384b5d8f78",
+        "approval_digest": "sha256:007dfeb478183fbe4bee118d33a76b3cb0678a0d02bd6a33dcef33896b0465bb",
+        "authority_binding_digest": "sha256:dd2150d35050a6e7d59c7642e67e583e44392df0eea2e30b3539cf1843ee46b9",
+        "verifier_binding_digest": "sha256:df1251060784eb3d3b5681b2994e285f0f1de1b021368d73ef2ae7f6d4294c98",
+        "policy_digest": "sha256:88304ee85d7d10c2124d75b0de11cb8d8f91a8707945cabc651c0cbdedc71934",
+        "policy_version": "changegate-merge-eligibility-policy.v2-draft",
+        "evaluator_version": "changegate-merge-eligibility-evaluator.0-unimplemented"
+      },
       "policy_input_facts": {
         "task_context_current": "CURRENT",
         "candidate_binding_current": "CURRENT",
@@ -2267,6 +3303,34 @@
       "tags": [
         "verifier_identity_present_unattested"
       ],
+      "identifier_universes": {
+        "requirement_id_universe": [
+          "req-compileall",
+          "req-pytest-full"
+        ],
+        "evidence_record_id_universe": [
+          "ev-compileall-1",
+          "ev-extra-benchmark",
+          "ev-foreign-1",
+          "ev-pytest-1",
+          "ev-pytest-bad",
+          "ev-pytest-forged",
+          "ev-pytest-try1"
+        ]
+      },
+      "policy_input_bindings": {
+        "task_id": "changegate-slice1a-demo",
+        "task_contract_digest": "sha256:864a42cb0a655da8739eee18a2a16cf6aafde32df8c3f485ec1faa4b9da63a51",
+        "candidate_digest": "sha256:d54b4b5d5c4d6f694e5e24a90e1199cbb6047c5b182f4defae537da0b3dd5246",
+        "repository_snapshot_digest": "sha256:d60ff0950c57275a542f9fea6f259fb6fb4d0f96582d164cb94eb16f508f9104",
+        "verification_bundle_digest": "sha256:9305cc24dcc296e5fb5ed85bd0e82c2707f0a7d3642841ea9366aa384b5d8f78",
+        "approval_digest": "sha256:007dfeb478183fbe4bee118d33a76b3cb0678a0d02bd6a33dcef33896b0465bb",
+        "authority_binding_digest": "sha256:dd2150d35050a6e7d59c7642e67e583e44392df0eea2e30b3539cf1843ee46b9",
+        "verifier_binding_digest": "sha256:4a79a83c84b437d619c6644498902537c45d871baf0ecb015993a08bff454d2e",
+        "policy_digest": "sha256:88304ee85d7d10c2124d75b0de11cb8d8f91a8707945cabc651c0cbdedc71934",
+        "policy_version": "changegate-merge-eligibility-policy.v2-draft",
+        "evaluator_version": "changegate-merge-eligibility-evaluator.0-unimplemented"
+      },
       "policy_input_facts": {
         "task_context_current": "CURRENT",
         "candidate_binding_current": "CURRENT",
@@ -2321,6 +3385,34 @@
       "tags": [
         "trace_persistence_gating"
       ],
+      "identifier_universes": {
+        "requirement_id_universe": [
+          "req-compileall",
+          "req-pytest-full"
+        ],
+        "evidence_record_id_universe": [
+          "ev-compileall-1",
+          "ev-extra-benchmark",
+          "ev-foreign-1",
+          "ev-pytest-1",
+          "ev-pytest-bad",
+          "ev-pytest-forged",
+          "ev-pytest-try1"
+        ]
+      },
+      "policy_input_bindings": {
+        "task_id": "changegate-slice1a-demo",
+        "task_contract_digest": "sha256:864a42cb0a655da8739eee18a2a16cf6aafde32df8c3f485ec1faa4b9da63a51",
+        "candidate_digest": "sha256:d54b4b5d5c4d6f694e5e24a90e1199cbb6047c5b182f4defae537da0b3dd5246",
+        "repository_snapshot_digest": "sha256:d60ff0950c57275a542f9fea6f259fb6fb4d0f96582d164cb94eb16f508f9104",
+        "verification_bundle_digest": "sha256:9305cc24dcc296e5fb5ed85bd0e82c2707f0a7d3642841ea9366aa384b5d8f78",
+        "approval_digest": "sha256:007dfeb478183fbe4bee118d33a76b3cb0678a0d02bd6a33dcef33896b0465bb",
+        "authority_binding_digest": "sha256:dd2150d35050a6e7d59c7642e67e583e44392df0eea2e30b3539cf1843ee46b9",
+        "verifier_binding_digest": "sha256:efe616a1d165ab728aebb15a6aa1e2d4d30ef01bf339f4cf9c25f293147634ee",
+        "policy_digest": "sha256:88304ee85d7d10c2124d75b0de11cb8d8f91a8707945cabc651c0cbdedc71934",
+        "policy_version": "changegate-merge-eligibility-policy.v2-draft",
+        "evaluator_version": "changegate-merge-eligibility-evaluator.0-unimplemented"
+      },
       "policy_input_facts": {
         "task_context_current": "CURRENT",
         "candidate_binding_current": "CURRENT",
@@ -2374,6 +3466,34 @@
       "tags": [
         "policy_exception_lifecycle"
       ],
+      "identifier_universes": {
+        "requirement_id_universe": [
+          "req-compileall",
+          "req-pytest-full"
+        ],
+        "evidence_record_id_universe": [
+          "ev-compileall-1",
+          "ev-extra-benchmark",
+          "ev-foreign-1",
+          "ev-pytest-1",
+          "ev-pytest-bad",
+          "ev-pytest-forged",
+          "ev-pytest-try1"
+        ]
+      },
+      "policy_input_bindings": {
+        "task_id": "changegate-slice1a-demo",
+        "task_contract_digest": "sha256:864a42cb0a655da8739eee18a2a16cf6aafde32df8c3f485ec1faa4b9da63a51",
+        "candidate_digest": "sha256:d54b4b5d5c4d6f694e5e24a90e1199cbb6047c5b182f4defae537da0b3dd5246",
+        "repository_snapshot_digest": "sha256:d60ff0950c57275a542f9fea6f259fb6fb4d0f96582d164cb94eb16f508f9104",
+        "verification_bundle_digest": "sha256:9305cc24dcc296e5fb5ed85bd0e82c2707f0a7d3642841ea9366aa384b5d8f78",
+        "approval_digest": "sha256:007dfeb478183fbe4bee118d33a76b3cb0678a0d02bd6a33dcef33896b0465bb",
+        "authority_binding_digest": "sha256:dd2150d35050a6e7d59c7642e67e583e44392df0eea2e30b3539cf1843ee46b9",
+        "verifier_binding_digest": "sha256:efe616a1d165ab728aebb15a6aa1e2d4d30ef01bf339f4cf9c25f293147634ee",
+        "policy_digest": "sha256:88304ee85d7d10c2124d75b0de11cb8d8f91a8707945cabc651c0cbdedc71934",
+        "policy_version": "changegate-merge-eligibility-policy.v2-draft",
+        "evaluator_version": "changegate-merge-eligibility-evaluator.0-unimplemented"
+      },
       "policy_input_facts": {
         "task_context_current": "CURRENT",
         "candidate_binding_current": "CURRENT",
@@ -2431,6 +3551,34 @@
       "tags": [
         "dual_integrity_failure"
       ],
+      "identifier_universes": {
+        "requirement_id_universe": [
+          "req-compileall",
+          "req-pytest-full"
+        ],
+        "evidence_record_id_universe": [
+          "ev-compileall-1",
+          "ev-extra-benchmark",
+          "ev-foreign-1",
+          "ev-pytest-1",
+          "ev-pytest-bad",
+          "ev-pytest-forged",
+          "ev-pytest-try1"
+        ]
+      },
+      "policy_input_bindings": {
+        "task_id": "changegate-slice1a-demo",
+        "task_contract_digest": "sha256:864a42cb0a655da8739eee18a2a16cf6aafde32df8c3f485ec1faa4b9da63a51",
+        "candidate_digest": "sha256:d54b4b5d5c4d6f694e5e24a90e1199cbb6047c5b182f4defae537da0b3dd5246",
+        "repository_snapshot_digest": "sha256:d60ff0950c57275a542f9fea6f259fb6fb4d0f96582d164cb94eb16f508f9104",
+        "verification_bundle_digest": "sha256:484ce88f5a4c75e1931fcfbc839939847346e9239e3ea2666d9a5dc95b30e55c",
+        "approval_digest": "sha256:007dfeb478183fbe4bee118d33a76b3cb0678a0d02bd6a33dcef33896b0465bb",
+        "authority_binding_digest": "sha256:ca6cab898094a769c634d5d369f2f54da6af6f165fde5db38590afbb6b7c295b",
+        "verifier_binding_digest": "sha256:efe616a1d165ab728aebb15a6aa1e2d4d30ef01bf339f4cf9c25f293147634ee",
+        "policy_digest": "sha256:88304ee85d7d10c2124d75b0de11cb8d8f91a8707945cabc651c0cbdedc71934",
+        "policy_version": "changegate-merge-eligibility-policy.v2-draft",
+        "evaluator_version": "changegate-merge-eligibility-evaluator.0-unimplemented"
+      },
       "policy_input_facts": {
         "task_context_current": "CURRENT",
         "candidate_binding_current": "CURRENT",
@@ -2482,6 +3630,90 @@
       "owner_decisions_pending": [
         "OD-S1A-007"
       ]
+    },
+    {
+      "case_id": "GC-S1-041",
+      "summary": "Requirement-declaration mapping is external to the pure evaluator: the stable requirement ids in these facts come from a ChangeGate-local RequirementDeclarationSet bound to the exact TaskContract digest (A3), never from hashing or normalizing TaskContract.required_evidence display strings. A2 consumes validated requirement facts only, so its decision is unchanged by how the declarations were produced. The mapping mechanism is PENDING_OWNER_DECISION OD-S1A-008 and blocks A3, not A2 or owner review.",
+      "tags": [
+        "od_s1a_008_external_to_a2",
+        "requirement_declaration_mapping"
+      ],
+      "identifier_universes": {
+        "requirement_id_universe": [
+          "req-compileall",
+          "req-pytest-full"
+        ],
+        "evidence_record_id_universe": [
+          "ev-compileall-1",
+          "ev-extra-benchmark",
+          "ev-foreign-1",
+          "ev-pytest-1",
+          "ev-pytest-bad",
+          "ev-pytest-forged",
+          "ev-pytest-try1"
+        ]
+      },
+      "policy_input_bindings": {
+        "task_id": "changegate-slice1a-demo",
+        "task_contract_digest": "sha256:864a42cb0a655da8739eee18a2a16cf6aafde32df8c3f485ec1faa4b9da63a51",
+        "candidate_digest": "sha256:d54b4b5d5c4d6f694e5e24a90e1199cbb6047c5b182f4defae537da0b3dd5246",
+        "repository_snapshot_digest": "sha256:d60ff0950c57275a542f9fea6f259fb6fb4d0f96582d164cb94eb16f508f9104",
+        "verification_bundle_digest": "sha256:9305cc24dcc296e5fb5ed85bd0e82c2707f0a7d3642841ea9366aa384b5d8f78",
+        "approval_digest": "sha256:007dfeb478183fbe4bee118d33a76b3cb0678a0d02bd6a33dcef33896b0465bb",
+        "authority_binding_digest": "sha256:dd2150d35050a6e7d59c7642e67e583e44392df0eea2e30b3539cf1843ee46b9",
+        "verifier_binding_digest": "sha256:efe616a1d165ab728aebb15a6aa1e2d4d30ef01bf339f4cf9c25f293147634ee",
+        "policy_digest": "sha256:88304ee85d7d10c2124d75b0de11cb8d8f91a8707945cabc651c0cbdedc71934",
+        "policy_version": "changegate-merge-eligibility-policy.v2-draft",
+        "evaluator_version": "changegate-merge-eligibility-evaluator.0-unimplemented"
+      },
+      "policy_input_facts": {
+        "task_context_current": "CURRENT",
+        "candidate_binding_current": "CURRENT",
+        "repository_snapshot_current": "CURRENT",
+        "repository_release_clean": "CLEAN",
+        "policy_context_current": "CURRENT",
+        "required_requirement_ids": [
+          "req-compileall",
+          "req-pytest-full"
+        ],
+        "satisfied_requirement_ids": [
+          "req-compileall",
+          "req-pytest-full"
+        ],
+        "invalid_requirement_ids": [],
+        "missing_requirement_ids": [],
+        "rejected_evidence_ids": [],
+        "invalid_provenance_evidence_ids": [],
+        "unexpected_evidence_ids": [],
+        "evidence_context_status": "COHERENT",
+        "evidence_context_violations": [],
+        "scope_status": "COMPLIANT",
+        "approval_status": "VALID",
+        "authority_status": "VALID",
+        "verifier_identity_status": "ATTESTED",
+        "verifier_independence_status": "INDEPENDENT",
+        "evaluation_mode": "ENFORCE"
+      },
+      "expected_disposition": "ELIGIBLE_TO_MERGE_UNDER_POLICY",
+      "expected_decision_authority": "AUTHORITATIVE",
+      "expected_primary_reason": null,
+      "expected_complete_reason_codes": [],
+      "override_class": "NOT_APPLICABLE",
+      "expected_event_assertions": {
+        "emits": [
+          "CHANGEGATE_EVALUATION_COMPLETED"
+        ],
+        "decision_ref_disposition": "ELIGIBLE_TO_MERGE_UNDER_POLICY",
+        "decision_ref_primary_reason_code": null,
+        "decision_authority": "AUTHORITATIVE",
+        "active_policy_mutated": false,
+        "requirement_declaration_source": "A3_REQUIREMENT_DECLARATION_SET",
+        "requirement_ids_derived_from_display_strings": false
+      },
+      "owner_decisions_pending": [
+        "OD-S1A-008"
+      ],
+      "notes": "The declaration set is bound to task_contract_digest in policy_input_bindings; a different contract digest is a different declaration set (and TASK_CONTEXT_STALE if it no longer matches the candidate, see GC-S1-028)."
     }
   ]
 }

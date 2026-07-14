@@ -2,14 +2,36 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "tomtit://schemas/changegate_evaluation_event_v1.schema.json",
   "title": "ChangeGate Evaluation Event v1",
-  "description": "Sink-agnostic product event envelope for ChangeGate merge-eligibility decisions and their real-world outcomes (JSONL, SQLite, or remote sinks). Digest-and-reference only: this schema deliberately defines NO fields for raw prompts, source file contents, secrets, credentials, or entire command output, and none may be added within v1. Every reference/identifier uses a bounded no-whitespace grammar, so raw source-like or multiline content is invalid. Per-event conditional constraints enforce decision/outcome/feedback linkage: a minimal common-envelope-only instance is invalid for every event type. Defined by docs/strategy/CHANGEGATE_VERTICAL_MVP_SLICE_1_POLICY_SPEC.md §19/§21. Status: DRAFT_FOR_OWNER_REVIEW; no production emitter exists yet.",
+  "description": "Sink-agnostic product event envelope for ChangeGate merge-eligibility decisions and their real-world outcomes (JSONL, SQLite, or remote sinks). Digest-and-reference only. Digests use the repository's ONE canonical representation 'sha256:' + 64 lowercase hex, exactly as produced by agent_core.build_harness.canonical.canonical_digest(). Per-event conditional constraints enforce the causal chain (evaluation -> attempt -> completion -> validation -> rollback, plus feedback targeting an exact prior event), so a minimal common-envelope-only instance is invalid for every event type and a merge result can be deterministically paired with its attempt. Reference values use a narrow bounded identifier grammar: no whitespace, path separators, traversal, URLs, or content-bearing structures. SCOPE LIMIT (spec §21): schema-level controls cover shape, grammar, length and forbidden content-bearing structures ONLY; redaction, secret scanning, allowlist validation and access policy remain application-sink duties. This schema is NOT a secret scanner: it does not and cannot identify every possible secret value, and no such claim may be made for it. Defined by docs/strategy/CHANGEGATE_VERTICAL_MVP_SLICE_1_POLICY_SPEC.md §19/§21. Status: DRAFT_FOR_OWNER_REVIEW; no production emitter exists yet.",
   "type": "object",
   "additionalProperties": false,
   "$defs": {
+    "noWhitespace": {
+      "comment": "Anchors alone are not enough: in ECMA/Python regex '$' also matches before a trailing newline, so 'abc\\n' would satisfy '^[a-z]+$'. Every string grammar below additionally forbids ANY whitespace character.",
+      "not": { "type": "string", "pattern": "\\s" }
+    },
     "opaqueRef": {
-      "type": "string",
-      "description": "Bounded opaque identifier: no whitespace/newlines, no prose.",
-      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$"
+      "description": "Bounded opaque identifier: letters, digits, '_', '-', '.' only. Rejects whitespace, newlines (including a trailing newline), path separators, '..' traversal, URL schemes and diff/code fragments. Covers the existing generated-id grammar [a-z0-9][a-z0-9-]{0,63}. A defensive deny-list rejects the most common credential shapes; it is NOT a secret scanner (see the schema description).",
+      "allOf": [
+        {
+          "type": "string",
+          "maxLength": 64,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
+        },
+        { "$ref": "#/$defs/noWhitespace" },
+        {
+          "not": {
+            "type": "string",
+            "pattern": "^(ghp_|gho_|ghu_|ghs_|ghr_|github_pat_|xox[baprs]-|sk-|sk_live|pk_live|AKIA|ASIA|AIza|eyJhbGciOi)"
+          }
+        },
+        {
+          "not": {
+            "type": "string",
+            "pattern": "\\.\\."
+          }
+        }
+      ]
     },
     "nullableOpaqueRef": {
       "anyOf": [
@@ -17,30 +39,84 @@
         { "type": "null" }
       ]
     },
-    "sha256": {
-      "type": "string",
-      "description": "Exact lowercase sha256 hex digest.",
-      "pattern": "^[0-9a-f]{64}$"
+    "eventRef": {
+      "description": "Reference to another event's event_id. Distinct from content-bearing values: an event reference may only ever name an event.",
+      "allOf": [
+        {
+          "type": "string",
+          "maxLength": 64,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
+        },
+        { "$ref": "#/$defs/noWhitespace" },
+        {
+          "not": { "type": "string", "pattern": "\\.\\." }
+        }
+      ]
     },
-    "nullableSha256": {
+    "nullableEventRef": {
       "anyOf": [
-        { "$ref": "#/$defs/sha256" },
+        { "$ref": "#/$defs/eventRef" },
         { "type": "null" }
       ]
     },
+    "canonicalDigest": {
+      "description": "THE canonical digest representation: 'sha256:' + 64 lowercase hex characters (agent_core.build_harness.canonical.canonical_digest output). Bare hex, uppercase, other algorithms, wrong length and any whitespace are invalid.",
+      "allOf": [
+        {
+          "type": "string",
+          "minLength": 71,
+          "maxLength": 71,
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        { "$ref": "#/$defs/noWhitespace" }
+      ]
+    },
+    "nullableCanonicalDigest": {
+      "anyOf": [
+        { "$ref": "#/$defs/canonicalDigest" },
+        { "type": "null" }
+      ]
+    },
+    "gitCommitSha": {
+      "description": "Dedicated Git object field: 40 (sha1) or 64 (sha256) lowercase hex characters. Structured values get their own field instead of being embedded in an opaque string.",
+      "allOf": [
+        {
+          "type": "string",
+          "maxLength": 64,
+          "pattern": "^([0-9a-f]{40}|[0-9a-f]{64})$"
+        },
+        { "$ref": "#/$defs/noWhitespace" }
+      ]
+    },
     "machineCode": {
-      "type": "string",
-      "description": "Machine-readable stable identifier.",
-      "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+      "allOf": [
+        {
+          "type": "string",
+          "maxLength": 64,
+          "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+        },
+        { "$ref": "#/$defs/noWhitespace" }
+      ]
     },
     "versionString": {
-      "type": "string",
-      "description": "Bounded version identifier: no whitespace.",
-      "pattern": "^[A-Za-z0-9][A-Za-z0-9._+:-]{0,63}$"
+      "allOf": [
+        {
+          "type": "string",
+          "maxLength": 64,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$"
+        },
+        { "$ref": "#/$defs/noWhitespace" }
+      ]
     },
     "rfc3339utc": {
-      "type": "string",
-      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?(Z|\\+00:00)$"
+      "allOf": [
+        {
+          "type": "string",
+          "maxLength": 40,
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?(Z|\\+00:00)$"
+        },
+        { "$ref": "#/$defs/noWhitespace" }
+      ]
     }
   },
   "required": [
@@ -56,7 +132,7 @@
   ],
   "properties": {
     "event_id": {
-      "$ref": "#/$defs/opaqueRef",
+      "$ref": "#/$defs/eventRef",
       "description": "Globally unique event identifier (generated by the emitting application layer, never by the pure evaluator)."
     },
     "event_type": {
@@ -74,58 +150,69 @@
     },
     "occurred_at": {
       "$ref": "#/$defs/rfc3339utc",
-      "description": "RFC 3339 UTC timestamp supplied by the emitting layer."
+      "description": "RFC 3339 UTC timestamp supplied by the emitting application layer."
     },
     "schema_version": {
-      "const": "changegate-evaluation-event.v1",
-      "description": "Fixed envelope version. Any envelope change requires a new versioned schema file."
+      "const": "changegate-evaluation-event.v1"
     },
     "product": {
-      "const": "changegate",
-      "description": "Emitting product. ChangeGate events never masquerade as another product's events."
+      "const": "changegate"
     },
-    "project_ref": {
-      "$ref": "#/$defs/nullableOpaqueRef",
-      "description": "Opaque project reference, when a project context exists."
-    },
+    "project_ref": { "$ref": "#/$defs/nullableOpaqueRef" },
     "task_ref": {
-      "type": "string",
-      "description": "Task identifier the event concerns (same grammar as TaskContract.task_id).",
-      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+      "description": "Task identifier (existing TaskContract.task_id grammar, so current TOMTIT task ids stay representable).",
+      "allOf": [
+        {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+        },
+        { "$ref": "#/$defs/noWhitespace" }
+      ]
     },
-    "run_ref": {
-      "$ref": "#/$defs/nullableOpaqueRef",
-      "description": "Evidence run identifier, when the event is bound to a specific run."
-    },
+    "run_ref": { "$ref": "#/$defs/nullableOpaqueRef" },
     "subject_ref": {
       "type": "object",
-      "description": "Domain-neutral subject reference shaped after ADR-003 §8 SubjectRef. This is a JSON reference shape only; it does not implement or preempt the future kernel SubjectRef model. Values are bounded opaque identifiers — never raw content.",
+      "description": "Domain-neutral subject reference shaped after ADR-003 §8 SubjectRef (a JSON reference shape only; it does not implement the future kernel SubjectRef model). Structured values use dedicated fields: 'kind' is a closed machine-readable enum and a Git commit goes in 'commit_sha', never inside 'value'.",
       "additionalProperties": false,
       "required": ["namespace", "kind", "value"],
       "properties": {
         "namespace": { "$ref": "#/$defs/opaqueRef" },
-        "kind": { "$ref": "#/$defs/opaqueRef" },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "git_candidate",
+            "git_commit",
+            "git_branch",
+            "task_contract",
+            "evaluation_decision"
+          ]
+        },
         "value": { "$ref": "#/$defs/opaqueRef" },
-        "digest": { "$ref": "#/$defs/nullableSha256" }
+        "commit_sha": {
+          "anyOf": [
+            { "$ref": "#/$defs/gitCommitSha" },
+            { "type": "null" }
+          ]
+        },
+        "digest": { "$ref": "#/$defs/nullableCanonicalDigest" }
       }
     },
     "context_digest": {
-      "$ref": "#/$defs/nullableSha256",
-      "description": "Canonical sha256 digest of the evaluation context (input digest for evaluation events)."
+      "$ref": "#/$defs/nullableCanonicalDigest",
+      "description": "Canonical digest of the deterministic policy input (A2 input_digest) for evaluation events."
     },
     "policy_version": {
       "anyOf": [
         { "$ref": "#/$defs/versionString" },
         { "type": "null" }
-      ],
-      "description": "Policy version or digest reference under which the referenced decision was made."
+      ]
     },
     "evaluator_version": {
       "anyOf": [
         { "$ref": "#/$defs/versionString" },
         { "type": "null" }
-      ],
-      "description": "Evaluator software version that produced the referenced decision."
+      ]
     },
     "decision_ref": {
       "type": ["object", "null"],
@@ -135,7 +222,9 @@
       "properties": {
         "evaluation_id": { "$ref": "#/$defs/opaqueRef" },
         "trace_id": { "$ref": "#/$defs/nullableOpaqueRef" },
-        "decision_digest": { "$ref": "#/$defs/sha256" },
+        "decision_digest": { "$ref": "#/$defs/canonicalDigest" },
+        "policy_record_digest": { "$ref": "#/$defs/nullableCanonicalDigest" },
+        "input_digest": { "$ref": "#/$defs/nullableCanonicalDigest" },
         "disposition": {
           "type": ["string", "null"],
           "enum": [
@@ -161,6 +250,39 @@
         }
       }
     },
+    "evaluation_event_ref": {
+      "$ref": "#/$defs/nullableEventRef",
+      "description": "event_id of the CHANGEGATE_EVALUATION_COMPLETED event this event descends from."
+    },
+    "attempt_event_ref": {
+      "$ref": "#/$defs/nullableEventRef",
+      "description": "event_id of the exact CHANGEGATE_MERGE_ATTEMPTED event a completion resolves — this is what makes multiple attempts deterministically pairable with their result."
+    },
+    "merge_event_ref": {
+      "$ref": "#/$defs/nullableEventRef",
+      "description": "event_id of the exact CHANGEGATE_MERGE_COMPLETED event a validation or rollback refers to."
+    },
+    "validation_event_ref": {
+      "$ref": "#/$defs/nullableEventRef",
+      "description": "event_id of the CHANGEGATE_POST_MERGE_VALIDATION event that motivated a rollback, where applicable."
+    },
+    "target_event_ref": {
+      "$ref": "#/$defs/nullableEventRef",
+      "description": "For feedback: the exact prior event whose real-world result is being judged."
+    },
+    "target_event_type": {
+      "type": ["string", "null"],
+      "description": "For feedback: which kind of thing the human is judging (eligibility decision, override, merge outcome, validation, rollback).",
+      "enum": [
+        "CHANGEGATE_EVALUATION_COMPLETED",
+        "CHANGEGATE_REVIEW_OVERRIDDEN",
+        "CHANGEGATE_MERGE_ATTEMPTED",
+        "CHANGEGATE_MERGE_COMPLETED",
+        "CHANGEGATE_POST_MERGE_VALIDATION",
+        "CHANGEGATE_ROLLBACK_RECORDED",
+        null
+      ]
+    },
     "evidence_refs": {
       "type": "array",
       "description": "Evidence involved, by identifier and digest only — never evidence content.",
@@ -171,7 +293,7 @@
         "properties": {
           "evidence_id": { "$ref": "#/$defs/opaqueRef" },
           "requirement_id": { "$ref": "#/$defs/nullableOpaqueRef" },
-          "digest": { "$ref": "#/$defs/nullableSha256" }
+          "digest": { "$ref": "#/$defs/nullableCanonicalDigest" }
         }
       }
     },
@@ -186,15 +308,26 @@
           "enum": ["SUCCESS", "FAILURE", "PARTIAL", "UNKNOWN"]
         },
         "detail_code": { "$ref": "#/$defs/machineCode" },
-        "target_ref": { "$ref": "#/$defs/nullableOpaqueRef" }
+        "target_ref": { "$ref": "#/$defs/nullableOpaqueRef" },
+        "resulting_commit_sha": {
+          "anyOf": [
+            { "$ref": "#/$defs/gitCommitSha" },
+            { "type": "null" }
+          ],
+          "description": "For a merge completion: the commit the merge actually produced."
+        }
       }
     },
     "feedback": {
       "type": ["object", "null"],
-      "description": "Structured human feedback about a decision: verdict + category code + optional reason code + optional opaque redacted-comment digest. No raw feedback text is representable here. Feedback is a recorded signal, never ground truth, and never mutates the active policy (spec §20); this envelope has no policy-mutation field.",
+      "description": "Structured human feedback about a decision or a real-world outcome: actor + verdict + category code + optional reason code + optional opaque redacted-comment digest. No raw feedback text is representable. Feedback is a recorded signal, never ground truth, and never mutates the active policy (spec §20); this envelope has no policy-mutation field.",
       "additionalProperties": false,
-      "required": ["verdict", "category_code"],
+      "required": ["actor_ref", "verdict", "category_code"],
       "properties": {
+        "actor_ref": {
+          "$ref": "#/$defs/opaqueRef",
+          "description": "The human/source identity giving the feedback. Distinct from provenance.emitter, which identifies the emitting application."
+        },
         "verdict": {
           "type": "string",
           "enum": ["AGREE", "DISAGREE", "UNCLEAR"]
@@ -206,12 +339,8 @@
             { "type": "null" }
           ]
         },
-        "actor_ref": { "$ref": "#/$defs/nullableOpaqueRef" },
         "comment_digest": {
-          "anyOf": [
-            { "$ref": "#/$defs/sha256" },
-            { "type": "null" }
-          ],
+          "$ref": "#/$defs/nullableCanonicalDigest",
           "description": "Digest of any free-text comment; the raw comment is stored, redacted, outside this envelope."
         }
       }
@@ -224,7 +353,7 @@
       "properties": {
         "actor_ref": { "$ref": "#/$defs/opaqueRef" },
         "reason_code": { "$ref": "#/$defs/machineCode" },
-        "new_decision_digest": { "$ref": "#/$defs/nullableSha256" },
+        "new_decision_digest": { "$ref": "#/$defs/nullableCanonicalDigest" },
         "exception_ref": { "$ref": "#/$defs/nullableOpaqueRef" },
         "expires_at": {
           "anyOf": [
@@ -258,13 +387,9 @@
         }
       ]
     },
-    "merge_event_ref": {
-      "$ref": "#/$defs/nullableOpaqueRef",
-      "description": "event_id of the prior CHANGEGATE_MERGE_COMPLETED (or _ATTEMPTED) event this validation/rollback refers to."
-    },
     "provenance": {
       "type": "object",
-      "description": "Who emitted this event and from which trace context.",
+      "description": "Who EMITTED this event (the application), and from which trace context. This is never the human/source identity of a feedback or override actor.",
       "additionalProperties": false,
       "required": ["emitter", "emitter_version"],
       "properties": {
@@ -299,8 +424,13 @@
         "properties": {
           "decision_ref": {
             "type": "object",
-            "required": ["evaluation_id", "decision_digest", "disposition"],
-            "properties": { "disposition": { "type": "string" } }
+            "required": [
+              "evaluation_id", "decision_digest", "disposition", "decision_authority"
+            ],
+            "properties": {
+              "disposition": { "type": "string" },
+              "decision_authority": { "type": "string" }
+            }
           },
           "context_digest": { "type": "string" },
           "policy_version": { "type": "string" },
@@ -317,9 +447,10 @@
         }
       },
       "then": {
-        "required": ["decision_ref", "override"],
+        "required": ["decision_ref", "evaluation_event_ref", "override"],
         "properties": {
           "decision_ref": { "type": "object" },
+          "evaluation_event_ref": { "type": "string" },
           "override": { "type": "object" }
         }
       }
@@ -332,9 +463,10 @@
         }
       },
       "then": {
-        "required": ["decision_ref", "outcome"],
+        "required": ["decision_ref", "evaluation_event_ref", "outcome"],
         "properties": {
           "decision_ref": { "type": "object" },
+          "evaluation_event_ref": { "type": "string" },
           "outcome": { "type": "object" }
         }
       }
@@ -347,10 +479,15 @@
         }
       },
       "then": {
-        "required": ["decision_ref", "outcome"],
+        "required": ["decision_ref", "attempt_event_ref", "outcome"],
         "properties": {
           "decision_ref": { "type": "object" },
-          "outcome": { "type": "object" }
+          "attempt_event_ref": { "type": "string" },
+          "outcome": {
+            "type": "object",
+            "required": ["status", "detail_code", "resulting_commit_sha"],
+            "properties": { "resulting_commit_sha": { "type": "string" } }
+          }
         }
       }
     },
@@ -394,10 +531,17 @@
         }
       },
       "then": {
-        "required": ["decision_ref", "feedback"],
+        "required": [
+          "decision_ref", "target_event_ref", "target_event_type", "feedback"
+        ],
         "properties": {
           "decision_ref": { "type": "object" },
-          "feedback": { "type": "object" }
+          "target_event_ref": { "type": "string" },
+          "target_event_type": { "type": "string" },
+          "feedback": {
+            "type": "object",
+            "required": ["actor_ref", "verdict", "category_code"]
+          }
         }
       }
     }
