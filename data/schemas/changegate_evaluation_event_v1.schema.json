@@ -216,15 +216,28 @@
     },
     "decision_ref": {
       "type": ["object", "null"],
-      "description": "Reference to the merge-eligibility decision this event is about. Referencing only: an event can never author or amend a decision.",
+      "description": "Reference to the merge-eligibility decision this event is about, carrying the full deterministic decision identity (decision + input + policy-record digests) and the task/candidate it was made for, so downstream events can be checked for lineage. Referencing only: an event can never author or amend a decision.",
       "additionalProperties": false,
-      "required": ["evaluation_id", "decision_digest"],
+      "required": [
+        "evaluation_id",
+        "decision_digest",
+        "input_digest",
+        "policy_record_digest",
+        "task_ref",
+        "candidate_digest"
+      ],
       "properties": {
         "evaluation_id": { "$ref": "#/$defs/opaqueRef" },
         "trace_id": { "$ref": "#/$defs/nullableOpaqueRef" },
         "decision_digest": { "$ref": "#/$defs/canonicalDigest" },
-        "policy_record_digest": { "$ref": "#/$defs/nullableCanonicalDigest" },
-        "input_digest": { "$ref": "#/$defs/nullableCanonicalDigest" },
+        "policy_record_digest": { "$ref": "#/$defs/canonicalDigest" },
+        "input_digest": { "$ref": "#/$defs/canonicalDigest" },
+        "task_ref": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+        },
+        "candidate_digest": { "$ref": "#/$defs/canonicalDigest" },
         "disposition": {
           "type": ["string", "null"],
           "enum": [
@@ -347,13 +360,15 @@
     },
     "override": {
       "type": ["object", "null"],
-      "description": "Review-override / policy-exception record for CHANGEGATE_REVIEW_OVERRIDDEN. The original decision stays immutable (decision_ref); this object references the replacement decision and/or the authorizing exception. An exception reference requires an expiry (the exception AUTHORITY value remains PENDING_OWNER_DECISION OD-S1A-005).",
+      "description": "Review-override / policy-exception record for CHANGEGATE_REVIEW_OVERRIDDEN. The original decision stays immutable (decision_ref); this object references the replacement decision and/or the authorizing exception. A replacement decision carries its OWN COMPLETE identity: new_decision_digest, new_input_digest and new_policy_record_digest are all-or-none (an event may never mix the original decision digest with a replacement input/record digest). The replacement keeps the same task and candidate as the original; a changed candidate requires a NEW evaluation event, not an override. An exception reference requires an expiry (the exception AUTHORITY value remains PENDING_OWNER_DECISION OD-S1A-005).",
       "additionalProperties": false,
       "required": ["actor_ref", "reason_code"],
       "properties": {
         "actor_ref": { "$ref": "#/$defs/opaqueRef" },
         "reason_code": { "$ref": "#/$defs/machineCode" },
         "new_decision_digest": { "$ref": "#/$defs/nullableCanonicalDigest" },
+        "new_input_digest": { "$ref": "#/$defs/nullableCanonicalDigest" },
+        "new_policy_record_digest": { "$ref": "#/$defs/nullableCanonicalDigest" },
         "exception_ref": { "$ref": "#/$defs/nullableOpaqueRef" },
         "expires_at": {
           "anyOf": [
@@ -376,14 +391,43 @@
         {
           "anyOf": [
             {
-              "required": ["new_decision_digest"],
-              "properties": { "new_decision_digest": { "type": "string" } }
+              "required": [
+                "new_decision_digest", "new_input_digest", "new_policy_record_digest"
+              ],
+              "properties": {
+                "new_decision_digest": { "type": "string" },
+                "new_input_digest": { "type": "string" },
+                "new_policy_record_digest": { "type": "string" }
+              }
             },
             {
               "required": ["exception_ref"],
               "properties": { "exception_ref": { "type": "string" } }
             }
           ]
+        },
+        {
+          "comment": "A replacement decision is all-or-none: if any of the three new_* digests is present, all three must be.",
+          "if": {
+            "anyOf": [
+              { "required": ["new_decision_digest"],
+                "properties": { "new_decision_digest": { "type": "string" } } },
+              { "required": ["new_input_digest"],
+                "properties": { "new_input_digest": { "type": "string" } } },
+              { "required": ["new_policy_record_digest"],
+                "properties": { "new_policy_record_digest": { "type": "string" } } }
+            ]
+          },
+          "then": {
+            "required": [
+              "new_decision_digest", "new_input_digest", "new_policy_record_digest"
+            ],
+            "properties": {
+              "new_decision_digest": { "type": "string" },
+              "new_input_digest": { "type": "string" },
+              "new_policy_record_digest": { "type": "string" }
+            }
+          }
         }
       ]
     },

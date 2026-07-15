@@ -116,6 +116,8 @@ DRAFT_DISPOSITION_BY_CODE: dict[str, str] = {
 REASON_CODE_RE = re.compile(r"^[A-Z][A-Z0-9_]*$")
 CANONICAL_DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 
+# evaluation_mode is NOT here (R3): it is single-sourced in policy_input_bindings, not a
+# fact. ENUM_FACT_VALUES lists only EligibilityFacts enum states.
 ENUM_FACT_VALUES = {
     "task_context_current": ("CURRENT", "STALE", "UNKNOWN"),
     "candidate_binding_current": ("CURRENT", "STALE", "UNKNOWN"),
@@ -126,8 +128,8 @@ ENUM_FACT_VALUES = {
     "scope_status": ("COMPLIANT", "VIOLATION", "SEMANTIC_UNCERTAIN", "NOT_EVALUATED"),
     "approval_status": ("VALID", "MISSING", "STALE", "UNKNOWN"),
     "authority_status": ("VALID", "INVALID", "UNKNOWN"),
-    "evaluation_mode": ("ENFORCE", "SHADOW"),
 }
+EVALUATION_MODES = ("ENFORCE", "SHADOW")
 VERIFIER_IDENTITY_VALUES = ("ATTESTED", "PRESENT_UNATTESTED", "ABSENT", "INVALID")
 VERIFIER_INDEPENDENCE_VALUES = ("INDEPENDENT", "NOT_INDEPENDENT", "UNKNOWN")
 VIOLATION_TAGS = ("TASK_MISMATCH", "RUN_MISMATCH", "CANDIDATE_MISMATCH",
@@ -217,8 +219,11 @@ def oracle_reason_codes(facts: dict, mapping: dict) -> set[str]:
     return reasons
 
 
-def oracle_decision(facts: dict, mapping: dict) -> dict:
-    """Precedence and disposition come from this module's INDEPENDENT draft tables."""
+def oracle_decision(facts: dict, mapping: dict, evaluation_mode: str) -> dict:
+    """Precedence and disposition come from this module's INDEPENDENT draft tables;
+    authority comes from the single-sourced evaluation_mode (an A2-input field, §5.2 /
+    §6.3), NOT from facts."""
+    assert evaluation_mode in EVALUATION_MODES, evaluation_mode
     reasons = oracle_reason_codes(facts, mapping)
     if reasons:
         primary = min(reasons, key=lambda code: DRAFT_PRECEDENCE_PENDING_OD_S1A_007[code])
@@ -230,37 +235,40 @@ def oracle_decision(facts: dict, mapping: dict) -> dict:
     else:
         primary = None
         disposition = "ELIGIBLE_TO_MERGE_UNDER_POLICY"
-    authority = (
-        "AUTHORITATIVE" if facts["evaluation_mode"] == "ENFORCE" else "ADVISORY_ONLY"
-    )
+    authority = "AUTHORITATIVE" if evaluation_mode == "ENFORCE" else "ADVISORY_ONLY"
+    blocking = sorted(c for c in reasons if DRAFT_DISPOSITION_BY_CODE[c] == "BLOCK")
+    review = sorted(c for c in reasons if DRAFT_DISPOSITION_BY_CODE[c] == "REVIEW_REQUIRED")
     return {
         "complete": sorted(reasons),
+        "blocking": blocking,
+        "review": review,
         "primary": primary,
         "disposition": disposition,
         "authority": authority,
     }
 
 
+def case_mode(case: dict) -> str:
+    return case["policy_input_bindings"]["evaluation_mode"]
+
+
 # ---------------------------------------------------------------------------
-# Test-only digest oracle for the §18.3 replay invariants. Uses the REAL production
-# canonical_digest(), so the tests exercise the repository's canonical representation
-# rather than a private convention. Not a production evaluator.
+# Test-only digest oracles for the §18.5 replay invariants and the exact §7.3 /
+# §18.2 record and trace payloads. Every digest uses the REAL production
+# canonical_digest(), so the tests exercise the repository's canonical representation.
+# These are acceptance-test oracles, NOT the production evaluator or event store.
 # ---------------------------------------------------------------------------
 
 def a2_input_payload(bindings: dict, facts: dict) -> dict:
+    """evaluation_mode comes from bindings (single source); facts carry no mode."""
+    assert "evaluation_mode" not in facts, "facts must not carry evaluation_mode (R3)"
     return {
         "kind": "changegate.merge-eligibility-policy-input.test-oracle.v1",
         "task_id": bindings["task_id"],
-        "task_contract_digest": bindings["task_contract_digest"],
-        "candidate_digest": bindings["candidate_digest"],
-        "repository_snapshot_digest": bindings["repository_snapshot_digest"],
-        "verification_bundle_digest": bindings["verification_bundle_digest"],
-        "approval_digest": bindings["approval_digest"],
-        "authority_binding_digest": bindings["authority_binding_digest"],
-        "verifier_binding_digest": bindings["verifier_binding_digest"],
-        "policy_digest": bindings["policy_digest"],
+        **{field: bindings[field] for field in SOURCE_DIGEST_FIELDS},
         "policy_version": bindings["policy_version"],
         "evaluator_version": bindings["evaluator_version"],
+        "evaluation_mode": bindings["evaluation_mode"],
         "facts": {key: facts[key] for key in sorted(facts)},
     }
 
@@ -269,31 +277,120 @@ def input_digest_oracle(bindings: dict, facts: dict) -> str:
     return canonical_digest(a2_input_payload(bindings, facts))
 
 
-def decision_digest_oracle(bindings: dict, facts: dict, mapping: dict) -> str:
-    outcome = oracle_decision(facts, mapping)
-    payload = {
-        "kind": "changegate.merge-eligibility-decision.test-oracle.v1",
-        "input_digest": input_digest_oracle(bindings, facts),
+def _decision_core(bindings: dict, facts: dict, mapping: dict) -> dict:
+    """The deterministic decision fields shared by the decision digest and the record."""
+    outcome = oracle_decision(facts, mapping, bindings["evaluation_mode"])
+    return {
         "task_id": bindings["task_id"],
         **{field: bindings[field] for field in SOURCE_DIGEST_FIELDS},
         "policy_version": bindings["policy_version"],
         "evaluator_version": bindings["evaluator_version"],
-        "evaluation_mode": facts["evaluation_mode"],
+        "evaluation_mode": bindings["evaluation_mode"],
+        "input_digest": input_digest_oracle(bindings, facts),
         "disposition": outcome["disposition"],
         "decision_authority": outcome["authority"],
         "primary_reason_code": outcome["primary"],
         "complete_reason_codes": outcome["complete"],
+        "blocking_reason_codes": outcome["blocking"],
+        "review_reason_codes": outcome["review"],
         **{s: sorted(facts[s]) for s in SET_FACTS},
     }
+
+
+def decision_digest_oracle(bindings: dict, facts: dict, mapping: dict) -> str:
+    payload = {"kind": "changegate.merge-eligibility-decision.test-oracle.v1",
+               **_decision_core(bindings, facts, mapping)}
     return canonical_digest(payload)
 
 
-def trace_digest_oracle(decision_digest: str, trace_meta: dict) -> str:
-    return canonical_digest({
-        "kind": "changegate.evaluation-trace-envelope.test-oracle.v1",
-        "decision_digest": decision_digest,
-        **{key: trace_meta[key] for key in sorted(trace_meta)},
-    })
+def policy_record_payload(bindings: dict, facts: dict, mapping: dict) -> dict:
+    """Exact §7.3 PolicyEvaluationRecordPayload (excludes policy_record_digest and any
+    application/trace metadata). Includes decision_digest."""
+    core = _decision_core(bindings, facts, mapping)
+    return {
+        "schema_version": "changegate.policy-evaluation-record.v1",
+        **core,
+        "decision_digest": decision_digest_oracle(bindings, facts, mapping),
+    }
+
+
+def build_policy_record(bindings: dict, facts: dict, mapping: dict) -> dict:
+    payload = policy_record_payload(bindings, facts, mapping)
+    return {**payload, "policy_record_digest": canonical_digest(payload)}
+
+
+def recompute_record_digest(record: dict) -> str:
+    payload = {k: v for k, v in record.items() if k != "policy_record_digest"}
+    return canonical_digest(payload)
+
+
+def validate_policy_record(record: dict) -> list[str]:
+    """Independent record validator: recompute the digest and check self-consistency.
+    Does NOT read any fixture expected_* value."""
+    errors: list[str] = []
+    if record.get("schema_version") != "changegate.policy-evaluation-record.v1":
+        errors.append("record schema_version mismatch")
+    for forbidden in ("redaction_classification", "trace_id", "request_id",
+                      "evaluation_id", "occurred_at", "timestamp",
+                      "evaluation_latency_ms", "event_id", "storage_location"):
+        if forbidden in record:
+            errors.append(f"record must not contain application field {forbidden!r}")
+    if recompute_record_digest(record) != record.get("policy_record_digest"):
+        errors.append("policy_record_digest does not match the recomputed payload")
+    # blocking ∪ review == complete, and both are the correct partition.
+    complete = set(record.get("complete_reason_codes", []))
+    if set(record.get("blocking_reason_codes", [])) | set(
+        record.get("review_reason_codes", [])
+    ) != complete:
+        errors.append("blocking ∪ review != complete reason set")
+    return errors
+
+
+def build_trace_envelope(record: dict, meta: dict) -> dict:
+    payload = {
+        "schema_version": "changegate.evaluation-trace-envelope.v1",
+        "trace_id": meta["trace_id"],
+        "evaluation_id": meta["evaluation_id"],
+        "request_id": meta["request_id"],
+        "occurred_at": meta["occurred_at"],
+        "evaluation_latency_ms": meta["evaluation_latency_ms"],
+        "redaction_classification": meta["redaction_classification"],
+        "policy_record": record,
+        "policy_record_digest": record["policy_record_digest"],
+        "input_digest": record["input_digest"],
+        "decision_digest": record["decision_digest"],
+    }
+    return {**payload, "trace_digest": canonical_digest(payload)}
+
+
+def validate_trace_envelope(trace: dict) -> list[str]:
+    """Independent trace validator (§18.3/§18.4). Recomputes every dependent digest and
+    checks embedded==top-level. Never reads fixture expected_* values."""
+    errors: list[str] = []
+    record = trace.get("policy_record")
+    if not isinstance(record, dict):
+        return ["trace has no embedded policy_record"]
+    errors.extend(validate_policy_record(record))
+    if trace.get("policy_record_digest") != record.get("policy_record_digest"):
+        errors.append("trace.policy_record_digest != embedded record digest")
+    if trace.get("input_digest") != record.get("input_digest"):
+        errors.append("trace.input_digest != embedded record input_digest")
+    if trace.get("decision_digest") != record.get("decision_digest"):
+        errors.append("trace.decision_digest != embedded record decision_digest")
+    payload = {k: v for k, v in trace.items() if k != "trace_digest"}
+    if trace.get("trace_digest") != canonical_digest(payload):
+        errors.append("trace_digest not recomputed after a change")
+    return errors
+
+
+def _trace_meta(**overrides) -> dict:
+    meta = {
+        "trace_id": "trace-1", "evaluation_id": "eval-1", "request_id": "req-1",
+        "occurred_at": "2026-07-15T00:00:00Z", "evaluation_latency_ms": 7,
+        "redaction_classification": "INTERNAL",
+    }
+    meta.update(overrides)
+    return meta
 
 
 # ---------------------------------------------------------------------------
@@ -404,10 +501,11 @@ def test_policy_spec_declares_every_a2_source_binding():
 
 def test_policy_spec_pins_the_ten_replay_invariants():
     text = _spec_text()
-    section = text.split("### 18.3 Digest replay invariants")[1].split("Three layers")[0]
+    section = text.split("### 18.5 Digest replay invariants")[1].split("Three layers")[0]
     for n in range(1, 11):
         assert f"| {n} |" in section, f"replay invariant {n} is not stated"
-    assert "never** excluded from decision identity merely because" in section
+    assert "never** excluded from decision" in section
+    assert "FULLY_SPECIFIED_AND_REPRODUCIBLE" in section
 
 
 def test_policy_spec_cites_deferred_owner_decisions_without_resolving_them():
@@ -421,9 +519,9 @@ def test_owner_review_is_still_required_and_all_eight_od_points_registered():
     assert "PENDING_OWNER_DECISION" in text
     for od in OD_S1A_IDS:
         assert od in text, f"spec must list owner decision point {od}"
-    # OD-S1A-008 classification is explicit and blocks A3 only.
-    assert "A3 implementation:       BLOCKED UNTIL OD-S1A-008 ACCEPTED" in text
-    assert "A2 implementation:       NOT BLOCKED" in text
+    # OD-S1A-008 classification is explicit and blocks A3 (Slice 1C-1) only.
+    assert "Slice 1C-1 / A3:         BLOCKED UNTIL ACCEPTED" in text
+    assert "Slice 1B / A2:           NOT BLOCKED" in text
     assert "Slice 1A owner review:   NOT BLOCKED" in text
     # The precedence table is a draft pending OD-S1A-007.
     assert "DRAFT PROPOSAL, PENDING_OWNER_DECISION OD-S1A-007" in text
@@ -444,11 +542,12 @@ def test_production_canonical_digest_is_accepted_by_every_digest_field():
         "decision_ref": {
             "evaluation_id": "eval-1", "decision_digest": real,
             "policy_record_digest": real, "input_digest": real,
+            "task_ref": _ROOT_TASK, "candidate_digest": real,
             "disposition": "BLOCK", "decision_authority": "AUTHORITATIVE",
             "primary_reason_code": "SCOPE_VIOLATION", "evaluation_mode": "ENFORCE",
         },
         "context_digest": real,
-        "policy_version": "changegate-policy.v3-draft",
+        "policy_version": "changegate-policy.v4-draft",
         "evaluator_version": "0.1.0",
         "outcome": {"status": "SUCCESS", "detail_code": "EVALUATION_OK"},
         "evidence_refs": [{"evidence_id": "ev-pytest-1", "requirement_id": "req-pytest-full",
@@ -495,21 +594,24 @@ def test_fixture_bindings_use_the_canonical_digest_representation():
 # ---------------------------------------------------------------------------
 
 _DIGEST_A = canonical_digest({"probe": "decision-a"})
-_DIGEST_B = canonical_digest({"probe": "decision-b"})
+_DIGEST_B = canonical_digest({"probe": "input-a"})
+_DIGEST_C = canonical_digest({"probe": "record-a"})
 _COMMIT = "b" * 40
+_ROOT_TASK = "changegate-slice1a-demo"
+_ROOT_CANDIDATE = canonical_digest({"probe": "candidate-a"})
 
 
 def _base_envelope(event_type: str) -> dict:
     return {
         "event_id": "evt-1",
         "event_type": event_type,
-        "occurred_at": "2026-07-14T00:00:00Z",
+        "occurred_at": "2026-07-15T00:00:00Z",
         "schema_version": "changegate-evaluation-event.v1",
         "product": "changegate",
-        "task_ref": "changegate-slice1a-demo",
+        "task_ref": _ROOT_TASK,
         "subject_ref": {
             "namespace": "changegate", "kind": "git_candidate", "value": "cand-1",
-            "commit_sha": _COMMIT, "digest": _DIGEST_A,
+            "commit_sha": _COMMIT, "digest": _ROOT_CANDIDATE,
         },
         "provenance": {"emitter": "changegate-cli", "emitter_version": "0.1.0",
                        "trace_id": None, "request_id": None},
@@ -517,9 +619,13 @@ def _base_envelope(event_type: str) -> dict:
     }
 
 
+# A decision_ref now carries the COMPLETE decision identity + task/candidate lineage
+# (schema-required for every event type, §11/§19.3).
 _DECISION_REF = {
-    "evaluation_id": "eval-1", "trace_id": "trace-1", "decision_digest": _DIGEST_A,
-    "policy_record_digest": _DIGEST_B, "input_digest": _DIGEST_B,
+    "evaluation_id": "eval-1", "trace_id": "trace-1",
+    "decision_digest": _DIGEST_A, "input_digest": _DIGEST_B,
+    "policy_record_digest": _DIGEST_C,
+    "task_ref": _ROOT_TASK, "candidate_digest": _ROOT_CANDIDATE,
     "disposition": "ELIGIBLE_TO_MERGE_UNDER_POLICY",
     "decision_authority": "AUTHORITATIVE", "primary_reason_code": None,
     "evaluation_mode": "ENFORCE",
@@ -714,14 +820,32 @@ CHAIN_PARENT_RULES: dict[str, tuple[tuple[str, str], ...]] = {
 
 
 def validate_event_chain(events: list[dict]) -> list[str]:
-    """Cross-event relationships a JSON Schema cannot express. Returns error strings."""
+    """Cross-event relationships a JSON Schema cannot express, INCLUDING root
+    task/candidate/decision lineage (§19.3). Returns error strings.
+
+    The first CHANGEGATE_EVALUATION_COMPLETED establishes the active root lineage
+    (task_ref, candidate_digest, decision/input/policy-record digests). Every downstream
+    event must match the ACTIVE lineage. A review override carrying a complete replacement
+    decision (all three new_* digests) switches the active decision lineage while
+    preserving task/candidate. A changed candidate cannot continue the chain; it needs a
+    new evaluation event.
+    """
     errors: list[str] = []
     by_id: dict[str, dict] = {}
-    for position, event in enumerate(events):
+    active: dict | None = None  # root/active lineage
+
+    def _dref(event: dict) -> dict | None:
+        dr = event.get("decision_ref")
+        return dr if isinstance(dr, dict) else None
+
+    for event in events:
         event_id = event["event_id"]
+        etype = event["event_type"]
         if event_id in by_id:
             errors.append(f"duplicate event_id {event_id!r}")
-        for field, required_type in CHAIN_PARENT_RULES[event["event_type"]]:
+
+        # 1. structural references resolve to an EARLIER event of the correct type.
+        for field, required_type in CHAIN_PARENT_RULES[etype]:
             ref = event.get(field)
             if ref is None:
                 continue
@@ -736,22 +860,88 @@ def validate_event_chain(events: list[dict]) -> list[str]:
                     f"{event_id}: {field} points at {parent['event_type']}, "
                     f"expected {required_type}"
                 )
-        if event["event_type"] == "CHANGEGATE_USER_FEEDBACK_RECORDED":
+
+        # 2. feedback target-type label must match the referenced event's actual type.
+        if etype == "CHANGEGATE_USER_FEEDBACK_RECORDED":
             target = by_id.get(event.get("target_event_ref") or "")
             if target is not None and event.get("target_event_type") != target["event_type"]:
                 errors.append(
                     f"{event_id}: target_event_type {event.get('target_event_type')!r} "
                     f"!= referenced event type {target['event_type']!r}"
                 )
-        # The decision digest must stay consistent across the whole chain.
-        decision_ref = event.get("decision_ref")
-        if decision_ref is not None and by_id:
-            first = events[0].get("decision_ref")
-            if first and decision_ref["decision_digest"] != first["decision_digest"]:
-                errors.append(f"{event_id}: decision_digest diverges from the chain")
+
+        # 3. lineage.
+        dref = _dref(event)
+        if etype == "CHANGEGATE_EVALUATION_COMPLETED":
+            if active is None:
+                if dref is None:
+                    errors.append(f"{event_id}: evaluation without decision_ref")
+                else:
+                    active = {
+                        "task_ref": dref["task_ref"],
+                        "candidate_digest": dref["candidate_digest"],
+                        "decision_digest": dref["decision_digest"],
+                        "input_digest": dref["input_digest"],
+                        "policy_record_digest": dref["policy_record_digest"],
+                    }
+            # A second evaluation for a DIFFERENT candidate legitimately starts a new
+            # root; for the same candidate it must keep the task. (Not exercised by the
+            # positive chain, but kept coherent.)
+        elif dref is not None:
+            if active is None:
+                errors.append(f"{event_id}: causal event before any evaluation event")
+            else:
+                if dref["task_ref"] != active["task_ref"]:
+                    errors.append(
+                        f"{event_id}: task_ref {dref['task_ref']!r} != root "
+                        f"{active['task_ref']!r}"
+                    )
+                if dref["candidate_digest"] != active["candidate_digest"]:
+                    errors.append(
+                        f"{event_id}: candidate_digest diverges from the root candidate"
+                    )
+                if dref["decision_digest"] != active["decision_digest"]:
+                    errors.append(f"{event_id}: decision_digest diverges from the chain")
+                if dref["input_digest"] != active["input_digest"]:
+                    errors.append(f"{event_id}: input_digest diverges from the chain")
+                if dref["policy_record_digest"] != active["policy_record_digest"]:
+                    errors.append(
+                        f"{event_id}: policy_record_digest diverges from the chain"
+                    )
+
+        # 4. an override with a complete replacement switches the active decision lineage.
+        if etype == "CHANGEGATE_REVIEW_OVERRIDDEN":
+            override = event.get("override") or {}
+            triple = ("new_decision_digest", "new_input_digest",
+                      "new_policy_record_digest")
+            present = [k for k in triple if override.get(k)]
+            if present and len(present) != 3:
+                errors.append(
+                    f"{event_id}: override mixes an incomplete replacement decision"
+                )
+            elif len(present) == 3 and active is not None:
+                active = {
+                    **active,
+                    "decision_digest": override["new_decision_digest"],
+                    "input_digest": override["new_input_digest"],
+                    "policy_record_digest": override["new_policy_record_digest"],
+                }
+
         by_id[event_id] = event
-        del position
+
+    # 5. every non-root event must be causally connected (some *_event_ref present).
+    ref_fields = ("evaluation_event_ref", "attempt_event_ref", "merge_event_ref",
+                  "validation_event_ref", "target_event_ref")
+    for event in events:
+        if event["event_type"] == "CHANGEGATE_EVALUATION_COMPLETED":
+            continue
+        if not any(event.get(f) for f in ref_fields):
+            errors.append(f"{event['event_id']}: causally disconnected (no event ref)")
     return errors
+
+
+def _dref(**overrides) -> dict:
+    return {**_DECISION_REF, **overrides}
 
 
 def _full_chain() -> list[dict]:
@@ -791,31 +981,136 @@ def test_complete_event_chain_validates_locally_and_causally():
     completion = next(e for e in chain if e["event_type"] == "CHANGEGATE_MERGE_COMPLETED")
     assert completion["attempt_event_ref"] == "evt-attempt-1"
     assert completion["outcome"]["resulting_commit_sha"] == "c" * 40
+    # every lineage field reconstructs from the root evaluation.
+    root = chain[0]["decision_ref"]
+    for event in chain[1:]:
+        dr = event["decision_ref"]
+        assert dr["task_ref"] == root["task_ref"]
+        assert dr["candidate_digest"] == root["candidate_digest"]
+        assert dr["decision_digest"] == root["decision_digest"]
+        assert dr["input_digest"] == root["input_digest"]
+        assert dr["policy_record_digest"] == root["policy_record_digest"]
 
 
-def test_chain_validator_detects_broken_and_wrong_type_references():
+def test_chain_validator_full_lineage_negative_controls():
+    """END_TO_END_RECONSTRUCTABLE: all sixteen §19.3 negative controls are detected."""
+    foreign_task = _dref(task_ref="other-task")
+    foreign_cand = _dref(candidate_digest=canonical_digest({"probe": "other-candidate"}))
+
+    def with_dref(chain, idx, dref):
+        c = copy.deepcopy(chain)
+        c[idx]["decision_ref"] = dref
+        return c
+
     chain = _full_chain()
+    controls = {
+        # 1 nonexistent reference
+        "nonexistent": (lambda c: _set(c, 2, "attempt_event_ref", "evt-nope"),
+                        "does not resolve"),
+        # 2 forward reference
+        "forward": (lambda c: _set(c, 1, "evaluation_event_ref", "evt-merge-1"),
+                    "does not resolve"),
+        # 3 wrong event type
+        "wrong_type": (lambda c: _set(c, 2, "attempt_event_ref", "evt-eval-1"),
+                       "expected CHANGEGATE_MERGE_ATTEMPTED"),
+        # 4 duplicate event id
+        "duplicate_id": (lambda c: _set(c, 2, "event_id", "evt-attempt-1"),
+                         "duplicate event_id"),
+        # 5 decision-digest drift
+        "decision_drift": (lambda c: with_dref(c, 3, _dref(decision_digest=_DIGEST_B)),
+                           "decision_digest diverges"),
+        # 6 input-digest drift
+        "input_drift": (lambda c: with_dref(c, 3, _dref(input_digest=_DIGEST_A)),
+                        "input_digest diverges"),
+        # 7 policy-record-digest drift
+        "record_drift": (lambda c: with_dref(c, 3, _dref(policy_record_digest=_DIGEST_A)),
+                         "policy_record_digest diverges"),
+        # 8 feedback target-type mismatch
+        "feedback_type": (lambda c: _set(c, 5, "target_event_type",
+                                         "CHANGEGATE_EVALUATION_COMPLETED"),
+                          "target_event_type"),
+        # 9 completion referencing another task's attempt
+        "completion_foreign_task": (lambda c: with_dref(c, 2, foreign_task),
+                                    "task_ref"),
+        # 10 completion referencing another candidate's attempt
+        "completion_foreign_candidate": (lambda c: with_dref(c, 2, foreign_cand),
+                                        "candidate_digest diverges"),
+        # 11 rollback referencing another task/candidate's merge
+        "rollback_foreign": (lambda c: with_dref(c, 4, foreign_task), "task_ref"),
+        # 12 feedback referencing another task
+        "feedback_foreign_task": (lambda c: with_dref(c, 5, foreign_task), "task_ref"),
+        # 13 feedback referencing another candidate
+        "feedback_foreign_candidate": (lambda c: with_dref(c, 5, foreign_cand),
+                                      "candidate_digest diverges"),
+    }
+    for name, (mutate, expected) in controls.items():
+        errors = validate_event_chain(mutate(copy.deepcopy(chain)))
+        assert any(expected in e for e in errors), f"{name} not detected: {errors}"
 
-    nonexistent = copy.deepcopy(chain)
-    nonexistent[2]["attempt_event_ref"] = "evt-does-not-exist"
-    assert any("does not resolve" in e for e in validate_event_chain(nonexistent))
+    # 14 locally valid but disconnected event.
+    disconnected = copy.deepcopy(chain)
+    del disconnected[1]["evaluation_event_ref"]
+    assert any("disconnected" in e for e in validate_event_chain(disconnected))
 
-    wrong_type = copy.deepcopy(chain)
-    wrong_type[2]["attempt_event_ref"] = "evt-eval-1"  # an evaluation, not an attempt
-    assert any("expected CHANGEGATE_MERGE_ATTEMPTED" in e
-               for e in validate_event_chain(wrong_type))
+    # 15 changed candidate continuing the old chain without a new evaluation event.
+    changed_candidate = copy.deepcopy(chain)
+    changed_candidate[2]["decision_ref"] = foreign_cand
+    assert any("candidate_digest diverges" in e
+               for e in validate_event_chain(changed_candidate))
 
-    forward_ref = copy.deepcopy(chain)
-    forward_ref[1]["evaluation_event_ref"] = "evt-merge-1"  # later event
-    assert any("EARLIER" in e for e in validate_event_chain(forward_ref))
+    # 16 override mixing the old decision digest with new input/record digests.
+    override_event = {
+        **_base_envelope("CHANGEGATE_REVIEW_OVERRIDDEN"), "event_id": "evt-override-1",
+        "decision_ref": _DECISION_REF, "evaluation_event_ref": "evt-eval-1",
+        "override": {"actor_ref": "owner-1", "reason_code": "SCOPE_EXCEPTION",
+                     "new_decision_digest": _DIGEST_B, "new_input_digest": None,
+                     "new_policy_record_digest": None, "exception_ref": None,
+                     "expires_at": None},
+    }
+    mixed_chain = [chain[0], override_event]
+    assert any("incomplete replacement" in e for e in validate_event_chain(mixed_chain))
 
-    mislabeled = copy.deepcopy(chain)
-    mislabeled[5]["target_event_type"] = "CHANGEGATE_EVALUATION_COMPLETED"
-    assert any("target_event_type" in e for e in validate_event_chain(mislabeled))
 
-    drifted = copy.deepcopy(chain)
-    drifted[3]["decision_ref"] = {**_DECISION_REF, "decision_digest": _DIGEST_B}
-    assert any("decision_digest diverges" in e for e in validate_event_chain(drifted))
+def test_override_switches_active_decision_lineage():
+    """A complete replacement decision switches the active lineage; a subsequent event
+    matching the REPLACEMENT (not the original) validates, and one matching the original
+    afterwards fails."""
+    new_decision = canonical_digest({"probe": "replacement-decision"})
+    new_input = canonical_digest({"probe": "replacement-input"})
+    new_record = canonical_digest({"probe": "replacement-record"})
+    replacement_dref = _dref(decision_digest=new_decision, input_digest=new_input,
+                             policy_record_digest=new_record)
+
+    def env(event_id, event_type, **extra):
+        return {**_base_envelope(event_type), "event_id": event_id, **extra}
+
+    override = env("evt-override-1", "CHANGEGATE_REVIEW_OVERRIDDEN",
+                   decision_ref=_DECISION_REF, evaluation_event_ref="evt-eval-1",
+                   override={"actor_ref": "owner-1", "reason_code": "SCOPE_EXCEPTION",
+                             "new_decision_digest": new_decision,
+                             "new_input_digest": new_input,
+                             "new_policy_record_digest": new_record,
+                             "exception_ref": None, "expires_at": None})
+    good_attempt = env("evt-attempt-1", "CHANGEGATE_MERGE_ATTEMPTED",
+                       decision_ref=replacement_dref, evaluation_event_ref="evt-eval-1",
+                       outcome={"status": "SUCCESS", "detail_code": "ATTEMPT_STARTED"})
+    stale_attempt = env("evt-attempt-2", "CHANGEGATE_MERGE_ATTEMPTED",
+                        decision_ref=_DECISION_REF, evaluation_event_ref="evt-eval-1",
+                        outcome={"status": "SUCCESS", "detail_code": "ATTEMPT_STARTED"})
+    evaluation = {**_base_envelope("CHANGEGATE_EVALUATION_COMPLETED"),
+                  "event_id": "evt-eval-1",
+                  **_POSITIVE_EXTRAS["CHANGEGATE_EVALUATION_COMPLETED"]}
+    validator = _validator()
+    for e in (evaluation, override, good_attempt):
+        assert not list(validator.iter_errors(e)), e["event_id"]
+    assert validate_event_chain([evaluation, override, good_attempt]) == []
+    stale_errors = validate_event_chain([evaluation, override, stale_attempt])
+    assert any("decision_digest diverges" in e for e in stale_errors)
+
+
+def _set(chain: list[dict], idx: int, key: str, value) -> list[dict]:
+    chain[idx][key] = value
+    return chain
 
 
 # ---------------------------------------------------------------------------
@@ -935,7 +1230,7 @@ def test_no_artifact_contains_secret_material():
 
 def test_golden_fixture_is_valid_json_with_version_and_status():
     suite = _fixture()
-    assert suite["schema_version"] == "changegate-merge-eligibility-golden.v3"
+    assert suite["schema_version"] == "changegate-merge-eligibility-golden.v4"
     assert suite["status"] == "DRAFT_FOR_OWNER_REVIEW"
     assert suite["policy_spec"] == (
         "docs/strategy/CHANGEGATE_VERTICAL_MVP_SLICE_1_POLICY_SPEC.md"
@@ -978,14 +1273,18 @@ def test_independent_load_bearing_semantics_are_pinned():
     assert DRAFT_DISPOSITION_BY_CODE["AUTHORITY_INVALID"] == "BLOCK"
     assert DRAFT_DISPOSITION_BY_CODE["SCOPE_UNCERTAIN"] == "REVIEW_REQUIRED"
     # BLOCK dominates REVIEW_REQUIRED.
+    mixed_case = _case("GC-S1-033")
     mixed = oracle_decision(
-        _case("GC-S1-033")["policy_input_facts"], _fixture()["fact_state_mapping"]
+        mixed_case["policy_input_facts"], _fixture()["fact_state_mapping"],
+        case_mode(mixed_case),
     )
     assert set(mixed["complete"]) == {"RELEASE_STATE_NOT_CLEAN", "SCOPE_UNCERTAIN"}
     assert mixed["disposition"] == "BLOCK"
     # SHADOW is ADVISORY_ONLY.
+    shadow_case = _case("GC-S1-031")
     shadow = oracle_decision(
-        _case("GC-S1-031")["policy_input_facts"], _fixture()["fact_state_mapping"]
+        shadow_case["policy_input_facts"], _fixture()["fact_state_mapping"],
+        case_mode(shadow_case),
     )
     assert shadow["authority"] == "ADVISORY_ONLY"
 
@@ -1167,7 +1466,7 @@ def test_oracle_derives_every_case_expectation_from_facts_alone():
     mapping = suite["fact_state_mapping"]
     for c in suite["cases"]:
         cid = c["case_id"]
-        derived = oracle_decision(c["policy_input_facts"], mapping)
+        derived = oracle_decision(c["policy_input_facts"], mapping, case_mode(c))
         assert derived["complete"] == c["expected_complete_reason_codes"], (
             f"{cid}: oracle derived {derived['complete']} from facts, fixture expects "
             f"{c['expected_complete_reason_codes']}"
@@ -1181,23 +1480,26 @@ def test_oracle_is_total_over_every_single_fact_deviation():
     suite = _fixture()
     mapping = suite["fact_state_mapping"]
     green = _case("GC-S1-001")["policy_input_facts"]
-    for fact, values in ENUM_FACT_VALUES.items():
-        for value in values:
-            facts = copy.deepcopy(green)
-            facts[fact] = value
-            if fact == "evidence_context_status" and value == "INCOHERENT":
-                facts["evidence_context_violations"] = ["TASK_MISMATCH"]
-            assert oracle_decision(facts, mapping)["disposition"] in DISPOSITIONS
-    for identity in VERIFIER_IDENTITY_VALUES:
-        for independence in VERIFIER_INDEPENDENCE_VALUES:
-            facts = copy.deepcopy(green)
-            facts["verifier_identity_status"] = identity
-            facts["verifier_independence_status"] = independence
-            assert oracle_decision(facts, mapping)["disposition"] in DISPOSITIONS
+    for mode in EVALUATION_MODES:
+        for fact, values in ENUM_FACT_VALUES.items():
+            for value in values:
+                facts = copy.deepcopy(green)
+                facts[fact] = value
+                if fact == "evidence_context_status" and value == "INCOHERENT":
+                    facts["evidence_context_violations"] = ["TASK_MISMATCH"]
+                assert oracle_decision(facts, mapping, mode)["disposition"] in DISPOSITIONS
+        for identity in VERIFIER_IDENTITY_VALUES:
+            for independence in VERIFIER_INDEPENDENCE_VALUES:
+                facts = copy.deepcopy(green)
+                facts["verifier_identity_status"] = identity
+                facts["verifier_independence_status"] = independence
+                assert oracle_decision(facts, mapping, mode)["disposition"] in DISPOSITIONS
 
 
 def _oracle_for(case: dict) -> dict:
-    return oracle_decision(case["policy_input_facts"], _fixture()["fact_state_mapping"])
+    return oracle_decision(
+        case["policy_input_facts"], _fixture()["fact_state_mapping"], case_mode(case)
+    )
 
 
 def test_mutation_dirty_repository_on_eligible_case_is_detected():
@@ -1227,8 +1529,10 @@ def test_mutation_removing_mandatory_satisfied_requirement_is_detected():
 
 
 def test_mutation_enforce_to_shadow_without_authority_change_is_detected():
+    # evaluation_mode is single-sourced in bindings (R3), not facts.
     mutated = _case("GC-S1-001")
-    mutated["policy_input_facts"]["evaluation_mode"] = "SHADOW"
+    assert "evaluation_mode" not in mutated["policy_input_facts"]
+    mutated["policy_input_bindings"]["evaluation_mode"] = "SHADOW"
     derived = _oracle_for(mutated)
     assert derived["authority"] == "ADVISORY_ONLY"
     assert derived["authority"] != mutated["expected_decision_authority"]
@@ -1245,7 +1549,7 @@ def test_mutation_adding_invalid_provenance_without_expected_reason_is_detected(
 
 
 # ---------------------------------------------------------------------------
-# Replay identity — the ten §18.3 invariants (H-R1-01/H-R1-02)
+# Replay identity — the ten §18.5 invariants (R3: also covers policy_record_digest)
 # ---------------------------------------------------------------------------
 
 def _green() -> tuple[dict, dict, dict]:
@@ -1254,80 +1558,224 @@ def _green() -> tuple[dict, dict, dict]:
             _fixture()["fact_state_mapping"])
 
 
-def test_replay_1_2_same_input_same_input_and_decision_digests():
-    bindings, facts, mapping = _green()
-    assert input_digest_oracle(bindings, facts) == input_digest_oracle(bindings, facts)
-    assert decision_digest_oracle(bindings, facts, mapping) == decision_digest_oracle(
-        bindings, facts, mapping
-    )
-    assert CANONICAL_DIGEST_RE.match(decision_digest_oracle(bindings, facts, mapping))
+def _digests(bindings, facts, mapping):
+    record = build_policy_record(bindings, facts, mapping)
+    return record["decision_digest"], record["policy_record_digest"]
 
 
-def test_replay_3_4_trace_identities_and_timing_never_change_the_decision_digest():
+def test_replay_1_2_same_input_same_decision_and_record_digests():
     bindings, facts, mapping = _green()
-    baseline = decision_digest_oracle(bindings, facts, mapping)
-    # The decision payload has no slot for these at all; constructing envelopes around it
-    # must leave the decision digest byte-identical.
-    meta_a = {"trace_id": "trace-a", "evaluation_id": "eval-a", "request_id": "req-a",
-              "timestamp": "2026-07-14T00:00:00Z", "evaluation_latency_ms": 3}
-    meta_b = {"trace_id": "trace-b", "evaluation_id": "eval-b", "request_id": "req-b",
-              "timestamp": "2026-07-14T09:30:00Z", "evaluation_latency_ms": 4210}
-    assert decision_digest_oracle(bindings, facts, mapping) == baseline
-    assert trace_digest_oracle(baseline, meta_a) != trace_digest_oracle(baseline, meta_b)
+    d1, r1 = _digests(bindings, facts, mapping)
+    d2, r2 = _digests(bindings, facts, mapping)
+    assert d1 == d2 and r1 == r2
+    assert CANONICAL_DIGEST_RE.match(d1) and CANONICAL_DIGEST_RE.match(r1)
+
+
+def test_replay_3_4_trace_and_privacy_metadata_never_change_decision_or_record():
+    bindings, facts, mapping = _green()
+    d0, r0 = _digests(bindings, facts, mapping)
+    record = build_policy_record(bindings, facts, mapping)
+    trace_a = build_trace_envelope(record, _trace_meta(
+        trace_id="t-a", evaluation_id="e-a", request_id="q-a",
+        occurred_at="2026-07-15T00:00:00Z", evaluation_latency_ms=3,
+        redaction_classification="INTERNAL"))
+    trace_b = build_trace_envelope(record, _trace_meta(
+        trace_id="t-b", evaluation_id="e-b", request_id="q-b",
+        occurred_at="2026-07-15T09:30:00Z", evaluation_latency_ms=4210,
+        redaction_classification="SENSITIVE"))
+    # decision & record identity unchanged; trace identity differs.
+    assert trace_a["decision_digest"] == trace_b["decision_digest"] == d0
+    assert trace_a["policy_record_digest"] == trace_b["policy_record_digest"] == r0
+    assert trace_a["trace_digest"] != trace_b["trace_digest"]
+    assert validate_trace_envelope(trace_a) == []
+    assert validate_trace_envelope(trace_b) == []
 
 
 @pytest.mark.parametrize("field", [
-    "repository_snapshot_digest",   # invariant 5
-    "verification_bundle_digest",   # invariant 6
-    "approval_digest",              # invariant 7
-    "authority_binding_digest",     # invariant 8
-    "verifier_binding_digest",      # invariant 8
-    "task_contract_digest",
-    "candidate_digest",
-    "policy_digest",
+    "repository_snapshot_digest", "verification_bundle_digest", "approval_digest",
+    "authority_binding_digest", "verifier_binding_digest", "task_contract_digest",
+    "candidate_digest", "policy_digest",
 ])
-def test_replay_5_to_9_every_source_digest_changes_the_decision_digest(field):
+def test_replay_5_to_8_every_source_digest_changes_decision_and_record(field):
     bindings, facts, mapping = _green()
-    baseline = decision_digest_oracle(bindings, facts, mapping)
-    changed = dict(bindings)
-    changed[field] = canonical_digest({"probe": f"different-{field}"})
-    assert decision_digest_oracle(changed, facts, mapping) != baseline, (
-        f"{field} does not affect decision identity"
-    )
+    d0, r0 = _digests(bindings, facts, mapping)
+    changed = {**bindings, field: canonical_digest({"probe": f"different-{field}"})}
+    d1, r1 = _digests(changed, facts, mapping)
+    assert d1 != d0 and r1 != r0, f"{field} does not affect decision/record identity"
 
 
-def test_replay_7_no_approval_sentinel_changes_the_decision_digest():
+def test_replay_7_no_approval_sentinel_changes_decision_and_record():
     bindings, facts, mapping = _green()
-    baseline = decision_digest_oracle(bindings, facts, mapping)
+    d0, r0 = _digests(bindings, facts, mapping)
     without = {**bindings, "approval_digest": NO_APPROVAL_SENTINEL}
-    assert decision_digest_oracle(without, facts, mapping) != baseline
+    d1, r1 = _digests(without, facts, mapping)
+    assert d1 != d0 and r1 != r0
 
 
-@pytest.mark.parametrize("field", ["policy_version", "evaluator_version"])
-def test_replay_9_policy_and_evaluator_versions_change_the_decision_digest(field):
+@pytest.mark.parametrize("field", ["policy_version", "evaluator_version",
+                                   "evaluation_mode"])
+def test_replay_9_version_and_mode_changes_change_decision_and_record(field):
     bindings, facts, mapping = _green()
-    baseline = decision_digest_oracle(bindings, facts, mapping)
-    changed = {**bindings, field: bindings[field] + "-next"}
-    assert decision_digest_oracle(changed, facts, mapping) != baseline
+    d0, r0 = _digests(bindings, facts, mapping)
+    new = "SHADOW" if field == "evaluation_mode" else bindings[field] + "-next"
+    changed = {**bindings, field: new}
+    d1, r1 = _digests(changed, facts, mapping)
+    assert d1 != d0 and r1 != r0
 
 
-def test_replay_policy_fact_change_changes_the_decision_digest():
+def test_replay_policy_fact_change_changes_decision_and_record():
     bindings, facts, mapping = _green()
-    baseline = decision_digest_oracle(bindings, facts, mapping)
+    d0, r0 = _digests(bindings, facts, mapping)
     dirty = copy.deepcopy(facts)
     dirty["repository_release_clean"] = "DIRTY"
-    assert decision_digest_oracle(bindings, dirty, mapping) != baseline
+    d1, r1 = _digests(bindings, dirty, mapping)
+    assert d1 != d0 and r1 != r0
 
 
 def test_replay_10_trace_metadata_change_changes_only_the_trace_digest():
     bindings, facts, mapping = _green()
-    decision = decision_digest_oracle(bindings, facts, mapping)
-    meta = {"trace_id": "t-1", "evaluation_id": "e-1", "request_id": "r-1",
-            "timestamp": "2026-07-14T00:00:00Z", "evaluation_latency_ms": 1}
-    trace_a = trace_digest_oracle(decision, meta)
-    trace_b = trace_digest_oracle(decision, {**meta, "evaluation_latency_ms": 900})
-    assert trace_a != trace_b
-    assert decision_digest_oracle(bindings, facts, mapping) == decision
+    record = build_policy_record(bindings, facts, mapping)
+    trace_a = build_trace_envelope(record, _trace_meta(evaluation_latency_ms=1))
+    trace_b = build_trace_envelope(record, _trace_meta(evaluation_latency_ms=900))
+    assert trace_a["trace_digest"] != trace_b["trace_digest"]
+    assert trace_a["decision_digest"] == trace_b["decision_digest"]
+    assert trace_a["policy_record_digest"] == trace_b["policy_record_digest"]
+
+
+# ---------------------------------------------------------------------------
+# Single-source evaluation_mode (H-R2V-01)
+# ---------------------------------------------------------------------------
+
+def test_evaluation_mode_is_single_sourced_in_bindings_not_facts():
+    suite = _fixture()
+    assert "evaluation_mode" not in suite["fact_state_mapping"]["enum_facts"]
+    for c in suite["cases"]:
+        assert "evaluation_mode" not in c["policy_input_facts"], c["case_id"]
+        assert c["policy_input_bindings"]["evaluation_mode"] in EVALUATION_MODES
+    # The A2 input payload draws the mode from bindings; a facts-level copy is impossible
+    # (a2_input_payload asserts facts carry no mode).
+    bindings, facts, _ = _green()
+    a2_input_payload(bindings, facts)  # must not raise
+    facts_with_mode = {**facts, "evaluation_mode": "SHADOW"}
+    with pytest.raises(AssertionError):
+        a2_input_payload(bindings, facts_with_mode)
+    # spec forbids a second facts-level mode.
+    text = _spec_text()
+    assert "evaluation_mode` is NOT an eligibility fact" in text
+    assert "single source" in text
+
+
+# ---------------------------------------------------------------------------
+# PolicyEvaluationRecord consistency (H-R2V-02)
+# ---------------------------------------------------------------------------
+
+def test_policy_record_is_self_consistent_and_reproducible_from_input():
+    bindings, facts, mapping = _green()
+    record = build_policy_record(bindings, facts, mapping)
+    # independent validator: recompute digest + structural checks.
+    assert validate_policy_record(record) == []
+    # reproducible from the input alone (no application metadata).
+    again = build_policy_record(bindings, facts, mapping)
+    assert record == again
+    assert "redaction_classification" not in record
+    # record ↔ decision consistency.
+    assert record["input_digest"] == input_digest_oracle(bindings, facts)
+    assert record["decision_digest"] == decision_digest_oracle(bindings, facts, mapping)
+    for field in SOURCE_DIGEST_FIELDS:
+        assert record[field] == bindings[field]
+    outcome = oracle_decision(facts, mapping, bindings["evaluation_mode"])
+    assert record["disposition"] == outcome["disposition"]
+    assert record["decision_authority"] == outcome["authority"]
+    assert record["complete_reason_codes"] == outcome["complete"]
+
+
+def test_policy_record_field_mutation_invalidates_its_digest():
+    bindings, facts, mapping = _green()
+    record = build_policy_record(bindings, facts, mapping)
+    for mutation in (
+        {"disposition": "BLOCK"},
+        {"decision_authority": "ADVISORY_ONLY"},
+        {"repository_snapshot_digest": canonical_digest({"x": "other"})},
+        {"complete_reason_codes": ["RELEASE_STATE_NOT_CLEAN"]},
+        {"decision_digest": _DIGEST_A},
+    ):
+        tampered = {**record, **mutation}
+        assert validate_policy_record(tampered), f"mutation {mutation} not detected"
+
+
+def test_matching_golden_case_facts_reproduce_a_valid_record_for_every_case():
+    suite = _fixture()
+    mapping = suite["fact_state_mapping"]
+    for c in suite["cases"]:
+        record = build_policy_record(
+            c["policy_input_bindings"], c["policy_input_facts"], mapping
+        )
+        assert validate_policy_record(record) == [], c["case_id"]
+        assert record["disposition"] == c["expected_disposition"], c["case_id"]
+        assert record["decision_authority"] == c["expected_decision_authority"], c["case_id"]
+
+
+# ---------------------------------------------------------------------------
+# Trace envelope consistency + the ten §18.4 negative controls (H-R2V-02)
+# ---------------------------------------------------------------------------
+
+def test_trace_envelope_positive_is_consistent():
+    bindings, facts, mapping = _green()
+    record = build_policy_record(bindings, facts, mapping)
+    trace = build_trace_envelope(record, _trace_meta())
+    assert validate_trace_envelope(trace) == []
+    assert trace["policy_record"] == record
+    assert trace["input_digest"] == record["input_digest"]
+    assert trace["decision_digest"] == record["decision_digest"]
+
+
+def test_trace_envelope_negative_controls_are_all_detected():
+    bindings, facts, mapping = _green()
+    record = build_policy_record(bindings, facts, mapping)
+    other = build_policy_record(
+        _case("GC-S1-010")["policy_input_bindings"],
+        _case("GC-S1-010")["policy_input_facts"], mapping)
+    other_task = build_policy_record(
+        {**bindings, "task_id": "other-task"}, facts, mapping)
+    other_candidate = build_policy_record(
+        {**bindings, "candidate_digest": canonical_digest({"x": "other-cand"})},
+        facts, mapping)
+
+    def tampered(**overrides) -> dict:
+        return {**build_trace_envelope(record, _trace_meta()), **overrides}
+
+    def tampered_record(**record_overrides) -> dict:
+        trace = build_trace_envelope(record, _trace_meta())
+        trace["policy_record"] = {**record, **record_overrides}
+        return trace
+
+    controls = {
+        # 1 mismatched top-level decision digest
+        "decision": tampered(decision_digest=_DIGEST_A),
+        # 2 mismatched top-level input digest
+        "input": tampered(input_digest=_DIGEST_A),
+        # 3 mismatched top-level policy-record digest
+        "record_digest": tampered(policy_record_digest=_DIGEST_A),
+        # 4 changed source digest inside record without record-digest update
+        "source_in_record": tampered_record(
+            repository_snapshot_digest=canonical_digest({"x": "z"})),
+        # 5 changed disposition inside record
+        "disposition": tampered_record(disposition="BLOCK"),
+        # 6 changed complete reason set inside record
+        "reasons": tampered_record(complete_reason_codes=["SCOPE_VIOLATION"]),
+        # 7 changed authority inside record
+        "authority": tampered_record(decision_authority="ADVISORY_ONLY"),
+        # 8 trace digest not recomputed after a metadata change
+        "stale_trace": tampered(occurred_at="2030-01-01T00:00:00Z"),
+        # 9 embedded record from another task
+        "foreign_task": tampered(policy_record=other_task),
+        # 10 embedded record from another candidate
+        "foreign_candidate": tampered(policy_record=other_candidate),
+        # (bonus) wholesale swap for another case's record
+        "wholesale_swap": tampered(policy_record=other),
+    }
+    for name, trace in controls.items():
+        assert validate_trace_envelope(trace), f"control {name} not detected"
 
 
 # ---------------------------------------------------------------------------
@@ -1435,7 +1883,8 @@ def test_shadow_mode_counterfactual_cases_exist_with_advisory_authority():
     blocked = _cases_by_tag("shadow_block_counterfactual")
     assert eligible and blocked
     for c in eligible + blocked:
-        assert c["policy_input_facts"]["evaluation_mode"] == "SHADOW"
+        assert "evaluation_mode" not in c["policy_input_facts"]
+        assert case_mode(c) == "SHADOW"
         assert c["expected_decision_authority"] == "ADVISORY_ONLY"
     assert any(
         c["expected_disposition"] == "ELIGIBLE_TO_MERGE_UNDER_POLICY" for c in eligible
@@ -1514,3 +1963,162 @@ def test_fixture_event_assertions_use_only_schema_event_types():
             assert event_type in schema_events, (
                 f"{c['case_id']} asserts unknown event type {event_type}"
             )
+
+
+# ---------------------------------------------------------------------------
+# Acceptance governance + semantic fingerprint (H-R2V-04)
+# ---------------------------------------------------------------------------
+
+_METADATA_ONLY_ALLOWED = {
+    "owner_decision_status", "acceptance_record", "accepted_candidate_sha",
+    "artifact_digests", "verification_report_references", "deferred_decision_register",
+    "audit_metadata", "document_status",
+}
+_METADATA_ONLY_FORBIDDEN = {
+    "disposition_semantics", "reason_code_taxonomy", "reason_precedence",
+    "golden_expected_results", "replay_or_source_binding_rules", "policy_record_payload",
+    "event_schema_behavior", "oracle_or_validation_logic", "production_code",
+}
+
+
+def semantic_fingerprint(suite: dict) -> str:
+    """Deterministic fingerprint over the load-bearing semantic artifacts (§27.3). A
+    metadata-only acceptance patch must preserve it; any semantic change alters it."""
+    return canonical_digest({
+        "kind": "changegate.slice1a.semantic-fingerprint.v1",
+        "reason_code_taxonomy_and_ranks": sorted(
+            (e["code"], e["precedence_rank"], e["default_disposition"])
+            for e in suite["reason_codes"]
+        ),
+        "fact_state_mapping": suite["fact_state_mapping"],
+        "golden_expected_results": [
+            {
+                "case_id": c["case_id"],
+                "disposition": c["expected_disposition"],
+                "authority": c["expected_decision_authority"],
+                "primary": c["expected_primary_reason"],
+                "complete": c["expected_complete_reason_codes"],
+            }
+            for c in sorted(suite["cases"], key=lambda c: c["case_id"])
+        ],
+        "decision_authority_by_mode": suite["fact_state_mapping"]["decision_authority_by_mode"],
+        "identifier_universes": suite["identifier_universes"],
+        "digest_representation": suite["digest_representation"],
+    })
+
+
+def test_acceptance_governance_declares_allowed_and_forbidden_sets():
+    gov = _fixture()["acceptance_governance"]
+    assert set(gov["metadata_only_allowed_changes"]) == _METADATA_ONLY_ALLOWED
+    assert set(gov["metadata_only_forbidden_changes"]) == _METADATA_ONLY_FORBIDDEN
+    assert gov["precedence_change_classification"] == (
+        "SEMANTIC_PATCH_REQUIRES_REVERIFICATION"
+    )
+    # both required rules present.
+    assert "merge allowed after PASS" in gov["metadata_only_rule"]
+    for phrase in ("invalidated", "new implementation candidate",
+                   "fresh independent adversarial verification"):
+        assert phrase in gov["semantic_change_rule"]
+    # spec §27 states the same governance (whitespace-normalized: phrases wrap lines).
+    text = _spec_text()
+    normalized = " ".join(text.split())
+    assert "## 27. Acceptance Governance" in text
+    assert "metadata-only acceptance patch" in text
+    assert "semantic patch, not an acceptance metadata patch" in normalized
+    # §10 no longer calls a precedence change a mere acceptance patch (strip blockquote
+    # markers before whitespace-normalizing).
+    s10_raw = text.split("## 10. Deterministic Precedence")[1].split("## 11.")[0]
+    s10 = " ".join(s10_raw.replace(">", " ").split())
+    assert "SEMANTIC change, not a metadata acceptance patch" in s10
+    assert "invalidates the current independent verification" in s10
+    assert "fresh independent adversarial reverification" in s10
+
+
+def test_semantic_fingerprint_is_stable_and_reproducible():
+    suite = _fixture()
+    assert semantic_fingerprint(suite) == semantic_fingerprint(_fixture())
+    assert CANONICAL_DIGEST_RE.match(semantic_fingerprint(suite))
+    # the fingerprint components named in the spec/fixture match what we digest.
+    gov = suite["acceptance_governance"]
+    assert set(gov["semantic_fingerprint_components"]) == {
+        "reason_code_taxonomy_and_ranks", "fact_state_mapping",
+        "golden_expected_results", "decision_authority_by_mode",
+        "identifier_universes", "digest_representation",
+    }
+
+
+def test_precedence_change_alters_the_semantic_fingerprint():
+    """A metadata acceptance patch must PRESERVE the fingerprint; a precedence swap (a
+    semantic change) alters it, so it can never be mislabeled as metadata-only."""
+    suite = _fixture()
+    baseline = semantic_fingerprint(suite)
+    mutated = copy.deepcopy(suite)
+    by = {e["code"]: e for e in mutated["reason_codes"]}
+    by["AUTHORITY_INVALID"]["precedence_rank"], by["EVIDENCE_TASK_MISMATCH"]["precedence_rank"] = (
+        by["EVIDENCE_TASK_MISMATCH"]["precedence_rank"],
+        by["AUTHORITY_INVALID"]["precedence_rank"],
+    )
+    assert semantic_fingerprint(mutated) != baseline, (
+        "a precedence swap must change the semantic fingerprint"
+    )
+
+
+def test_metadata_only_change_preserves_the_semantic_fingerprint():
+    """A document-status / acceptance-metadata change must NOT alter the fingerprint."""
+    suite = _fixture()
+    baseline = semantic_fingerprint(suite)
+    metadata_patched = copy.deepcopy(suite)
+    metadata_patched["status"] = "ACCEPTED_BY_OWNER"          # document status
+    metadata_patched["policy_version_ref"] = "accepted-2026-07-15"  # acceptance record
+    assert semantic_fingerprint(metadata_patched) == baseline
+
+
+# ---------------------------------------------------------------------------
+# OD-S1A-008 completion (M-R2V-01)
+# ---------------------------------------------------------------------------
+
+def test_od_s1a_008_decision_record_is_complete_and_pending():
+    record = _fixture()["od_s1a_008_decision_record"]
+    assert record["id"] == "OD-S1A-008"
+    assert record["status"] == "PENDING_OWNER_DECISION"
+    assert record["blocks"] == {
+        "slice_1a_owner_review": "NOT_BLOCKED",
+        "slice_1b_a2": "NOT_BLOCKED",
+        "slice_1c_1_a3": "BLOCKED_UNTIL_ACCEPTED",
+    }
+    questions = {q["question"] for q in record["owner_must_decide"]}
+    for needed in ("unknown display strings", "duplicate declarations", "aliases",
+                   "deprecated aliases", "alias conflicts", "mapping version",
+                   "declaration-set schema version",
+                   "stable requirement_id namespace"):
+        assert any(needed in q for q in questions), f"missing owner question: {needed}"
+    # all 10 owner questions present.
+    assert len(record["owner_must_decide"]) == 10
+    # the ten pre-1C-1 declaration fields.
+    assert set(record["pre_1c_1_declaration_fields"]) == {
+        "requirement_id", "display_label", "source_contract_version",
+        "declaration_set_version", "mapping_version", "aliases", "deprecated_aliases",
+        "unknown_value_policy", "duplicate_policy", "conflict_policy",
+    }
+    # spec §25.1 enumerates the same questions and fields, still pending, no answer chosen.
+    text = _spec_text()
+    assert "Slice 1C-1 / A3:         BLOCKED UNTIL ACCEPTED" in text
+    for field in ("unknown_value_policy", "duplicate_policy", "conflict_policy",
+                  "deprecated_aliases", "mapping_version", "declaration_set_version"):
+        assert field in text, f"spec must list pre-1C-1 field {field}"
+    # A2 stays independent (GC-S1-041), A3 stays blocked; no mapping is chosen.
+    case = _case("GC-S1-041")
+    assert "OD-S1A-008" in case["owner_decisions_pending"]
+    assert case["expected_event_assertions"][
+        "requirement_ids_derived_from_display_strings"] is False
+
+
+def test_all_eight_owner_decisions_remain_pending():
+    suite = _fixture()
+    assert list(suite["owner_decisions"]) == list(OD_S1A_IDS)
+    text = _spec_text()
+    for od in OD_S1A_IDS:
+        assert od in text
+    assert "PENDING_OWNER_DECISION" in text
+    # status is still draft for owner review.
+    assert re.search(r"^Status:\s*DRAFT_FOR_OWNER_REVIEW\s*$", text, re.MULTILINE)

@@ -7,9 +7,10 @@ Technical Author: Claude Code Fable 5
 Independent Verification: PENDING
 Baseline: 3e72e93bfac8da2ecdb7960a55ae0357135eb61e
 Production Implementation: NOT_STARTED
-Revision: R2 (trace binding, canonical digest and causal event hardening after Sol High
-reverify of candidate 40d57188bb984ba047fa0c730fbe34749e4d9d7f; supersedes R1, which
-superseded 07bc5b7be43a275c8484cdc633579ecfda657ffd)
+Revision: R3 (deterministic record, trace consistency, causal lineage and governance
+closure after Sol High final reverify of candidate
+a20fb7bf8b199522d5221dc02a625d62efb0784c; supersedes R2 → R1 →
+07bc5b7be43a275c8484cdc633579ecfda657ffd)
 
 > This document is a specification-and-contract artifact only. It defines the deterministic
 > merge-eligibility policy contract for ChangeGate Slice 1. It implements nothing. It remains
@@ -183,8 +184,8 @@ evidence, the filesystem, or any external system.
 | `authority_binding_digest` | canonical digest of the `AuthorityFact` (actor/role refs + validity status) |
 | `verifier_binding_digest` | canonical digest of the `VerifierIdentityFact` (verifier/implementer refs + identity/independence statuses) |
 | `policy_digest`, `policy_version` | which policy decides |
-| `facts` | validated `EligibilityFacts` (§6) — the complete typed fact set |
-| `evaluation_mode` | `ENFORCE \| SHADOW` (deterministic input, digest-covered) |
+| `facts` | validated `EligibilityFacts` (§6) — the complete typed fact set, which does NOT include `evaluation_mode` |
+| `evaluation_mode` | `ENFORCE \| SHADOW` — the **single source** of evaluation mode (A2 execution configuration, digest-covered). It is NOT an `EligibilityFact` (§6.3), so no second, conflicting copy is representable |
 | `evaluator_version` | evaluator software identity |
 
 Every field above is deterministic and caller-supplied. **A2 must not inspect the
@@ -276,7 +277,7 @@ requirement_id_universe ∩ evidence_record_id_universe = ∅
 No production identifier prefix is mandated — the existing contracts do not require one;
 only disjointness is required.
 
-### 6.3 Context, scope, approval, authority, verifier and mode facts
+### 6.3 Context, scope, approval, authority and verifier facts
 
 | Fact | Values |
 | --- | --- |
@@ -291,7 +292,14 @@ only disjointness is required.
 | `authority_status` | `VALID \| INVALID \| UNKNOWN` (§14) |
 | `verifier_identity_status` | `ATTESTED \| PRESENT_UNATTESTED \| ABSENT \| INVALID` (§15) |
 | `verifier_independence_status` | `INDEPENDENT \| NOT_INDEPENDENT \| UNKNOWN` (§15) |
-| `evaluation_mode` | `ENFORCE \| SHADOW` (§8) |
+
+**`evaluation_mode` is NOT an eligibility fact.** It is A2 **execution configuration** and
+lives exactly once, at `MergeEligibilityPolicyInput.evaluation_mode` (§5.2). It is not
+derived by A3, is absent from `EligibilityFacts` and from `fact_state_mapping.enum_facts`,
+and cannot be represented a second time. It selects `decision_authority` (§8) and never
+changes the reason set. Any input carrying a facts-level evaluation mode is malformed by
+construction (there is no such field), so the top-level/facts conflict of the prior
+revision is unrepresentable.
 
 ### 6.4 Total fact-state mapping (normative)
 
@@ -315,7 +323,6 @@ reproduces every golden expectation from it.
 | `approval_status` | VALID → none; MISSING → `APPROVAL_MISSING`; STALE → `APPROVAL_STALE`; UNKNOWN → `APPROVAL_MISSING` (treated as missing; disposition pending OD-S1A-001) |
 | `authority_status` | VALID → none; INVALID → `AUTHORITY_INVALID`; UNKNOWN → `REQUIRED_CONTEXT_INCOMPLETE` |
 | verifier pair | governed by the ordered first-match rule in §15 (total over all 12 combinations) |
-| `evaluation_mode` | ENFORCE → none; SHADOW → none (mode changes `decision_authority`, §8, never the reason set) |
 | `missing_requirement_ids` non-empty | → `REQUIRED_EVIDENCE_MISSING` |
 | `invalid_requirement_ids` non-empty | → `REQUIRED_EVIDENCE_INVALID` |
 | `invalid_provenance_evidence_ids` non-empty | → `EVIDENCE_PROVENANCE_INVALID` |
@@ -381,24 +388,69 @@ envelope points at the decision through `decision_digest`, never the reverse.
 
 ### 7.3 PolicyEvaluationRecord (deterministic replayable policy record)
 
-A deterministic, replayable record of the evaluation itself, returned by the pure
-evaluator alongside the decision:
+A deterministic, replayable record of the evaluation, returned by the pure evaluator
+alongside the decision. It is reproducible from `MergeEligibilityPolicyInput` **alone** —
+it contains no application/storage metadata and no privacy classification.
 
-| Field | Content |
-| --- | --- |
-| `input_digest` | canonical digest of the deterministic A2 input |
-| `decision_digest` | canonical digest of the decision |
-| source digests | `task_contract_digest`, `candidate_digest`, `repository_snapshot_digest`, `verification_bundle_digest`, `approval_digest` (or sentinel), `authority_binding_digest`, `verifier_binding_digest`, `policy_digest` |
-| `policy_version`, `evaluator_version` | versions that decided |
-| `disposition`, `decision_authority` | outcome |
-| `primary_reason_code`, `complete_reason_codes` | reasons |
-| requirement accounting + record diagnostics | §6.1/§6.2 sets |
-| `redaction_classification` | privacy class of this record (§21) |
-| `policy_record_digest` | canonical digest of the record payload, excluding itself |
+**Exact `PolicyEvaluationRecordPayload` (the digested payload), field order fixed:**
 
-It **must not contain**: `request_id`, `trace_id`, an application-generated
+```
+PolicyEvaluationRecordPayload
+- schema_version                 "changegate.policy-evaluation-record.v1"
+- task_id
+- task_contract_digest
+- candidate_digest
+- repository_snapshot_digest
+- verification_bundle_digest
+- approval_digest_or_sentinel    (a canonical digest, or the exact sentinel
+                                  NO_APPROVAL_SUPPLIED)
+- authority_binding_digest
+- verifier_binding_digest
+- policy_digest
+- policy_version
+- evaluator_version
+- evaluation_mode                (ENFORCE | SHADOW, from the A2 input — the single source)
+- input_digest                   (= canonical_digest(MergeEligibilityPolicyInput))
+- disposition
+- decision_authority
+- primary_reason_code
+- complete_reason_codes          (lexicographically sorted)
+- blocking_reason_codes          (lexicographically sorted)
+- review_reason_codes            (lexicographically sorted)
+- required_requirement_ids       (sorted)
+- satisfied_requirement_ids      (sorted)
+- invalid_requirement_ids        (sorted)
+- missing_requirement_ids        (sorted)
+- rejected_evidence_ids          (sorted)
+- invalid_provenance_evidence_ids (sorted)
+- unexpected_evidence_ids        (sorted)
+- decision_digest                (= the decision object's decision_digest)
+```
+
+The record object then adds exactly one derived field:
+
+```
+policy_record_digest = canonical_digest(PolicyEvaluationRecordPayload)
+```
+
+using the production `canonical_digest()` (`sha256:<64 lowercase hex>`, §7.1).
+
+The payload **must not contain**: `policy_record_digest` (a payload never digests
+itself), `redaction_classification` (that is application/trace metadata, §18/§21, and must
+not affect deterministic identity), `request_id`, `trace_id`, an application-generated
 `evaluation_id`, a timestamp, a latency, an event id, or a storage location. Two
-evaluations of the same deterministic input produce byte-identical records.
+evaluations of the same deterministic input produce byte-identical records and identical
+`policy_record_digest`.
+
+**Record ↔ decision consistency (normative, executably tested §8-consistency):**
+
+- `record.input_digest == decision.input_digest == canonical_digest(A2 input)`;
+- `record.decision_digest == decision.decision_digest`;
+- every source binding in the record equals the A2-input source binding;
+- `record.disposition / decision_authority / primary_reason_code / complete_reason_codes`
+  and the requirement/diagnostic sets equal the decision's;
+- recomputing `canonical_digest(PolicyEvaluationRecordPayload)` yields
+  `record.policy_record_digest`; any deterministic record-field mutation invalidates it.
 
 **Authority boundary:** only the pure evaluator may author a `MergeEligibilityDecision`
 whose `decision_digest` verifies. Any consumer (ProcessGuard-equivalent, CLI, CI adapter)
@@ -496,11 +548,15 @@ reused to represent it.
 ## 10. Deterministic Precedence
 
 > **Status of the rank table: DRAFT PROPOSAL, PENDING_OWNER_DECISION OD-S1A-007.** The
-> ranks in §9 are the currently proposed draft. Owner acceptance may change them. Any
-> change requires an explicit **owner-acceptance patch that updates the spec, the fixture
-> taxonomy AND the independently pinned rank table in the artifact tests together** — the
-> tests pin their own copy of the complete table precisely so a rank change made in the
-> fixture alone (even with expectations recomputed consistently) fails.
+> ranks in §9 are the currently proposed draft. Owner acceptance may change them, but **a
+> precedence change is a SEMANTIC change, not a metadata acceptance patch** (§27): it
+> updates the spec, the fixture taxonomy AND the independently pinned rank table in the
+> artifact tests together, it **alters the semantic fingerprint**, it **invalidates the
+> current independent verification**, and it therefore **requires a new implementation
+> candidate and fresh independent adversarial reverification** before merge. The tests pin
+> their own copy of the complete table precisely so a rank change made in the fixture alone
+> (even with expectations recomputed consistently) fails, and the semantic-fingerprint test
+> fails on any precedence change.
 
 - The **primary reason** is the emitted code with the **lowest rank** in §9's table.
   Ranks are unique per code, so the primary reason is total and deterministic.
@@ -744,42 +800,79 @@ A3-derived validated facts and source bindings
 Any statement that the pure evaluator produces request ids, timestamps, latency, or a
 trace envelope is superseded by this section.
 
-### 18.2 EvaluationTraceEnvelope contents
+### 18.2 EvaluationTraceEnvelope contents (exact)
 
 | Field | Content | Source |
 | --- | --- | --- |
+| `schema_version` | `"changegate.evaluation-trace-envelope.v1"` | application layer |
 | `trace_id`, `evaluation_id`, `request_id` | trace identities | application layer |
-| `timestamp` | RFC 3339 UTC | application layer (caller clock) |
+| `occurred_at` | RFC 3339 UTC | application layer (caller clock) |
 | `evaluation_latency_ms` | measured duration | application layer |
-| `decision_digest` | canonical digest of the decision | pure evaluator |
-| `policy_record_digest` | canonical digest of the `PolicyEvaluationRecord` | pure evaluator |
-| `input_digest` | canonical digest of the A2 input | pure evaluator |
-| `policy_evaluation_record` | the deterministic record (§7.3), embedded verbatim | pure evaluator |
-| `event_provenance` | emitter, emitter version, sink metadata | application layer |
-| `redaction_classification` | privacy class (§21) | application layer |
-| `trace_digest` | canonical digest of the trace payload, excluding itself | application layer |
+| `redaction_classification` | privacy class (§21), from `PUBLIC \| INTERNAL \| SENSITIVE` | application layer |
+| `policy_record` | the deterministic `PolicyEvaluationRecord` (§7.3), embedded verbatim | pure evaluator |
+| `policy_record_digest` | `= canonical_digest(policy_record payload)` | pure evaluator |
+| `input_digest` | `= policy_record.input_digest` | pure evaluator |
+| `decision_digest` | `= policy_record.decision_digest` | pure evaluator |
+| `trace_digest` | `= canonical_digest(trace_payload)` | application layer |
 
-The envelope embeds the deterministic record; it never edits it. `trace_digest` therefore
-covers both the deterministic policy content and the application metadata, while
-`decision_digest` and `policy_record_digest` cover only deterministic content.
+Digest definitions:
 
-### 18.3 Digest replay invariants (normative; executably pinned by the artifact tests)
+```
+trace_payload = all trace-envelope fields EXCEPT trace_digest
+trace_digest  = canonical_digest(trace_payload)
+```
+
+### 18.3 Trace consistency (normative, executably tested)
+
+The envelope embeds the exact deterministic record and never edits it. These equalities
+must hold and are checked by an independent trace validator (§10 negative controls
+enumerate the mismatches it must reject):
+
+```
+trace.policy_record_digest == canonical_digest(trace.policy_record payload)
+trace.input_digest         == trace.policy_record.input_digest
+trace.decision_digest      == trace.policy_record.decision_digest
+```
+
+Changing any embedded record field without recomputing all dependent digests
+(`policy_record_digest`, and — because the record is inside the trace payload —
+`trace_digest`) must fail validation. Changing application metadata
+(`trace_id`/`occurred_at`/`evaluation_latency_ms`/`redaction_classification`) changes
+`trace_digest` only, never `policy_record_digest` or `decision_digest`. Because
+`redaction_classification` lives only here and never in the record payload, a privacy
+reclassification can never alter deterministic decision or policy-record identity.
+
+### 18.4 Trace negative controls (all must be detected)
+
+An independent trace validator must reject: (1) mismatched top-level decision digest;
+(2) mismatched input digest; (3) mismatched policy-record digest; (4) a changed source
+digest inside the record without a record-digest update; (5) a changed disposition;
+(6) a changed complete reason set; (7) a changed authority; (8) a `trace_digest` not
+recomputed after a metadata change; (9) an embedded record from another task;
+(10) an embedded record from another candidate.
+
+### 18.5 Digest replay invariants (normative; executably pinned by the artifact tests)
 
 | # | Invariant |
 | --- | --- |
 | 1 | same deterministic A2 input → same `input_digest` |
-| 2 | same deterministic A2 input → same `decision_digest` |
-| 3 | `request_id` / `trace_id` / `evaluation_id` change → `decision_digest` unchanged |
-| 4 | timestamp or latency change → `decision_digest` unchanged |
-| 5 | `repository_snapshot_digest` change → `decision_digest` changes |
-| 6 | `verification_bundle_digest` change → `decision_digest` changes |
-| 7 | `approval_digest` change (including to/from `NO_APPROVAL_SUPPLIED`) → `decision_digest` changes |
-| 8 | `authority_binding_digest` or `verifier_binding_digest` change → `decision_digest` changes |
-| 9 | `policy_version`/`policy_digest` or `evaluator_version` change → `decision_digest` changes |
-| 10 | application trace metadata change → `trace_digest` changes |
+| 2 | same deterministic A2 input → same `decision_digest` and `policy_record_digest` |
+| 3 | `request_id` / `trace_id` / `evaluation_id` change → `decision_digest` and `policy_record_digest` unchanged |
+| 4 | timestamp, latency or `redaction_classification` change → `decision_digest` and `policy_record_digest` unchanged (`trace_digest` changes) |
+| 5 | `repository_snapshot_digest` change → `decision_digest` and `policy_record_digest` change |
+| 6 | `verification_bundle_digest` change → `decision_digest` and `policy_record_digest` change |
+| 7 | `approval_digest` change (including to/from `NO_APPROVAL_SUPPLIED`) → `decision_digest` and `policy_record_digest` change |
+| 8 | `authority_binding_digest` or `verifier_binding_digest` change → `decision_digest` and `policy_record_digest` change |
+| 9 | `policy_version`/`policy_digest`, `evaluator_version`, or `evaluation_mode` change → `decision_digest` and `policy_record_digest` change |
+| 10 | application trace metadata change → `trace_digest` changes; `decision_digest` and `policy_record_digest` unchanged |
 
-A deterministic source digest is **never** excluded from decision identity merely because
-it also appears in the trace envelope (invariants 5–8).
+A deterministic source digest is **never** excluded from decision or policy-record
+identity merely because it also appears in the trace envelope (invariants 5–8).
+
+**Replay classification target: FULLY_SPECIFIED_AND_REPRODUCIBLE** — the record and
+decision are reproducible from `MergeEligibilityPolicyInput` alone (single-sourced
+`evaluation_mode`, no `redaction_classification` in the record), and every digest above is
+computed with the production `canonical_digest()`.
 
 Three layers are distinguished and must not be conflated:
 
@@ -838,12 +931,54 @@ CHANGEGATE_USER_FEEDBACK_RECORDED
 | `CHANGEGATE_ROLLBACK_RECORDED` | `decision_ref`, `merge_event_ref` (exact completion), `outcome` with machine-readable `detail_code`; `validation_event_ref` where a validation motivated it |
 | `CHANGEGATE_USER_FEEDBACK_RECORDED` | `decision_ref`, **`target_event_ref`** (the exact prior event being judged), **`target_event_type`** (eligibility decision / override / merge outcome / validation / rollback), structured `feedback` with a mandatory **`feedback.actor_ref`** (the human/source identity — `provenance.emitter` identifies the emitting application and is never the feedback actor); no policy-mutation field exists |
 
+**Full decision identity on every `decision_ref` (§11).** For all seven event types the
+`decision_ref` is required to carry the complete decision identity, not just the decision
+digest: `decision_digest`, `input_digest`, `policy_record_digest`, `task_ref`, and
+`candidate_digest`. This lets the causal validator check lineage across every edge (§19.3)
+rather than trusting the decision digest alone.
+
 A minimal common-envelope-only instance is invalid for **every** event type (executably
 tested, positive and negative), and a full valid chain is reconstructable end to end:
-every reference resolves to an earlier event of the correct type, the decision digest
-stays consistent across the chain, and attempt/result/validation/feedback pair
-deterministically (executably tested by a test-only cross-event chain validator; JSON
-Schema itself validates local shape only).
+every reference resolves to an earlier event of the correct type, the decision identity
+stays consistent across the chain, task/candidate lineage matches the root, and
+attempt/result/validation/feedback pair deterministically (executably tested by a
+test-only cross-event chain validator; JSON Schema itself validates local shape only).
+
+### 19.3 Root task/candidate lineage (END_TO_END_RECONSTRUCTABLE)
+
+The originating `CHANGEGATE_EVALUATION_COMPLETED` event establishes the **active root
+lineage**:
+
+```
+root_task_ref           = event.decision_ref.task_ref
+root_candidate_digest   = event.decision_ref.candidate_digest
+root_decision_digest    = event.decision_ref.decision_digest
+root_input_digest       = event.decision_ref.input_digest
+root_policy_record_digest = event.decision_ref.policy_record_digest
+```
+
+Every downstream causal event must match the **active** root lineage on all five fields.
+The test-level causal validator (JSON Schema cannot express cross-event equality) rejects,
+at minimum:
+
+1. nonexistent event reference; 2. forward reference; 3. wrong referenced event type;
+4. duplicate event id; 5. decision-digest drift; 6. input-digest drift;
+7. policy-record-digest drift; 8. feedback target-type mismatch; 9. merge completion
+referencing another task's attempt; 10. merge completion referencing another candidate's
+attempt; 11. rollback referencing another task/candidate's merge; 12. feedback referencing
+another task; 13. feedback referencing another candidate; 14. a locally valid but
+causally disconnected event; 15. a changed candidate continuing the old chain without a
+new evaluation event; 16. an override mixing the old decision digest with new
+input/record digests.
+
+**Review override switches the active decision lineage.** A `CHANGEGATE_REVIEW_OVERRIDDEN`
+carrying a replacement decision (`override.new_decision_digest` +
+`override.new_input_digest` + `override.new_policy_record_digest`, all-or-none) switches
+the active decision lineage to those three values while **preserving** the root
+task/candidate. Subsequent events must then match the replacement decision identity; an
+event that mixes the original decision digest with the replacement input/record digests is
+rejected. A **changed candidate requires a new evaluation event** — it can never continue
+the old chain.
 
 ### 19.2 Envelope fields
 
@@ -852,9 +987,10 @@ Schema itself validates local shape only).
 machine-readable `kind` enum + opaque `value` + dedicated `commit_sha` + canonical
 `digest` — shaped after ADR-003 §8 `SubjectRef` as a JSON reference; this does NOT
 implement the kernel `SubjectRef` model), `context_digest`, `policy_version` +
-`evaluator_version`, `decision_ref` (evaluation id, canonical `decision_digest`, optional
-`policy_record_digest`/`input_digest`, disposition, decision authority, primary reason,
-evaluation mode), the causal references `evaluation_event_ref` / `attempt_event_ref` /
+`evaluator_version`, `decision_ref` (evaluation id, canonical `decision_digest`,
+**required** `input_digest`, `policy_record_digest`, `task_ref` and `candidate_digest`,
+plus optional disposition, decision authority, primary reason, evaluation mode), the causal
+references `evaluation_event_ref` / `attempt_event_ref` /
 `merge_event_ref` / `validation_event_ref` / `target_event_ref` + `target_event_type`,
 `evidence_refs` (ids + canonical digests only), `outcome` (status + machine-readable
 `detail_code` + optional `resulting_commit_sha`; empty objects are invalid), `feedback`
@@ -965,7 +1101,7 @@ contract and must never be required to replay a decision (§18).
 ## 22. Golden Evaluation Matrix
 
 Artifact: `data/evals/changegate_merge_eligibility_golden_cases.json` (deterministic,
-versioned `changegate-merge-eligibility-golden.v3`; 41 cases GC-S1-001 … GC-S1-041). The
+versioned `changegate-merge-eligibility-golden.v4`; 41 cases GC-S1-001 … GC-S1-041). The
 fixture embeds the normative `fact_state_mapping`, and the artifact tests derive every
 case's complete reason set independently from its facts via a test-only oracle (never
 from the case's own expectations). Every closed reason code appears as an expected reason
@@ -1020,8 +1156,9 @@ Authority column: AUTH. = AUTHORITATIVE (ENFORCE), ADVISORY_ONLY = SHADOW.
 
 Each fixture case carries: `case_id`, `summary`, `identifier_universes` (disjoint
 requirement-id and evidence-record-id universes, §6.2), `policy_input_bindings` (the
-deterministic source digests of §5.2, in the canonical `sha256:<hex>` representation),
-the complete `policy_input_facts` (§6), `expected_disposition`,
+deterministic source digests of §5.2 **plus the single-sourced `evaluation_mode`**, in the
+canonical `sha256:<hex>` representation), the `policy_input_facts` (§6, which no longer
+contains `evaluation_mode`), `expected_disposition`,
 `expected_decision_authority`, `expected_primary_reason`,
 `expected_complete_reason_codes`, `override_class`, `expected_event_assertions`, `tags`,
 and `owner_decisions_pending`. If the owner decides differently in §25, the fixture, this
@@ -1035,7 +1172,7 @@ Proposed (NOT executed in 1A/R1/R2; requires owner approval of this spec first):
 - `agent_core/build_harness/merge_eligibility.py` (**A2**) — `MergeEligibilityPolicyInput`,
   `MergeEligibilityDecision`, `PolicyEvaluationRecord`, the reason-code table, and the
   pure `evaluate_merge_eligibility()` returning `(decision, record)` as data with the §7.1
-  canonical digests and the §18.3 replay invariants. A2 consumes **validated facts +
+  canonical digests and the §18.5 replay invariants. A2 consumes **validated facts +
   source bindings only** — no storage, filesystem, raw evidence, clock, or request
   metadata — and is therefore **not blocked** by OD-S1A-008.
 - `agent_core/build_harness/eligibility_facts.py` (**A3**) — `EligibilityFacts`, the §5
@@ -1118,12 +1255,47 @@ current `required_evidence` field contains display strings?
   (`required/satisfied/invalid/missing_requirement_ids`), never
   `TaskContract.required_evidence`.
 
+**Owner must decide (the complete pending decision record — R3 makes this exhaustive so an
+A3 implementer inherits no undefined boundary).** Status stays `PENDING_OWNER_DECISION`;
+none of these is answered here:
+
+1. the stable `requirement_id` **namespace**;
+2. the **declaration-set schema version**;
+3. the **mapping version**;
+4. behavior for **unknown display strings** (no matching declaration);
+5. behavior for **duplicate declarations**;
+6. **aliases** (multiple display strings → one requirement id);
+7. **deprecated aliases**;
+8. **alias conflicts** (one display string claimed by two requirement ids);
+9. **mapping migration / compatibility** across contract or declaration-set versions;
+10. whether **unknown or deprecated values** BLOCK, REVIEW_REQUIRED, or require an explicit
+    migration step.
+
+**Required pre-1C-1 declaration fields** (each `RequirementDeclaration` must carry these
+before A3 mapping is implemented):
+
+```
+requirement_id
+display_label
+source_contract_version
+declaration_set_version
+mapping_version
+aliases
+deprecated_aliases
+unknown_value_policy
+duplicate_policy
+conflict_policy
+```
+
+The machine-readable form of this record is `od_s1a_008_decision_record` in the golden
+fixture (owner questions + pre-1C-1 fields + block classification).
+
 **Classification:**
 
 ```
 Slice 1A owner review:   NOT BLOCKED
-A2 implementation:       NOT BLOCKED
-A3 implementation:       BLOCKED UNTIL OD-S1A-008 ACCEPTED
+Slice 1B / A2:           NOT BLOCKED
+Slice 1C-1 / A3:         BLOCKED UNTIL ACCEPTED
 ```
 
 Golden case **GC-S1-041** demonstrates that the mapping is external to A2: the same
@@ -1133,7 +1305,7 @@ produced, and the case asserts
 
 ## 26. Exit Criteria
 
-Slice 1A (as revised by R1 and R2) exits when:
+Slice 1A (as revised by R1, R2 and R3) exits when:
 
 1. the artifact tests pass (spec present and DRAFT_FOR_OWNER_REVIEW; schema
    meta-validated with per-event positive and negative instances and a full valid causal
@@ -1151,3 +1323,79 @@ Slice 1A (as revised by R1 and R2) exits when:
 
 The forbidden output terms remain forbidden after acceptance: `SAFE_TO_MERGE` and
 `VERIFIED_AND_MERGE` must never appear as output values of any ChangeGate component.
+
+## 27. Acceptance Governance
+
+This section is normative. It draws the line between an **owner-acceptance metadata patch**
+(mergeable after a no-semantic-change verification) and a **semantic change** (which
+invalidates the current independent verification and requires a fresh implementation +
+adversarial reverification cycle). The machine-readable form is `acceptance_governance` in
+the golden fixture.
+
+### 27.1 Metadata-only acceptance patch
+
+A metadata-only acceptance patch may change **only**:
+
+- owner-decision status;
+- the acceptance record;
+- the accepted candidate SHA;
+- artifact digests;
+- verification-report references;
+- the deferred-decision register;
+- audit metadata;
+- document status (e.g. `DRAFT_FOR_OWNER_REVIEW` → `ACCEPTED_BY_OWNER`).
+
+It **must not** change:
+
+- disposition semantics;
+- the reason-code taxonomy;
+- reason precedence;
+- golden expected results;
+- replay / source-binding rules;
+- the policy-record payload;
+- event-schema behavior;
+- oracle or validation logic;
+- production code.
+
+Rule:
+
+```
+metadata-only acceptance patch
+→ no-semantic-change verification (the semantic fingerprint, §27.3, is preserved)
+→ merge allowed after PASS
+```
+
+### 27.2 Semantic change
+
+```
+owner decision changes any contract or behavior
+→ current verifier result invalidated
+→ new implementation candidate required
+→ fresh independent adversarial verification required
+```
+
+A precedence change is the canonical example: it is a **semantic patch, not an acceptance
+metadata patch** (correcting the earlier §10 wording). Changing any of the forbidden set
+above follows the same rule.
+
+### 27.3 Semantic fingerprint
+
+A deterministic fingerprint is computed over the load-bearing semantic artifacts:
+
+```
+semantic_fingerprint = canonical_digest({
+    reason_code_taxonomy_and_ranks,
+    fact_state_mapping,
+    golden_expected_results,          # per case: disposition, authority,
+                                      # primary reason, complete reason codes
+    decision_authority_by_mode,
+    identifier_universes,
+    digest_representation,
+})
+```
+
+A **metadata-only acceptance patch must preserve this fingerprint**; a semantic change (a
+precedence swap, a taxonomy edit, a changed golden expectation, an authority-mapping edit)
+necessarily changes it. The artifact tests compute the fingerprint and prove that a
+precedence change alters it, so a semantic change can never be mislabeled as a metadata
+acceptance patch.

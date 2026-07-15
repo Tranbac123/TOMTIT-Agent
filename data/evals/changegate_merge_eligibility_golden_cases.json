@@ -1,10 +1,10 @@
 {
   "suite_id": "changegate_merge_eligibility_golden_cases",
-  "schema_version": "changegate-merge-eligibility-golden.v3",
+  "schema_version": "changegate-merge-eligibility-golden.v4",
   "status": "DRAFT_FOR_OWNER_REVIEW",
-  "description": "Golden evaluation cases for the ChangeGate Slice 1 merge-eligibility policy (R2-hardened). Each case supplies the complete typed EligibilityFacts (spec §6), the deterministic source bindings the A2 decision digest must cover (spec §5.2/§7), and explicit identifier universes separating requirement ids from evidence-record ids (spec §6.2). fact_state_mapping is the normative machine-readable total mapping from every fact state to its reason code. The precedence table below is the DRAFT proposal pending OD-S1A-007; the artifact tests pin an independent copy of it, so a coordinated rank change in this file alone fails. All digests use the repository's canonical representation sha256:<64 lowercase hex> as produced by agent_core.build_harness.canonical.canonical_digest(). No production evaluator exists yet.",
+  "description": "Golden evaluation cases for the ChangeGate Slice 1 merge-eligibility policy (R3-hardened). evaluation_mode is single-sourced in policy_input_bindings (the A2 MergeEligibilityPolicyInput); it is NOT an EligibilityFact. The deterministic PolicyEvaluationRecord is reproducible from policy_input_bindings + policy_input_facts alone and carries no redaction_classification (that is application/trace metadata). Precedence, taxonomy, dispositions and authorities are byte-identical to v3; a change to any of those is a SEMANTIC patch (see acceptance_governance), not a metadata acceptance patch. No production evaluator exists yet.",
   "policy_spec": "docs/strategy/CHANGEGATE_VERTICAL_MVP_SLICE_1_POLICY_SPEC.md",
-  "policy_version_ref": "changegate-merge-eligibility-policy.v3-draft",
+  "policy_version_ref": "changegate-merge-eligibility-policy.v4-draft",
   "event_schema": "data/schemas/changegate_evaluation_event_v1.schema.json",
   "dispositions": [
     "ELIGIBLE_TO_MERGE_UNDER_POLICY",
@@ -245,10 +245,6 @@
         "VALID": null,
         "INVALID": "AUTHORITY_INVALID",
         "UNKNOWN": "REQUIRED_CONTEXT_INCOMPLETE"
-      },
-      "evaluation_mode": {
-        "ENFORCE": null,
-        "SHADOW": null
       }
     },
     "violation_tag_reasons": {
@@ -398,7 +394,8 @@
         "verifier_binding_digest": "sha256:efe616a1d165ab728aebb15a6aa1e2d4d30ef01bf339f4cf9c25f293147634ee",
         "policy_digest": "sha256:88304ee85d7d10c2124d75b0de11cb8d8f91a8707945cabc651c0cbdedc71934",
         "policy_version": "changegate-merge-eligibility-policy.v2-draft",
-        "evaluator_version": "changegate-merge-eligibility-evaluator.0-unimplemented"
+        "evaluator_version": "changegate-merge-eligibility-evaluator.0-unimplemented",
+        "evaluation_mode": "ENFORCE"
       },
       "policy_input_facts": {
         "task_context_current": "CURRENT",
@@ -425,8 +422,7 @@
         "approval_status": "VALID",
         "authority_status": "VALID",
         "verifier_identity_status": "ATTESTED",
-        "verifier_independence_status": "INDEPENDENT",
-        "evaluation_mode": "ENFORCE"
+        "verifier_independence_status": "INDEPENDENT"
       },
       "expected_disposition": "ELIGIBLE_TO_MERGE_UNDER_POLICY",
       "expected_decision_authority": "AUTHORITATIVE",
@@ -476,7 +472,8 @@
         "verifier_binding_digest": "sha256:efe616a1d165ab728aebb15a6aa1e2d4d30ef01bf339f4cf9c25f293147634ee",
         "policy_digest": "sha256:88304ee85d7d10c2124d75b0de11cb8d8f91a8707945cabc651c0cbdedc71934",
         "policy_version": "changegate-merge-eligibility-policy.v2-draft",
-        "evaluator_version": "changegate-merge-eligibility-evaluator.0-unimplemented"
+        "evaluator_version": "changegate-merge-eligibility-evaluator.0-unimplemented",
+        "evaluation_mode": "ENFORCE"
       },
       "policy_input_facts": {
         "task_context_current": "CURRENT",
@@ -503,8 +500,7 @@
         "approval_status": "VALID",
         "authority_status": "VALID",
         "verifier_identity_status": "ATTESTED",
-        "verifier_independence_status": "INDEPENDENT",
-        "evaluation_mode": "ENFORCE"
+        "verifier_independence_status": "INDEPENDENT"
       },
       "expected_disposition": "BLOCK",
       "expected_decision_authority": "AUTHORITATIVE",
@@ -556,7 +552,8 @@
         "verifier_binding_digest": "sha256:efe616a1d165ab728aebb15a6aa1e2d4d30ef01bf339f4cf9c25f293147634ee",
         "policy_digest": "sha256:88304ee85d7d10c2124d75b0de11cb8d8f91a8707945cabc651c0cbdedc71934",
         "policy_version": "changegate-merge-eligibility-policy.v2-draft",
-        "evaluator_version": "changegate-merge-eligibility-evaluator.0-unimplemented"
+        "evaluator_version": "changegate-merge-eligibility-evaluator.0-unimplemented",
+        "evaluation_mode": "ENFORCE"
       },
       "policy_input_facts": {
         "task_context_current": "CURRENT",
@@ -584,8 +581,7 @@
         "approval_status": "VALID",
         "authority_status": "VALID",
         "verifier_identity_status": "ATTESTED",
-        "verifier_independence_status": "INDEPENDENT",
-        "evaluation_mode": "ENFORCE"
+        "verifier_independence_status": "INDEPENDENT"
       },
       "expected_disposition": "BLOCK",
       "expected_decision_authority": "AUTHORITATIVE",
@@ -637,7 +633,8 @@
         "verifier_binding_digest": "sha256:efe616a1d165ab728aebb15a6aa1e2d4d30ef01bf339f4cf9c25f293147634ee",
         "policy_digest": "sha256:88304ee85d7d10c2124d75b0de11cb8d8f91a8707945cabc651c0cbdedc71934",
         "policy_version": "changegate-merge-eligibility-policy.v2-draft",
-        "evaluator_version": "changegate-merge-eligibility-evaluator.0-unimplemented"
+        "evaluator_version": "changegate-merge-eligibility-evaluator.0-unimplemented",
+        "evaluation_mode": "ENFORCE"
       },
       "policy_input_facts": {
         "task_context_current": "CURRENT",
@@ -666,8 +663,7 @@
         "approval_status": "VALID",
         "authority_status": "VALID",
         "verifier_identity_status": "ATTESTED",
-        "verifier_independence_status": "INDEPENDENT",
-        "evaluation_mode": "ENFORCE"
+        "verifier_independence_status": "INDEPENDENT"
       },
       "expected_disposition": "BLOCK",
       "expected_decision_authority": "AUTHORITATIVE",
@@ -720,7 +716,8 @@
         "verifier_binding_digest": "sha256:efe616a1d165ab728aebb15a6aa1e2d4d30ef01bf339f4cf9c25f293147634ee",
         "policy_digest": "sha256:88304ee85d7d10c2124d75b0de11cb8d8f91a8707945cabc651c0cbdedc71934",
         "policy_version": "changegate-merge-eligibility-policy.v2-draft",
-        "evaluator_version": "changegate-merge-eligibility-evaluator.0-unimplemented"
+        "evaluator_version": "changegate-merge-eligibility-evaluator.0-unimplemented",
+        "evaluation_mode": "ENFORCE"
       },
       "policy_input_facts": {
         "task_context_current": "CURRENT",
@@ -749,8 +746,7 @@
         "approval_status": "VALID",
         "authority_status": "VALID",
         "verifier_identity_status": "ATTESTED",
-        "verifier_independence_status": "INDEPENDENT",
-        "evaluation_mode": "ENFORCE"
+        "verifier_independence_status": "INDEPENDENT"
       },
       "expected_disposition": "BLOCK",
       "expected_decision_authority": "AUTHORITATIVE",
@@ -803,7 +799,8 @@
         "verifier_binding_digest": "sha256:efe616a1d165ab728aebb15a6aa1e2d4d30ef01bf339f4cf9c25f293147634ee",
         "policy_digest": "sha256:88304ee85d7d10c2124d75b0de11cb8d8f91a8707945cabc651c0cbdedc71934",
         "policy_version": "changegate-merge-eligibility-policy.v2-draft",
-        "evaluator_version": "changegate-merge-eligibility-evaluator.0-unimplemented"
+        "evaluator_version": "changegate-merge-eligibility-evaluator.0-unimplemented",
+        "evaluation_mode": "ENFORCE"
       },
       "policy_input_facts": {
         "task_context_current": "CURRENT",
@@ -832,8 +829,7 @@
         "approval_status": "VALID",
         "authority_status": "VALID",
         "verifier_identity_status": "ATTESTED",
-        "verifier_independence_status": "INDEPENDENT",
-        "evaluation_mode": "ENFORCE"
+        "verifier_independence_status": "INDEPENDENT"
       },
       "expected_disposition": "BLOCK",
       "expected_decision_authority": "AUTHORITATIVE",
@@ -886,7 +882,8 @@
         "verifier_binding_digest": "sha256:efe616a1d165ab728aebb15a6aa1e2d4d30ef01bf339f4cf9c25f293147634ee",
         "policy_digest": "sha256:88304ee85d7d10c2124d75b0de11cb8d8f91a8707945cabc651c0cbdedc71934",
         "policy_version": "changegate-merge-eligibility-policy.v2-draft",
-        "evaluator_version": "changegate-merge-eligibility-evaluator.0-unimplemented"
+        "evaluator_version": "changegate-merge-eligibility-evaluator.0-unimplemented",
+        "evaluation_mode": "ENFORCE"
       },
       "policy_input_facts": {
         "task_context_current": "CURRENT",
@@ -915,8 +912,7 @@
         "approval_status": "VALID",
         "authority_status": "VALID",
         "verifier_identity_status": "ATTESTED",
-        "verifier_independence_status": "INDEPENDENT",
-        "evaluation_mode": "ENFORCE"
+        "verifier_independence_status": "INDEPENDENT"
       },
       "expected_disposition": "BLOCK",
       "expected_decision_authority": "AUTHORITATIVE",
@@ -969,7 +965,8 @@
         "verifier_binding_digest": "sha256:efe616a1d165ab728aebb15a6aa1e2d4d30ef01bf339f4cf9c25f293147634ee",
         "policy_digest": "sha256:88304ee85d7d10c2124d75b0de11cb8d8f91a8707945cabc651c0cbdedc71934",
         "policy_version": "changegate-merge-eligibility-policy.v2-draft",
-        "evaluator_version": "changegate-merge-eligibility-evaluator.0-unimplemented"
+        "evaluator_version": "changegate-merge-eligibility-evaluator.0-unimplemented",
+        "evaluation_mode": "ENFORCE"
       },
       "policy_input_facts": {
         "task_context_current": "CURRENT",
@@ -996,8 +993,7 @@
         "approval_status": "VALID",
         "authority_status": "VALID",
         "verifier_identity_status": "ATTESTED",
-        "verifier_independence_status": "INDEPENDENT",
-        "evaluation_mode": "ENFORCE"
+        "verifier_independence_status": "INDEPENDENT"
       },
       "expected_disposition": "BLOCK",
       "expected_decision_authority": "AUTHORITATIVE",
@@ -1049,7 +1045,8 @@
         "verifier_binding_digest": "sha256:efe616a1d165ab728aebb15a6aa1e2d4d30ef01bf339f4cf9c25f293147634ee",
         "policy_digest": "sha256:88304ee85d7d10c2124d75b0de11cb8d8f91a8707945cabc651c0cbdedc71934",
         "policy_version": "changegate-merge-eligibility-policy.v2-draft",
-        "evaluator_version": "changegate-merge-eligibility-evaluator.0-unimplemented"
+        "evaluator_version": "changegate-merge-eligibility-evaluator.0-unimplemented",
+        "evaluation_mode": "ENFORCE"
       },
       "policy_input_facts": {
         "task_context_current": "CURRENT",
@@ -1076,8 +1073,7 @@
         "approval_status": "VALID",
         "authority_status": "VALID",
         "verifier_identity_status": "ATTESTED",
-        "verifier_independence_status": "INDEPENDENT",
-        "evaluation_mode": "ENFORCE"
+        "verifier_independence_status": "INDEPENDENT"
       },
       "expected_disposition": "BLOCK",
       "expected_decision_authority": "AUTHORITATIVE",
@@ -1129,7 +1125,8 @@
         "verifier_binding_digest": "sha256:efe616a1d165ab728aebb15a6aa1e2d4d30ef01bf339f4cf9c25f293147634ee",
         "policy_digest": "sha256:88304ee85d7d10c2124d75b0de11cb8d8f91a8707945cabc651c0cbdedc71934",
         "policy_version": "changegate-merge-eligibility-policy.v2-draft",
-        "evaluator_version": "changegate-merge-eligibility-evaluator.0-unimplemented"
+        "evaluator_version": "changegate-merge-eligibility-evaluator.0-unimplemented",
+        "evaluation_mode": "ENFORCE"
       },
       "policy_input_facts": {
         "task_context_current": "CURRENT",
@@ -1156,8 +1153,7 @@
         "approval_status": "VALID",
         "authority_status": "VALID",
         "verifier_identity_status": "ATTESTED",
-        "verifier_independence_status": "INDEPENDENT",
-        "evaluation_mode": "ENFORCE"
+        "verifier_independence_status": "INDEPENDENT"
       },
       "expected_disposition": "BLOCK",
       "expected_decision_authority": "AUTHORITATIVE",
@@ -1209,7 +1205,8 @@
         "verifier_binding_digest": "sha256:efe616a1d165ab728aebb15a6aa1e2d4d30ef01bf339f4cf9c25f293147634ee",
         "policy_digest": "sha256:88304ee85d7d10c2124d75b0de11cb8d8f91a8707945cabc651c0cbdedc71934",
         "policy_version": "changegate-merge-eligibility-policy.v2-draft",
-        "evaluator_version": "changegate-merge-eligibility-evaluator.0-unimplemented"
+        "evaluator_version": "changegate-merge-eligibility-evaluator.0-unimplemented",
+        "evaluation_mode": "ENFORCE"
       },
       "policy_input_facts": {
         "task_context_current": "CURRENT",
@@ -1236,8 +1233,7 @@
         "approval_status": "VALID",
         "authority_status": "VALID",
         "verifier_identity_status": "ATTESTED",
-        "verifier_independence_status": "INDEPENDENT",
-        "evaluation_mode": "ENFORCE"
+        "verifier_independence_status": "INDEPENDENT"
       },
       "expected_disposition": "BLOCK",
       "expected_decision_authority": "AUTHORITATIVE",
@@ -1289,7 +1285,8 @@
         "verifier_binding_digest": "sha256:efe616a1d165ab728aebb15a6aa1e2d4d30ef01bf339f4cf9c25f293147634ee",
         "policy_digest": "sha256:88304ee85d7d10c2124d75b0de11cb8d8f91a8707945cabc651c0cbdedc71934",
         "policy_version": "changegate-merge-eligibility-policy.v2-draft",
-        "evaluator_version": "changegate-merge-eligibility-evaluator.0-unimplemented"
+        "evaluator_version": "changegate-merge-eligibility-evaluator.0-unimplemented",
+        "evaluation_mode": "ENFORCE"
       },
       "policy_input_facts": {
         "task_context_current": "CURRENT",
@@ -1316,8 +1313,7 @@
         "approval_status": "VALID",
         "authority_status": "VALID",
         "verifier_identity_status": "ATTESTED",
-        "verifier_independence_status": "INDEPENDENT",
-        "evaluation_mode": "ENFORCE"
+        "verifier_independence_status": "INDEPENDENT"
       },
       "expected_disposition": "REVIEW_REQUIRED",
       "expected_decision_authority": "AUTHORITATIVE",
@@ -1369,7 +1365,8 @@
         "verifier_binding_digest": "sha256:efe616a1d165ab728aebb15a6aa1e2d4d30ef01bf339f4cf9c25f293147634ee",
         "policy_digest": "sha256:88304ee85d7d10c2124d75b0de11cb8d8f91a8707945cabc651c0cbdedc71934",
         "policy_version": "changegate-merge-eligibility-policy.v2-draft",
-        "evaluator_version": "changegate-merge-eligibility-evaluator.0-unimplemented"
+        "evaluator_version": "changegate-merge-eligibility-evaluator.0-unimplemented",
+        "evaluation_mode": "ENFORCE"
       },
       "policy_input_facts": {
         "task_context_current": "CURRENT",
@@ -1396,8 +1393,7 @@
         "approval_status": "MISSING",
         "authority_status": "VALID",
         "verifier_identity_status": "ATTESTED",
-        "verifier_independence_status": "INDEPENDENT",
-        "evaluation_mode": "ENFORCE"
+        "verifier_independence_status": "INDEPENDENT"
       },
       "expected_disposition": "BLOCK",
       "expected_decision_authority": "AUTHORITATIVE",
@@ -1451,7 +1447,8 @@
         "verifier_binding_digest": "sha256:efe616a1d165ab728aebb15a6aa1e2d4d30ef01bf339f4cf9c25f293147634ee",
         "policy_digest": "sha256:88304ee85d7d10c2124d75b0de11cb8d8f91a8707945cabc651c0cbdedc71934",
         "policy_version": "changegate-merge-eligibility-policy.v2-draft",
-        "evaluator_version": "changegate-merge-eligibility-evaluator.0-unimplemented"
+        "evaluator_version": "changegate-merge-eligibility-evaluator.0-unimplemented",
+        "evaluation_mode": "ENFORCE"
       },
       "policy_input_facts": {
         "task_context_current": "CURRENT",
@@ -1478,8 +1475,7 @@
         "approval_status": "STALE",
         "authority_status": "VALID",
         "verifier_identity_status": "ATTESTED",
-        "verifier_independence_status": "INDEPENDENT",
-        "evaluation_mode": "ENFORCE"
+        "verifier_independence_status": "INDEPENDENT"
       },
       "expected_disposition": "BLOCK",
       "expected_decision_authority": "AUTHORITATIVE",
@@ -1533,7 +1529,8 @@
         "verifier_binding_digest": "sha256:efe616a1d165ab728aebb15a6aa1e2d4d30ef01bf339f4cf9c25f293147634ee",
         "policy_digest": "sha256:88304ee85d7d10c2124d75b0de11cb8d8f91a8707945cabc651c0cbdedc71934",
         "policy_version": "changegate-merge-eligibility-policy.v2-draft",
-        "evaluator_version": "changegate-merge-eligibility-evaluator.0-unimplemented"
+        "evaluator_version": "changegate-merge-eligibility-evaluator.0-unimplemented",
+        "evaluation_mode": "ENFORCE"
       },
       "policy_input_facts": {
         "task_context_current": "CURRENT",
@@ -1560,8 +1557,7 @@
         "approval_status": "VALID",
         "authority_status": "INVALID",
         "verifier_identity_status": "ATTESTED",
-        "verifier_independence_status": "INDEPENDENT",
-        "evaluation_mode": "ENFORCE"
+        "verifier_independence_status": "INDEPENDENT"
       },
       "expected_disposition": "BLOCK",
       "expected_decision_authority": "AUTHORITATIVE",
@@ -1613,7 +1609,8 @@
         "verifier_binding_digest": "sha256:4e68df79bb7d9ed8166509f49770ea0a0007d92fac431eb165c6b3dd6c53b93b",
         "policy_digest": "sha256:88304ee85d7d10c2124d75b0de11cb8d8f91a8707945cabc651c0cbdedc71934",
         "policy_version": "changegate-merge-eligibility-policy.v2-draft",
-        "evaluator_version": "changegate-merge-eligibility-evaluator.0-unimplemented"
+        "evaluator_version": "changegate-merge-eligibility-evaluator.0-unimplemented",
+        "evaluation_mode": "ENFORCE"
       },
       "policy_input_facts": {
         "task_context_current": "CURRENT",
@@ -1640,8 +1637,7 @@
         "approval_status": "VALID",
         "authority_status": "VALID",
         "verifier_identity_status": "ATTESTED",
-        "verifier_independence_status": "NOT_INDEPENDENT",
-        "evaluation_mode": "ENFORCE"
+        "verifier_independence_status": "NOT_INDEPENDENT"
       },
       "expected_disposition": "BLOCK",
       "expected_decision_authority": "AUTHORITATIVE",
@@ -1693,7 +1689,8 @@
         "verifier_binding_digest": "sha256:bc3f8a5f0f40e6987a82abf73e39d2173fc2566948ee18ac08e2adf5a1c2bbfb",
         "policy_digest": "sha256:88304ee85d7d10c2124d75b0de11cb8d8f91a8707945cabc651c0cbdedc71934",
         "policy_version": "changegate-merge-eligibility-policy.v2-draft",
-        "evaluator_version": "changegate-merge-eligibility-evaluator.0-unimplemented"
+        "evaluator_version": "changegate-merge-eligibility-evaluator.0-unimplemented",
+        "evaluation_mode": "ENFORCE"
       },
       "policy_input_facts": {
         "task_context_current": "CURRENT",
@@ -1720,8 +1717,7 @@
         "approval_status": "VALID",
         "authority_status": "VALID",
         "verifier_identity_status": "ATTESTED",
-        "verifier_independence_status": "UNKNOWN",
-        "evaluation_mode": "ENFORCE"
+        "verifier_independence_status": "UNKNOWN"
       },
       "expected_disposition": "REVIEW_REQUIRED",
       "expected_decision_authority": "AUTHORITATIVE",
@@ -1775,7 +1771,8 @@
         "verifier_binding_digest": "sha256:efe616a1d165ab728aebb15a6aa1e2d4d30ef01bf339f4cf9c25f293147634ee",
         "policy_digest": "sha256:9b2460a983b6b8222da7d2bd0fc344891a75468fe87f41064f817cdd94bcac48",
         "policy_version": "changegate-merge-eligibility-policy.v2-draft",
-        "evaluator_version": "changegate-merge-eligibility-evaluator.0-unimplemented"
+        "evaluator_version": "changegate-merge-eligibility-evaluator.0-unimplemented",
+        "evaluation_mode": "ENFORCE"
       },
       "policy_input_facts": {
         "task_context_current": "CURRENT",
@@ -1802,8 +1799,7 @@
         "approval_status": "VALID",
         "authority_status": "VALID",
         "verifier_identity_status": "ATTESTED",
-        "verifier_independence_status": "INDEPENDENT",
-        "evaluation_mode": "ENFORCE"
+        "verifier_independence_status": "INDEPENDENT"
       },
       "expected_disposition": "BLOCK",
       "expected_decision_authority": "AUTHORITATIVE",
@@ -1856,7 +1852,8 @@
         "verifier_binding_digest": "sha256:efe616a1d165ab728aebb15a6aa1e2d4d30ef01bf339f4cf9c25f293147634ee",
         "policy_digest": "sha256:88304ee85d7d10c2124d75b0de11cb8d8f91a8707945cabc651c0cbdedc71934",
         "policy_version": "changegate-merge-eligibility-policy.v2-draft",
-        "evaluator_version": "changegate-merge-eligibility-evaluator.0-unimplemented"
+        "evaluator_version": "changegate-merge-eligibility-evaluator.0-unimplemented",
+        "evaluation_mode": "ENFORCE"
       },
       "policy_input_facts": {
         "task_context_current": "UNKNOWN",
@@ -1883,8 +1880,7 @@
         "approval_status": "VALID",
         "authority_status": "VALID",
         "verifier_identity_status": "ATTESTED",
-        "verifier_independence_status": "INDEPENDENT",
-        "evaluation_mode": "ENFORCE"
+        "verifier_independence_status": "INDEPENDENT"
       },
       "expected_disposition": "BLOCK",
       "expected_decision_authority": "AUTHORITATIVE",
@@ -1936,7 +1932,8 @@
         "verifier_binding_digest": "sha256:efe616a1d165ab728aebb15a6aa1e2d4d30ef01bf339f4cf9c25f293147634ee",
         "policy_digest": "sha256:88304ee85d7d10c2124d75b0de11cb8d8f91a8707945cabc651c0cbdedc71934",
         "policy_version": "changegate-merge-eligibility-policy.v2-draft",
-        "evaluator_version": "changegate-merge-eligibility-evaluator.0-unimplemented"
+        "evaluator_version": "changegate-merge-eligibility-evaluator.0-unimplemented",
+        "evaluation_mode": "ENFORCE"
       },
       "policy_input_facts": {
         "task_context_current": "CURRENT",
@@ -1957,8 +1954,7 @@
         "approval_status": "VALID",
         "authority_status": "VALID",
         "verifier_identity_status": "ATTESTED",
-        "verifier_independence_status": "INDEPENDENT",
-        "evaluation_mode": "ENFORCE"
+        "verifier_independence_status": "INDEPENDENT"
       },
       "expected_disposition": "ELIGIBLE_TO_MERGE_UNDER_POLICY",
       "expected_decision_authority": "AUTHORITATIVE",
@@ -2009,7 +2005,8 @@
         "verifier_binding_digest": "sha256:efe616a1d165ab728aebb15a6aa1e2d4d30ef01bf339f4cf9c25f293147634ee",
         "policy_digest": "sha256:88304ee85d7d10c2124d75b0de11cb8d8f91a8707945cabc651c0cbdedc71934",
         "policy_version": "changegate-merge-eligibility-policy.v2-draft",
-        "evaluator_version": "changegate-merge-eligibility-evaluator.0-unimplemented"
+        "evaluator_version": "changegate-merge-eligibility-evaluator.0-unimplemented",
+        "evaluation_mode": "ENFORCE"
       },
       "policy_input_facts": {
         "task_context_current": "CURRENT",
@@ -2038,8 +2035,7 @@
         "approval_status": "MISSING",
         "authority_status": "VALID",
         "verifier_identity_status": "ATTESTED",
-        "verifier_independence_status": "INDEPENDENT",
-        "evaluation_mode": "ENFORCE"
+        "verifier_independence_status": "INDEPENDENT"
       },
       "expected_disposition": "BLOCK",
       "expected_decision_authority": "AUTHORITATIVE",
@@ -2098,7 +2094,8 @@
         "verifier_binding_digest": "sha256:efe616a1d165ab728aebb15a6aa1e2d4d30ef01bf339f4cf9c25f293147634ee",
         "policy_digest": "sha256:88304ee85d7d10c2124d75b0de11cb8d8f91a8707945cabc651c0cbdedc71934",
         "policy_version": "changegate-merge-eligibility-policy.v2-draft",
-        "evaluator_version": "changegate-merge-eligibility-evaluator.0-unimplemented"
+        "evaluator_version": "changegate-merge-eligibility-evaluator.0-unimplemented",
+        "evaluation_mode": "ENFORCE"
       },
       "policy_input_facts": {
         "task_context_current": "CURRENT",
@@ -2125,8 +2122,7 @@
         "approval_status": "VALID",
         "authority_status": "VALID",
         "verifier_identity_status": "ATTESTED",
-        "verifier_independence_status": "INDEPENDENT",
-        "evaluation_mode": "ENFORCE"
+        "verifier_independence_status": "INDEPENDENT"
       },
       "expected_disposition": "BLOCK",
       "expected_decision_authority": "AUTHORITATIVE",
@@ -2179,7 +2175,8 @@
         "verifier_binding_digest": "sha256:efe616a1d165ab728aebb15a6aa1e2d4d30ef01bf339f4cf9c25f293147634ee",
         "policy_digest": "sha256:88304ee85d7d10c2124d75b0de11cb8d8f91a8707945cabc651c0cbdedc71934",
         "policy_version": "changegate-merge-eligibility-policy.v2-draft",
-        "evaluator_version": "changegate-merge-eligibility-evaluator.0-unimplemented"
+        "evaluator_version": "changegate-merge-eligibility-evaluator.0-unimplemented",
+        "evaluation_mode": "ENFORCE"
       },
       "policy_input_facts": {
         "task_context_current": "CURRENT",
@@ -2206,8 +2203,7 @@
         "approval_status": "STALE",
         "authority_status": "VALID",
         "verifier_identity_status": "ATTESTED",
-        "verifier_independence_status": "INDEPENDENT",
-        "evaluation_mode": "ENFORCE"
+        "verifier_independence_status": "INDEPENDENT"
       },
       "expected_disposition": "BLOCK",
       "expected_decision_authority": "AUTHORITATIVE",
@@ -2262,7 +2258,8 @@
         "verifier_binding_digest": "sha256:efe616a1d165ab728aebb15a6aa1e2d4d30ef01bf339f4cf9c25f293147634ee",
         "policy_digest": "sha256:88304ee85d7d10c2124d75b0de11cb8d8f91a8707945cabc651c0cbdedc71934",
         "policy_version": "changegate-merge-eligibility-policy.v2-draft",
-        "evaluator_version": "changegate-merge-eligibility-evaluator.0-unimplemented"
+        "evaluator_version": "changegate-merge-eligibility-evaluator.0-unimplemented",
+        "evaluation_mode": "ENFORCE"
       },
       "policy_input_facts": {
         "task_context_current": "CURRENT",
@@ -2289,8 +2286,7 @@
         "approval_status": "VALID",
         "authority_status": "INVALID",
         "verifier_identity_status": "ATTESTED",
-        "verifier_independence_status": "INDEPENDENT",
-        "evaluation_mode": "ENFORCE"
+        "verifier_independence_status": "INDEPENDENT"
       },
       "expected_disposition": "BLOCK",
       "expected_decision_authority": "AUTHORITATIVE",
@@ -2343,7 +2339,8 @@
         "verifier_binding_digest": "sha256:efe616a1d165ab728aebb15a6aa1e2d4d30ef01bf339f4cf9c25f293147634ee",
         "policy_digest": "sha256:88304ee85d7d10c2124d75b0de11cb8d8f91a8707945cabc651c0cbdedc71934",
         "policy_version": "changegate-merge-eligibility-policy.v2-draft",
-        "evaluator_version": "changegate-merge-eligibility-evaluator.0-unimplemented"
+        "evaluator_version": "changegate-merge-eligibility-evaluator.0-unimplemented",
+        "evaluation_mode": "ENFORCE"
       },
       "policy_input_facts": {
         "task_context_current": "CURRENT",
@@ -2370,8 +2367,7 @@
         "approval_status": "VALID",
         "authority_status": "VALID",
         "verifier_identity_status": "ATTESTED",
-        "verifier_independence_status": "INDEPENDENT",
-        "evaluation_mode": "ENFORCE"
+        "verifier_independence_status": "INDEPENDENT"
       },
       "expected_disposition": "BLOCK",
       "expected_decision_authority": "AUTHORITATIVE",
@@ -2428,7 +2424,8 @@
         "verifier_binding_digest": "sha256:efe616a1d165ab728aebb15a6aa1e2d4d30ef01bf339f4cf9c25f293147634ee",
         "policy_digest": "sha256:88304ee85d7d10c2124d75b0de11cb8d8f91a8707945cabc651c0cbdedc71934",
         "policy_version": "changegate-merge-eligibility-policy.v2-draft",
-        "evaluator_version": "changegate-merge-eligibility-evaluator.0-unimplemented"
+        "evaluator_version": "changegate-merge-eligibility-evaluator.0-unimplemented",
+        "evaluation_mode": "ENFORCE"
       },
       "policy_input_facts": {
         "task_context_current": "CURRENT",
@@ -2458,8 +2455,7 @@
         "approval_status": "VALID",
         "authority_status": "VALID",
         "verifier_identity_status": "ATTESTED",
-        "verifier_independence_status": "INDEPENDENT",
-        "evaluation_mode": "ENFORCE"
+        "verifier_independence_status": "INDEPENDENT"
       },
       "expected_disposition": "BLOCK",
       "expected_decision_authority": "AUTHORITATIVE",
@@ -2511,7 +2507,8 @@
         "verifier_binding_digest": "sha256:efe616a1d165ab728aebb15a6aa1e2d4d30ef01bf339f4cf9c25f293147634ee",
         "policy_digest": "sha256:88304ee85d7d10c2124d75b0de11cb8d8f91a8707945cabc651c0cbdedc71934",
         "policy_version": "changegate-merge-eligibility-policy.v2-draft",
-        "evaluator_version": "changegate-merge-eligibility-evaluator.0-unimplemented"
+        "evaluator_version": "changegate-merge-eligibility-evaluator.0-unimplemented",
+        "evaluation_mode": "ENFORCE"
       },
       "policy_input_facts": {
         "task_context_current": "CURRENT",
@@ -2543,8 +2540,7 @@
         "approval_status": "VALID",
         "authority_status": "VALID",
         "verifier_identity_status": "ATTESTED",
-        "verifier_independence_status": "INDEPENDENT",
-        "evaluation_mode": "ENFORCE"
+        "verifier_independence_status": "INDEPENDENT"
       },
       "expected_disposition": "BLOCK",
       "expected_decision_authority": "AUTHORITATIVE",
@@ -2597,7 +2593,8 @@
         "verifier_binding_digest": "sha256:efe616a1d165ab728aebb15a6aa1e2d4d30ef01bf339f4cf9c25f293147634ee",
         "policy_digest": "sha256:88304ee85d7d10c2124d75b0de11cb8d8f91a8707945cabc651c0cbdedc71934",
         "policy_version": "changegate-merge-eligibility-policy.v2-draft",
-        "evaluator_version": "changegate-merge-eligibility-evaluator.0-unimplemented"
+        "evaluator_version": "changegate-merge-eligibility-evaluator.0-unimplemented",
+        "evaluation_mode": "ENFORCE"
       },
       "policy_input_facts": {
         "task_context_current": "STALE",
@@ -2624,8 +2621,7 @@
         "approval_status": "VALID",
         "authority_status": "VALID",
         "verifier_identity_status": "ATTESTED",
-        "verifier_independence_status": "INDEPENDENT",
-        "evaluation_mode": "ENFORCE"
+        "verifier_independence_status": "INDEPENDENT"
       },
       "expected_disposition": "BLOCK",
       "expected_decision_authority": "AUTHORITATIVE",
@@ -2678,7 +2674,8 @@
         "verifier_binding_digest": "sha256:efe616a1d165ab728aebb15a6aa1e2d4d30ef01bf339f4cf9c25f293147634ee",
         "policy_digest": "sha256:88304ee85d7d10c2124d75b0de11cb8d8f91a8707945cabc651c0cbdedc71934",
         "policy_version": "changegate-merge-eligibility-policy.v2-draft",
-        "evaluator_version": "changegate-merge-eligibility-evaluator.0-unimplemented"
+        "evaluator_version": "changegate-merge-eligibility-evaluator.0-unimplemented",
+        "evaluation_mode": "ENFORCE"
       },
       "policy_input_facts": {
         "task_context_current": "CURRENT",
@@ -2705,8 +2702,7 @@
         "approval_status": "VALID",
         "authority_status": "VALID",
         "verifier_identity_status": "ATTESTED",
-        "verifier_independence_status": "INDEPENDENT",
-        "evaluation_mode": "ENFORCE"
+        "verifier_independence_status": "INDEPENDENT"
       },
       "expected_disposition": "BLOCK",
       "expected_decision_authority": "AUTHORITATIVE",
@@ -2758,7 +2754,8 @@
         "verifier_binding_digest": "sha256:efe616a1d165ab728aebb15a6aa1e2d4d30ef01bf339f4cf9c25f293147634ee",
         "policy_digest": "sha256:88304ee85d7d10c2124d75b0de11cb8d8f91a8707945cabc651c0cbdedc71934",
         "policy_version": "changegate-merge-eligibility-policy.v2-draft",
-        "evaluator_version": "changegate-merge-eligibility-evaluator.0-unimplemented"
+        "evaluator_version": "changegate-merge-eligibility-evaluator.0-unimplemented",
+        "evaluation_mode": "ENFORCE"
       },
       "policy_input_facts": {
         "task_context_current": "CURRENT",
@@ -2787,8 +2784,7 @@
         "approval_status": "VALID",
         "authority_status": "VALID",
         "verifier_identity_status": "ATTESTED",
-        "verifier_independence_status": "INDEPENDENT",
-        "evaluation_mode": "ENFORCE"
+        "verifier_independence_status": "INDEPENDENT"
       },
       "expected_disposition": "ELIGIBLE_TO_MERGE_UNDER_POLICY",
       "expected_decision_authority": "AUTHORITATIVE",
@@ -2841,7 +2837,8 @@
         "verifier_binding_digest": "sha256:efe616a1d165ab728aebb15a6aa1e2d4d30ef01bf339f4cf9c25f293147634ee",
         "policy_digest": "sha256:88304ee85d7d10c2124d75b0de11cb8d8f91a8707945cabc651c0cbdedc71934",
         "policy_version": "changegate-merge-eligibility-policy.v2-draft",
-        "evaluator_version": "changegate-merge-eligibility-evaluator.0-unimplemented"
+        "evaluator_version": "changegate-merge-eligibility-evaluator.0-unimplemented",
+        "evaluation_mode": "SHADOW"
       },
       "policy_input_facts": {
         "task_context_current": "CURRENT",
@@ -2868,8 +2865,7 @@
         "approval_status": "VALID",
         "authority_status": "VALID",
         "verifier_identity_status": "ATTESTED",
-        "verifier_independence_status": "INDEPENDENT",
-        "evaluation_mode": "SHADOW"
+        "verifier_independence_status": "INDEPENDENT"
       },
       "expected_disposition": "ELIGIBLE_TO_MERGE_UNDER_POLICY",
       "expected_decision_authority": "ADVISORY_ONLY",
@@ -2920,7 +2916,8 @@
         "verifier_binding_digest": "sha256:efe616a1d165ab728aebb15a6aa1e2d4d30ef01bf339f4cf9c25f293147634ee",
         "policy_digest": "sha256:88304ee85d7d10c2124d75b0de11cb8d8f91a8707945cabc651c0cbdedc71934",
         "policy_version": "changegate-merge-eligibility-policy.v2-draft",
-        "evaluator_version": "changegate-merge-eligibility-evaluator.0-unimplemented"
+        "evaluator_version": "changegate-merge-eligibility-evaluator.0-unimplemented",
+        "evaluation_mode": "SHADOW"
       },
       "policy_input_facts": {
         "task_context_current": "CURRENT",
@@ -2947,8 +2944,7 @@
         "approval_status": "VALID",
         "authority_status": "VALID",
         "verifier_identity_status": "ATTESTED",
-        "verifier_independence_status": "INDEPENDENT",
-        "evaluation_mode": "SHADOW"
+        "verifier_independence_status": "INDEPENDENT"
       },
       "expected_disposition": "BLOCK",
       "expected_decision_authority": "ADVISORY_ONLY",
@@ -3000,7 +2996,8 @@
         "verifier_binding_digest": "sha256:efe616a1d165ab728aebb15a6aa1e2d4d30ef01bf339f4cf9c25f293147634ee",
         "policy_digest": "sha256:88304ee85d7d10c2124d75b0de11cb8d8f91a8707945cabc651c0cbdedc71934",
         "policy_version": "changegate-merge-eligibility-policy.v2-draft",
-        "evaluator_version": "changegate-merge-eligibility-evaluator.0-unimplemented"
+        "evaluator_version": "changegate-merge-eligibility-evaluator.0-unimplemented",
+        "evaluation_mode": "ENFORCE"
       },
       "policy_input_facts": {
         "task_context_current": "CURRENT",
@@ -3027,8 +3024,7 @@
         "approval_status": "VALID",
         "authority_status": "VALID",
         "verifier_identity_status": "ATTESTED",
-        "verifier_independence_status": "INDEPENDENT",
-        "evaluation_mode": "ENFORCE"
+        "verifier_independence_status": "INDEPENDENT"
       },
       "expected_disposition": "BLOCK",
       "expected_decision_authority": "AUTHORITATIVE",
@@ -3081,7 +3077,8 @@
         "verifier_binding_digest": "sha256:efe616a1d165ab728aebb15a6aa1e2d4d30ef01bf339f4cf9c25f293147634ee",
         "policy_digest": "sha256:88304ee85d7d10c2124d75b0de11cb8d8f91a8707945cabc651c0cbdedc71934",
         "policy_version": "changegate-merge-eligibility-policy.v2-draft",
-        "evaluator_version": "changegate-merge-eligibility-evaluator.0-unimplemented"
+        "evaluator_version": "changegate-merge-eligibility-evaluator.0-unimplemented",
+        "evaluation_mode": "ENFORCE"
       },
       "policy_input_facts": {
         "task_context_current": "CURRENT",
@@ -3110,8 +3107,7 @@
         "approval_status": "VALID",
         "authority_status": "VALID",
         "verifier_identity_status": "ATTESTED",
-        "verifier_independence_status": "INDEPENDENT",
-        "evaluation_mode": "ENFORCE"
+        "verifier_independence_status": "INDEPENDENT"
       },
       "expected_disposition": "ELIGIBLE_TO_MERGE_UNDER_POLICY",
       "expected_decision_authority": "AUTHORITATIVE",
@@ -3162,7 +3158,8 @@
         "verifier_binding_digest": "sha256:efe616a1d165ab728aebb15a6aa1e2d4d30ef01bf339f4cf9c25f293147634ee",
         "policy_digest": "sha256:88304ee85d7d10c2124d75b0de11cb8d8f91a8707945cabc651c0cbdedc71934",
         "policy_version": "changegate-merge-eligibility-policy.v2-draft",
-        "evaluator_version": "changegate-merge-eligibility-evaluator.0-unimplemented"
+        "evaluator_version": "changegate-merge-eligibility-evaluator.0-unimplemented",
+        "evaluation_mode": "ENFORCE"
       },
       "policy_input_facts": {
         "task_context_current": "CURRENT",
@@ -3193,8 +3190,7 @@
         "approval_status": "VALID",
         "authority_status": "VALID",
         "verifier_identity_status": "ATTESTED",
-        "verifier_independence_status": "INDEPENDENT",
-        "evaluation_mode": "ENFORCE"
+        "verifier_independence_status": "INDEPENDENT"
       },
       "expected_disposition": "BLOCK",
       "expected_decision_authority": "AUTHORITATIVE",
@@ -3247,7 +3243,8 @@
         "verifier_binding_digest": "sha256:df1251060784eb3d3b5681b2994e285f0f1de1b021368d73ef2ae7f6d4294c98",
         "policy_digest": "sha256:88304ee85d7d10c2124d75b0de11cb8d8f91a8707945cabc651c0cbdedc71934",
         "policy_version": "changegate-merge-eligibility-policy.v2-draft",
-        "evaluator_version": "changegate-merge-eligibility-evaluator.0-unimplemented"
+        "evaluator_version": "changegate-merge-eligibility-evaluator.0-unimplemented",
+        "evaluation_mode": "ENFORCE"
       },
       "policy_input_facts": {
         "task_context_current": "CURRENT",
@@ -3274,8 +3271,7 @@
         "approval_status": "VALID",
         "authority_status": "VALID",
         "verifier_identity_status": "ABSENT",
-        "verifier_independence_status": "UNKNOWN",
-        "evaluation_mode": "ENFORCE"
+        "verifier_independence_status": "UNKNOWN"
       },
       "expected_disposition": "BLOCK",
       "expected_decision_authority": "AUTHORITATIVE",
@@ -3329,7 +3325,8 @@
         "verifier_binding_digest": "sha256:4a79a83c84b437d619c6644498902537c45d871baf0ecb015993a08bff454d2e",
         "policy_digest": "sha256:88304ee85d7d10c2124d75b0de11cb8d8f91a8707945cabc651c0cbdedc71934",
         "policy_version": "changegate-merge-eligibility-policy.v2-draft",
-        "evaluator_version": "changegate-merge-eligibility-evaluator.0-unimplemented"
+        "evaluator_version": "changegate-merge-eligibility-evaluator.0-unimplemented",
+        "evaluation_mode": "ENFORCE"
       },
       "policy_input_facts": {
         "task_context_current": "CURRENT",
@@ -3356,8 +3353,7 @@
         "approval_status": "VALID",
         "authority_status": "VALID",
         "verifier_identity_status": "PRESENT_UNATTESTED",
-        "verifier_independence_status": "INDEPENDENT",
-        "evaluation_mode": "ENFORCE"
+        "verifier_independence_status": "INDEPENDENT"
       },
       "expected_disposition": "REVIEW_REQUIRED",
       "expected_decision_authority": "AUTHORITATIVE",
@@ -3411,7 +3407,8 @@
         "verifier_binding_digest": "sha256:efe616a1d165ab728aebb15a6aa1e2d4d30ef01bf339f4cf9c25f293147634ee",
         "policy_digest": "sha256:88304ee85d7d10c2124d75b0de11cb8d8f91a8707945cabc651c0cbdedc71934",
         "policy_version": "changegate-merge-eligibility-policy.v2-draft",
-        "evaluator_version": "changegate-merge-eligibility-evaluator.0-unimplemented"
+        "evaluator_version": "changegate-merge-eligibility-evaluator.0-unimplemented",
+        "evaluation_mode": "ENFORCE"
       },
       "policy_input_facts": {
         "task_context_current": "CURRENT",
@@ -3438,8 +3435,7 @@
         "approval_status": "VALID",
         "authority_status": "VALID",
         "verifier_identity_status": "ATTESTED",
-        "verifier_independence_status": "INDEPENDENT",
-        "evaluation_mode": "ENFORCE"
+        "verifier_independence_status": "INDEPENDENT"
       },
       "expected_disposition": "ELIGIBLE_TO_MERGE_UNDER_POLICY",
       "expected_decision_authority": "AUTHORITATIVE",
@@ -3492,7 +3488,8 @@
         "verifier_binding_digest": "sha256:efe616a1d165ab728aebb15a6aa1e2d4d30ef01bf339f4cf9c25f293147634ee",
         "policy_digest": "sha256:88304ee85d7d10c2124d75b0de11cb8d8f91a8707945cabc651c0cbdedc71934",
         "policy_version": "changegate-merge-eligibility-policy.v2-draft",
-        "evaluator_version": "changegate-merge-eligibility-evaluator.0-unimplemented"
+        "evaluator_version": "changegate-merge-eligibility-evaluator.0-unimplemented",
+        "evaluation_mode": "ENFORCE"
       },
       "policy_input_facts": {
         "task_context_current": "CURRENT",
@@ -3519,8 +3516,7 @@
         "approval_status": "VALID",
         "authority_status": "VALID",
         "verifier_identity_status": "ATTESTED",
-        "verifier_independence_status": "INDEPENDENT",
-        "evaluation_mode": "ENFORCE"
+        "verifier_independence_status": "INDEPENDENT"
       },
       "expected_disposition": "BLOCK",
       "expected_decision_authority": "AUTHORITATIVE",
@@ -3577,7 +3573,8 @@
         "verifier_binding_digest": "sha256:efe616a1d165ab728aebb15a6aa1e2d4d30ef01bf339f4cf9c25f293147634ee",
         "policy_digest": "sha256:88304ee85d7d10c2124d75b0de11cb8d8f91a8707945cabc651c0cbdedc71934",
         "policy_version": "changegate-merge-eligibility-policy.v2-draft",
-        "evaluator_version": "changegate-merge-eligibility-evaluator.0-unimplemented"
+        "evaluator_version": "changegate-merge-eligibility-evaluator.0-unimplemented",
+        "evaluation_mode": "ENFORCE"
       },
       "policy_input_facts": {
         "task_context_current": "CURRENT",
@@ -3606,8 +3603,7 @@
         "approval_status": "VALID",
         "authority_status": "INVALID",
         "verifier_identity_status": "ATTESTED",
-        "verifier_independence_status": "INDEPENDENT",
-        "evaluation_mode": "ENFORCE"
+        "verifier_independence_status": "INDEPENDENT"
       },
       "expected_disposition": "BLOCK",
       "expected_decision_authority": "AUTHORITATIVE",
@@ -3664,7 +3660,8 @@
         "verifier_binding_digest": "sha256:efe616a1d165ab728aebb15a6aa1e2d4d30ef01bf339f4cf9c25f293147634ee",
         "policy_digest": "sha256:88304ee85d7d10c2124d75b0de11cb8d8f91a8707945cabc651c0cbdedc71934",
         "policy_version": "changegate-merge-eligibility-policy.v2-draft",
-        "evaluator_version": "changegate-merge-eligibility-evaluator.0-unimplemented"
+        "evaluator_version": "changegate-merge-eligibility-evaluator.0-unimplemented",
+        "evaluation_mode": "ENFORCE"
       },
       "policy_input_facts": {
         "task_context_current": "CURRENT",
@@ -3691,8 +3688,7 @@
         "approval_status": "VALID",
         "authority_status": "VALID",
         "verifier_identity_status": "ATTESTED",
-        "verifier_independence_status": "INDEPENDENT",
-        "evaluation_mode": "ENFORCE"
+        "verifier_independence_status": "INDEPENDENT"
       },
       "expected_disposition": "ELIGIBLE_TO_MERGE_UNDER_POLICY",
       "expected_decision_authority": "AUTHORITATIVE",
@@ -3715,5 +3711,112 @@
       ],
       "notes": "The declaration set is bound to task_contract_digest in policy_input_bindings; a different contract digest is a different declaration set (and TASK_CONTEXT_STALE if it no longer matches the candidate, see GC-S1-028)."
     }
-  ]
+  ],
+  "acceptance_governance": {
+    "policy_ref": "docs/strategy/CHANGEGATE_VERTICAL_MVP_SLICE_1_POLICY_SPEC.md#27",
+    "metadata_only_allowed_changes": [
+      "owner_decision_status",
+      "acceptance_record",
+      "accepted_candidate_sha",
+      "artifact_digests",
+      "verification_report_references",
+      "deferred_decision_register",
+      "audit_metadata",
+      "document_status"
+    ],
+    "metadata_only_forbidden_changes": [
+      "disposition_semantics",
+      "reason_code_taxonomy",
+      "reason_precedence",
+      "golden_expected_results",
+      "replay_or_source_binding_rules",
+      "policy_record_payload",
+      "event_schema_behavior",
+      "oracle_or_validation_logic",
+      "production_code"
+    ],
+    "metadata_only_rule": "metadata-only acceptance patch -> no-semantic-change verification (semantic fingerprint preserved) -> merge allowed after PASS",
+    "semantic_change_rule": "owner decision changes any contract or behavior -> current verifier result invalidated -> new implementation candidate required -> fresh independent adversarial verification required",
+    "precedence_change_classification": "SEMANTIC_PATCH_REQUIRES_REVERIFICATION",
+    "semantic_fingerprint_components": [
+      "reason_code_taxonomy_and_ranks",
+      "fact_state_mapping",
+      "golden_expected_results",
+      "decision_authority_by_mode",
+      "identifier_universes",
+      "digest_representation"
+    ]
+  },
+  "od_s1a_008_decision_record": {
+    "id": "OD-S1A-008",
+    "title": "Stable Requirement Declaration Mapping",
+    "status": "PENDING_OWNER_DECISION",
+    "classification": "INCOMPLETE_DECISION_RECORD_RESOLVED_TO_COMPLETE_PENDING_RECORD",
+    "blocks": {
+      "slice_1a_owner_review": "NOT_BLOCKED",
+      "slice_1b_a2": "NOT_BLOCKED",
+      "slice_1c_1_a3": "BLOCKED_UNTIL_ACCEPTED"
+    },
+    "recommended_draft_unchanged": [
+      "display strings are not identity",
+      "do not infer ids through hashing or normalization",
+      "use a ChangeGate-local RequirementDeclarationSet",
+      "bind it to the exact TaskContract digest"
+    ],
+    "owner_must_decide": [
+      {
+        "n": 1,
+        "question": "stable requirement_id namespace"
+      },
+      {
+        "n": 2,
+        "question": "declaration-set schema version"
+      },
+      {
+        "n": 3,
+        "question": "mapping version"
+      },
+      {
+        "n": 4,
+        "question": "behavior for unknown display strings"
+      },
+      {
+        "n": 5,
+        "question": "behavior for duplicate declarations"
+      },
+      {
+        "n": 6,
+        "question": "aliases"
+      },
+      {
+        "n": 7,
+        "question": "deprecated aliases"
+      },
+      {
+        "n": 8,
+        "question": "alias conflicts"
+      },
+      {
+        "n": 9,
+        "question": "mapping migration / compatibility"
+      },
+      {
+        "n": 10,
+        "question": "whether unknown or deprecated values BLOCK, REVIEW_REQUIRED or require explicit migration"
+      }
+    ],
+    "pre_1c_1_declaration_fields": [
+      "requirement_id",
+      "display_label",
+      "source_contract_version",
+      "declaration_set_version",
+      "mapping_version",
+      "aliases",
+      "deprecated_aliases",
+      "unknown_value_policy",
+      "duplicate_policy",
+      "conflict_policy"
+    ],
+    "note": "This record is COMPLETE as a pending decision: it enumerates every owner question and every pre-A3 declaration field. It does NOT choose any answer; A3 (Slice 1C-1) remains blocked until owner acceptance. No mapping is implemented."
+  }
 }
