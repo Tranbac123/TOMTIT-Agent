@@ -117,6 +117,17 @@
         },
         { "$ref": "#/$defs/noWhitespace" }
       ]
+    },
+    "taskRef": {
+      "description": "The ONE task-reference grammar (existing TaskContract.task_id grammar) reused by event.task_ref AND event.decision_ref.task_ref AND replacement_decision_ref.task_ref, so no weaker nested grammar can admit whitespace/newlines a top-level field rejects.",
+      "allOf": [
+        {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+        },
+        { "$ref": "#/$defs/noWhitespace" }
+      ]
     }
   },
   "required": [
@@ -160,15 +171,8 @@
     },
     "project_ref": { "$ref": "#/$defs/nullableOpaqueRef" },
     "task_ref": {
-      "description": "Task identifier (existing TaskContract.task_id grammar, so current TOMTIT task ids stay representable).",
-      "allOf": [
-        {
-          "type": "string",
-          "maxLength": 128,
-          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
-        },
-        { "$ref": "#/$defs/noWhitespace" }
-      ]
+      "$ref": "#/$defs/taskRef",
+      "description": "Task identifier (the one shared taskRef grammar; current TOMTIT task ids stay representable)."
     },
     "run_ref": { "$ref": "#/$defs/nullableOpaqueRef" },
     "subject_ref": {
@@ -232,11 +236,7 @@
         "decision_digest": { "$ref": "#/$defs/canonicalDigest" },
         "policy_record_digest": { "$ref": "#/$defs/canonicalDigest" },
         "input_digest": { "$ref": "#/$defs/canonicalDigest" },
-        "task_ref": {
-          "type": "string",
-          "maxLength": 128,
-          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
-        },
+        "task_ref": { "$ref": "#/$defs/taskRef" },
         "candidate_digest": { "$ref": "#/$defs/canonicalDigest" },
         "disposition": {
           "type": ["string", "null"],
@@ -360,15 +360,29 @@
     },
     "override": {
       "type": ["object", "null"],
-      "description": "Review-override / policy-exception record for CHANGEGATE_REVIEW_OVERRIDDEN. The original decision stays immutable (decision_ref); this object references the replacement decision and/or the authorizing exception. A replacement decision carries its OWN COMPLETE identity: new_decision_digest, new_input_digest and new_policy_record_digest are all-or-none (an event may never mix the original decision digest with a replacement input/record digest). The replacement keeps the same task and candidate as the original; a changed candidate requires a NEW evaluation event, not an override. An exception reference requires an expiry (the exception AUTHORITY value remains PENDING_OWNER_DECISION OD-S1A-005).",
+      "description": "Review-override / policy-exception record for CHANGEGATE_REVIEW_OVERRIDDEN. The original decision stays immutable (decision_ref); this object references the replacement decision and/or the authorizing exception. A replacement decision is one ATOMIC object, replacement_decision_ref, carrying its OWN COMPLETE identity (evaluation_id, task_ref, candidate_digest, decision_digest, input_digest, policy_record_digest) — there is no loose new_* field, so an event can never mix the original decision digest with a replacement input/record digest. Cross-digest integrity (replacement != original where required, replacement task/candidate == root) is enforced by the causal validator, which JSON Schema cannot express. An exception reference requires an expiry (the exception AUTHORITY value remains PENDING_OWNER_DECISION OD-S1A-005).",
       "additionalProperties": false,
       "required": ["actor_ref", "reason_code"],
       "properties": {
         "actor_ref": { "$ref": "#/$defs/opaqueRef" },
         "reason_code": { "$ref": "#/$defs/machineCode" },
-        "new_decision_digest": { "$ref": "#/$defs/nullableCanonicalDigest" },
-        "new_input_digest": { "$ref": "#/$defs/nullableCanonicalDigest" },
-        "new_policy_record_digest": { "$ref": "#/$defs/nullableCanonicalDigest" },
+        "replacement_decision_ref": {
+          "type": ["object", "null"],
+          "description": "The complete replacement decision identity. All six fields are required when a replacement exists; no partial replacement is valid.",
+          "additionalProperties": false,
+          "required": [
+            "evaluation_id", "task_ref", "candidate_digest",
+            "decision_digest", "input_digest", "policy_record_digest"
+          ],
+          "properties": {
+            "evaluation_id": { "$ref": "#/$defs/opaqueRef" },
+            "task_ref": { "$ref": "#/$defs/taskRef" },
+            "candidate_digest": { "$ref": "#/$defs/canonicalDigest" },
+            "decision_digest": { "$ref": "#/$defs/canonicalDigest" },
+            "input_digest": { "$ref": "#/$defs/canonicalDigest" },
+            "policy_record_digest": { "$ref": "#/$defs/canonicalDigest" }
+          }
+        },
         "exception_ref": { "$ref": "#/$defs/nullableOpaqueRef" },
         "expires_at": {
           "anyOf": [
@@ -389,45 +403,17 @@
           }
         },
         {
+          "comment": "An override must carry either a complete replacement decision or an authorizing exception (or both).",
           "anyOf": [
             {
-              "required": [
-                "new_decision_digest", "new_input_digest", "new_policy_record_digest"
-              ],
-              "properties": {
-                "new_decision_digest": { "type": "string" },
-                "new_input_digest": { "type": "string" },
-                "new_policy_record_digest": { "type": "string" }
-              }
+              "required": ["replacement_decision_ref"],
+              "properties": { "replacement_decision_ref": { "type": "object" } }
             },
             {
               "required": ["exception_ref"],
               "properties": { "exception_ref": { "type": "string" } }
             }
           ]
-        },
-        {
-          "comment": "A replacement decision is all-or-none: if any of the three new_* digests is present, all three must be.",
-          "if": {
-            "anyOf": [
-              { "required": ["new_decision_digest"],
-                "properties": { "new_decision_digest": { "type": "string" } } },
-              { "required": ["new_input_digest"],
-                "properties": { "new_input_digest": { "type": "string" } } },
-              { "required": ["new_policy_record_digest"],
-                "properties": { "new_policy_record_digest": { "type": "string" } } }
-            ]
-          },
-          "then": {
-            "required": [
-              "new_decision_digest", "new_input_digest", "new_policy_record_digest"
-            ],
-            "properties": {
-              "new_decision_digest": { "type": "string" },
-              "new_input_digest": { "type": "string" },
-              "new_policy_record_digest": { "type": "string" }
-            }
-          }
         }
       ]
     },

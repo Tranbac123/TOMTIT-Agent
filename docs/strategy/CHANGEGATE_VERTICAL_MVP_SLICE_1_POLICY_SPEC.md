@@ -7,9 +7,9 @@ Technical Author: Claude Code Fable 5
 Independent Verification: PENDING
 Baseline: 3e72e93bfac8da2ecdb7960a55ae0357135eb61e
 Production Implementation: NOT_STARTED
-Revision: R3 (deterministic record, trace consistency, causal lineage and governance
-closure after Sol High final reverify of candidate
-a20fb7bf8b199522d5221dc02a625d62efb0784c; supersedes R2 → R1 →
+Revision: R4 (canonical record field, complete semantic fingerprint, atomic override
+identity and multi-root lineage closure after Sol High final reverify of candidate
+889e307e6bcbd0857d8417fd239b349785950d6f; supersedes R3 → R2 → R1 →
 07bc5b7be43a275c8484cdc633579ecfda657ffd)
 
 > This document is a specification-and-contract artifact only. It defines the deterministic
@@ -180,7 +180,7 @@ evidence, the filesystem, or any external system.
 | `candidate_digest` | canonical digest of the `CandidateBinding` |
 | `repository_snapshot_digest` | canonical digest of the current `RepositorySnapshot` the facts were derived from |
 | `verification_bundle_digest` | `EvidenceVerificationBundle.bundle_digest` the facts were derived from |
-| `approval_digest` | canonical digest of the `ApprovalFact`, **or** the explicit sentinel `NO_APPROVAL_SUPPLIED` — the absence of an approval is an explicit deterministic input value, never a missing field |
+| `approval_digest_or_sentinel` | canonical digest of the `ApprovalFact`, **or** the explicit sentinel `NO_APPROVAL_SUPPLIED` — the absence of an approval is an explicit deterministic input value, never a missing field. This is the ONE canonical field name (§7.3); `approval_digest` is not used as a field name anywhere in the contract |
 | `authority_binding_digest` | canonical digest of the `AuthorityFact` (actor/role refs + validity status) |
 | `verifier_binding_digest` | canonical digest of the `VerifierIdentityFact` (verifier/implementer refs + identity/independence statuses) |
 | `policy_digest`, `policy_version` | which policy decides |
@@ -374,7 +374,7 @@ wrong length, and any value carrying whitespace or a newline.
 | `required_requirement_ids` / `satisfied_requirement_ids` / `invalid_requirement_ids` / `missing_requirement_ids` | **AUTHORITATIVE** | yes | disjoint requirement accounting (§6.1) |
 | `rejected_evidence_ids` / `invalid_provenance_evidence_ids` / `unexpected_evidence_ids` | diagnostic (deterministic) | yes | record-id diagnostics (§6.2); deterministic and policy-meaningful, therefore digest-covered |
 | `task_id` | **AUTHORITATIVE** | yes | what this decision is about |
-| **source bindings**: `task_contract_digest`, `candidate_digest`, `repository_snapshot_digest`, `verification_bundle_digest`, `approval_digest` (or `NO_APPROVAL_SUPPLIED`), `authority_binding_digest`, `verifier_binding_digest` | **AUTHORITATIVE** | yes | every deterministic source the facts were derived from (§5.2) |
+| **source bindings**: `task_contract_digest`, `candidate_digest`, `repository_snapshot_digest`, `verification_bundle_digest`, `approval_digest_or_sentinel` (a canonical digest or `NO_APPROVAL_SUPPLIED`), `authority_binding_digest`, `verifier_binding_digest` | **AUTHORITATIVE** | yes | every deterministic source the facts were derived from (§5.2) |
 | `policy_version`, `policy_digest` | **AUTHORITATIVE** | yes | which policy decided |
 | `evaluation_mode` | **AUTHORITATIVE** | yes | ENFORCE or SHADOW |
 | `evaluator_version` | **AUTHORITATIVE** | yes | evaluator software identity |
@@ -680,9 +680,12 @@ No canonical `ApprovalRecord` or `ActorIdentity` exists (ADR-003), and Slice 1 d
 create one. The application-level facts are:
 
 - **`ApprovalFact`** — an explicit, attributable approval statement: opaque
-  `approver_actor_ref`, `approved_at` (caller-supplied timestamp), `approval_digest`, and
-  the **binding target**: `task_id`, `candidate_commit_sha`/`candidate_tree_sha` (or the
-  full `CandidateBinding` digest), `contract_digest`, `policy_digest`. An approval is:
+  `approver_actor_ref`, `approved_at` (caller-supplied timestamp), an internal
+  `approval_fact_digest`, and the **binding target**: `task_id`,
+  `candidate_commit_sha`/`candidate_tree_sha` (or the full `CandidateBinding` digest),
+  `contract_digest`, `policy_digest`. The A2 input carries the canonical digest of this
+  fact (or the sentinel) in the single field `approval_digest_or_sentinel` (§5.2/§7.3). An
+  approval is:
   - `VALID` — binds exactly to the input task/candidate/contract/policy;
   - `STALE` — exists but binds to a different candidate, contract digest, or policy
     digest (approving commit A never approves commit B);
@@ -861,7 +864,7 @@ recomputed after a metadata change; (9) an embedded record from another task;
 | 4 | timestamp, latency or `redaction_classification` change → `decision_digest` and `policy_record_digest` unchanged (`trace_digest` changes) |
 | 5 | `repository_snapshot_digest` change → `decision_digest` and `policy_record_digest` change |
 | 6 | `verification_bundle_digest` change → `decision_digest` and `policy_record_digest` change |
-| 7 | `approval_digest` change (including to/from `NO_APPROVAL_SUPPLIED`) → `decision_digest` and `policy_record_digest` change |
+| 7 | `approval_digest_or_sentinel` change (including to/from `NO_APPROVAL_SUPPLIED`) → `decision_digest` and `policy_record_digest` change |
 | 8 | `authority_binding_digest` or `verifier_binding_digest` change → `decision_digest` and `policy_record_digest` change |
 | 9 | `policy_version`/`policy_digest`, `evaluator_version`, or `evaluation_mode` change → `decision_digest` and `policy_record_digest` change |
 | 10 | application trace metadata change → `trace_digest` changes; `decision_digest` and `policy_record_digest` unchanged |
@@ -924,7 +927,7 @@ CHANGEGATE_USER_FEEDBACK_RECORDED
 | Event type | Additionally required (non-null) |
 | --- | --- |
 | `CHANGEGATE_EVALUATION_COMPLETED` | `decision_ref` (with `disposition` **and** `decision_authority`), `context_digest` (= A2 `input_digest`), `policy_version`, `evaluator_version`, `outcome` |
-| `CHANGEGATE_REVIEW_OVERRIDDEN` | `decision_ref` (immutable original), `evaluation_event_ref`, `override` {actor ref, reason code, new decision digest and/or exception ref; expiry required whenever an exception ref is present — the authority value itself stays OD-S1A-005} |
+| `CHANGEGATE_REVIEW_OVERRIDDEN` | `decision_ref` (immutable original), `evaluation_event_ref`, `override` {actor ref, reason code, atomic `replacement_decision_ref` and/or exception ref; expiry required whenever an exception ref is present — the authority value itself stays OD-S1A-005} |
 | `CHANGEGATE_MERGE_ATTEMPTED` | `decision_ref` (decision digest), `evaluation_event_ref` (originating evaluation), `outcome` (attempt status); candidate/subject via envelope-required `subject_ref` |
 | `CHANGEGATE_MERGE_COMPLETED` | `decision_ref`, **`attempt_event_ref`** (the exact attempt this resolves — this is what makes multiple attempts deterministically pairable with their result), `outcome` with **`resulting_commit_sha`** (dedicated lowercase-hex field) |
 | `CHANGEGATE_POST_MERGE_VALIDATION` | `decision_ref`, `merge_event_ref` (exact completion), validation `outcome` |
@@ -944,22 +947,32 @@ stays consistent across the chain, task/candidate lineage matches the root, and
 attempt/result/validation/feedback pair deterministically (executably tested by a
 test-only cross-event chain validator; JSON Schema itself validates local shape only).
 
-### 19.3 Root task/candidate lineage (END_TO_END_RECONSTRUCTABLE)
+### 19.3 Graph-based multi-root lineage (END_TO_END_RECONSTRUCTABLE)
 
-The originating `CHANGEGATE_EVALUATION_COMPLETED` event establishes the **active root
-lineage**:
+Lineage is a **graph keyed by causal event references**, not a single global "active
+lineage" over list order. Each `CHANGEGATE_EVALUATION_COMPLETED` event establishes an
+**independent root**, keyed by its own evaluation event id, with:
 
 ```
-root_task_ref           = event.decision_ref.task_ref
-root_candidate_digest   = event.decision_ref.candidate_digest
-root_decision_digest    = event.decision_ref.decision_digest
-root_input_digest       = event.decision_ref.input_digest
-root_policy_record_digest = event.decision_ref.policy_record_digest
+root.task_ref             = event.decision_ref.task_ref
+root.candidate_digest     = event.decision_ref.candidate_digest
+root.decision_digest      = event.decision_ref.decision_digest
+root.input_digest         = event.decision_ref.input_digest
+root.policy_record_digest = event.decision_ref.policy_record_digest
 ```
 
-Every downstream causal event must match the **active** root lineage on all five fields.
-The test-level causal validator (JSON Schema cannot express cross-event equality) rejects,
-at minimum:
+Each downstream event derives its lineage from the **causal event it references** (its
+`evaluation_event_ref` / `attempt_event_ref` / `merge_event_ref` / `validation_event_ref` /
+`target_event_ref`), not from list position. A review override attached to a root creates a
+replacement decision lineage for the **descendants of that override**. The validator
+supports multiple independent tasks, multiple candidates, multiple evaluation roots,
+interleaved event streams, and one root with an override alongside another without. No event
+inherits lineage merely because it appears later in the list. A new candidate starts a new
+evaluation root and never mutates or replaces another candidate's root.
+
+Every downstream causal event must match its **referenced root's** (or the active
+replacement's) lineage on all five fields. The test-level causal validator (JSON Schema
+cannot express cross-event equality) rejects, at minimum:
 
 1. nonexistent event reference; 2. forward reference; 3. wrong referenced event type;
 4. duplicate event id; 5. decision-digest drift; 6. input-digest drift;
@@ -972,13 +985,30 @@ new evaluation event; 16. an override mixing the old decision digest with new
 input/record digests.
 
 **Review override switches the active decision lineage.** A `CHANGEGATE_REVIEW_OVERRIDDEN`
-carrying a replacement decision (`override.new_decision_digest` +
-`override.new_input_digest` + `override.new_policy_record_digest`, all-or-none) switches
-the active decision lineage to those three values while **preserving** the root
-task/candidate. Subsequent events must then match the replacement decision identity; an
-event that mixes the original decision digest with the replacement input/record digests is
-rejected. A **changed candidate requires a new evaluation event** — it can never continue
-the old chain.
+carrying an **atomic** `override.replacement_decision_ref` — one object with the complete
+replacement identity (`evaluation_id`, `task_ref`, `candidate_digest`, `decision_digest`,
+`input_digest`, `policy_record_digest`; all six required, no partial object) — switches the
+active decision lineage to that identity while **preserving** the root task/candidate. The
+loose `new_decision_digest`/`new_input_digest`/`new_policy_record_digest` fields of the
+prior revision are removed, so an event can no longer mix the original decision digest with
+a replacement input/record digest at the field level. The causal validator additionally
+enforces (§19.4) that the replacement task/candidate equal the root, that the replacement
+is not identical to the original, and that if the input or policy-record digest changes the
+decision digest must also differ — so pairing the ORIGINAL decision digest with a new
+input/record digest is rejected. Subsequent events must match the replacement decision
+identity and can never revert to the original. A **changed candidate requires a new
+evaluation event** — it can never use an override and can never continue the old chain.
+
+### 19.4 Replacement decision integrity (normative, executably tested)
+
+For an override with a `replacement_decision_ref` the causal validator rejects: (1) an old
+decision digest paired with a new input digest; (2) an old decision digest paired with a
+new policy-record digest; (3) any old digest paired with any new digest (no mixing);
+(4) a partial replacement object (schema already rejects it); (5) a replacement identical
+to the original (a no-op override); (6) a replacement `task_ref` ≠ root task; (7) a
+replacement `candidate_digest` ≠ root candidate; (8) a downstream event reverting to the
+original identity after the replacement was activated; (9) a replacement that changes the
+candidate (which requires a new evaluation event instead).
 
 ### 19.2 Envelope fields
 
@@ -1003,6 +1033,28 @@ so a real `canonical_digest()` value is directly carriable with no conversion.
 
 The schema **must not require** and does not define fields for: raw prompts, source file
 contents, secrets, credentials, or entire command output.
+
+### 19.5 Task identity consistency (normative)
+
+`event.task_ref` and `event.decision_ref.task_ref` use the **one** shared `taskRef`
+grammar (`$defs/taskRef`: bounded, no-whitespace, no path separators, no URLs) — there is
+no weaker nested grammar, so a trailing newline, tab, or Unicode whitespace is rejected in
+`decision_ref.task_ref` exactly as at the envelope level. For **every** event the
+test-level validators additionally enforce:
+
+```
+event.task_ref == event.decision_ref.task_ref
+```
+
+and, when the event's `subject_ref` represents the candidate (`kind = git_candidate` with a
+`digest`),
+
+```
+event.subject_ref.digest == event.decision_ref.candidate_digest.
+```
+
+A locally schema-valid but identity-inconsistent event (envelope task A / decision task B,
+or a candidate-subject digest differing from the decision candidate digest) is rejected.
 
 ## 20. Outcome and Feedback Linkage
 
@@ -1101,7 +1153,7 @@ contract and must never be required to replay a decision (§18).
 ## 22. Golden Evaluation Matrix
 
 Artifact: `data/evals/changegate_merge_eligibility_golden_cases.json` (deterministic,
-versioned `changegate-merge-eligibility-golden.v4`; 41 cases GC-S1-001 … GC-S1-041). The
+versioned `changegate-merge-eligibility-golden.v5`; 41 cases GC-S1-001 … GC-S1-041). The
 fixture embeds the normative `fact_state_mapping`, and the artifact tests derive every
 case's complete reason set independently from its facts via a test-only oracle (never
 from the case's own expectations). Every closed reason code appears as an expected reason
@@ -1305,7 +1357,7 @@ produced, and the case asserts
 
 ## 26. Exit Criteria
 
-Slice 1A (as revised by R1, R2 and R3) exits when:
+Slice 1A (as revised by R1–R4) exits when:
 
 1. the artifact tests pass (spec present and DRAFT_FOR_OWNER_REVIEW; schema
    meta-validated with per-event positive and negative instances and a full valid causal
@@ -1378,24 +1430,64 @@ A precedence change is the canonical example: it is a **semantic patch, not an a
 metadata patch** (correcting the earlier §10 wording). Changing any of the forbidden set
 above follows the same rule.
 
-### 27.3 Semantic fingerprint
+### 27.3 Semantic manifest and complete fingerprint
 
-A deterministic fingerprint is computed over the load-bearing semantic artifacts:
+The load-bearing semantics are consolidated into ONE machine-readable block,
+`slice_1a_semantic_manifest` (fixture-level), and:
 
 ```
-semantic_fingerprint = canonical_digest({
-    reason_code_taxonomy_and_ranks,
-    fact_state_mapping,
-    golden_expected_results,          # per case: disposition, authority,
-                                      # primary reason, complete reason codes
-    decision_authority_by_mode,
-    identifier_universes,
-    digest_representation,
-})
+semantic_fingerprint = canonical_digest(slice_1a_semantic_manifest)
 ```
 
-A **metadata-only acceptance patch must preserve this fingerprint**; a semantic change (a
-precedence swap, a taxonomy edit, a changed golden expectation, an authority-mapping edit)
-necessarily changes it. The artifact tests compute the fingerprint and prove that a
-precedence change alters it, so a semantic change can never be mislabeled as a metadata
-acceptance patch.
+The manifest binds **every** area forbidden from changing in a metadata-only acceptance
+patch (R3's fingerprint was incomplete — R4 makes it total):
+
+- **Policy semantics** — reason-code taxonomy, exact precedence ranks, default
+  dispositions, fact-state mappings, violation-tag mappings, decision-authority-by-mode,
+  identifier-namespace rules, canonical digest representation.
+- **Deterministic identity** — the exact source-binding field set, the exact
+  `MergeEligibilityPolicyInput` deterministic field set, the exact
+  `PolicyEvaluationRecordPayload` field order, the decision-payload and record-payload
+  contract identifiers, the approval sentinel value, the set-normalization rule.
+- **Replay** — replay contract version, complete replay-invariant ids, the fields included
+  in decision identity, the fields excluded as runtime metadata, the trace equality
+  invariants.
+- **Event semantics** — the canonical digest of the complete event JSON Schema, the event
+  type set, the `decision_ref` required-field set, the override replacement-identity
+  requirements, the causal-reference requirements.
+- **Causal semantics** — causal contract version, the complete lineage field set, the
+  root-creation rule, the override lineage-switch rule, the changed-candidate-new-root
+  rule, the multi-root support flag, the complete causal-negative-control ids.
+- **Golden semantics** — per case: expected disposition, decision authority, primary
+  reason, complete reasons, blocking/review partitions, and owner-decision markers.
+
+The manifest **excludes** all metadata (document status, acceptance record,
+verification-report path, accepted candidate SHA, audit notes), so an allowed metadata
+change preserves the fingerprint.
+
+The artifact tests cross-bind the manifest to the executable artifacts — the schema digest,
+the record-payload field order, the `decision_ref` required set, the causal-control ids —
+so a semantic change to any of them forces a manifest change, which changes the fingerprint.
+Fourteen independent mutation tests prove the fingerprint changes for: (1) precedence;
+(2) a reason default disposition; (3) a golden expected outcome; (4) the deterministic
+source-binding set; (5) the `MergeEligibilityPolicyInput` field set; (6) the
+`PolicyEvaluationRecordPayload` field set or order; (7) a replay invariant; (8) an
+event-schema required field or conditional behavior; (9) the `decision_ref` required fields;
+(10) the causal lineage field set; (11) the override-switch rule; (12) the multi-root rule;
+(13) the decision-authority mapping; (14) the canonical digest representation. Each mutation
+test is independent of any expected-fingerprint value stored in the same mutated object.
+
+### 27.4 Exact-artifact no-semantic-change controls
+
+Because the record-payload builder and the causal validator live in the test file and the
+event contract lives in the schema file, final **no-semantic-change verification
+additionally compares the verified-candidate hashes** of:
+
+- `data/schemas/changegate_evaluation_event_v1.schema.json`;
+- `tests/build_harness/test_changegate_slice_1_spec_artifacts.py`.
+
+The fresh independent verifier records these two file hashes at the accepted candidate. A
+metadata-only acceptance patch must preserve them **exactly** (and preserve the semantic
+fingerprint for the spec and fixture). This document defines the **comparison contract**
+only; it does not hard-code any future verifier hash. The machine form is
+`acceptance_governance.exact_artifact_hash_contract` in the fixture.

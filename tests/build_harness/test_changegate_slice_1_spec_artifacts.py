@@ -142,7 +142,8 @@ SET_FACTS = REQUIREMENT_SETS + EVIDENCE_RECORD_SETS
 
 SOURCE_DIGEST_FIELDS = (
     "task_contract_digest", "candidate_digest", "repository_snapshot_digest",
-    "verification_bundle_digest", "approval_digest", "authority_binding_digest",
+    "verification_bundle_digest", "approval_digest_or_sentinel",
+    "authority_binding_digest",
     "verifier_binding_digest", "policy_digest",
 )
 
@@ -584,7 +585,7 @@ def test_fixture_bindings_use_the_canonical_digest_representation():
         bindings = c["policy_input_bindings"]
         for field in SOURCE_DIGEST_FIELDS:
             value = bindings[field]
-            if field == "approval_digest" and value == NO_APPROVAL_SENTINEL:
+            if field == "approval_digest_or_sentinel" and value == NO_APPROVAL_SENTINEL:
                 continue
             assert CANONICAL_DIGEST_RE.match(value), (c["case_id"], field, value)
 
@@ -636,9 +637,23 @@ _MERGE_OUTCOME = {"status": "SUCCESS", "detail_code": "MERGE_FAST_FORWARD",
 _FEEDBACK = {"actor_ref": "user-42", "verdict": "DISAGREE",
              "category_code": "DISPUTED_BLOCK", "reason_code": None,
              "comment_digest": None}
+# Exception-path override (no replacement decision).
 _OVERRIDE = {"actor_ref": "owner-1", "reason_code": "SCOPE_EXCEPTION",
-             "new_decision_digest": None, "exception_ref": "exc-1",
+             "replacement_decision_ref": None, "exception_ref": "exc-1",
              "expires_at": "2026-08-01T00:00:00Z"}
+
+
+def _replacement_dref(**overrides) -> dict:
+    """A complete atomic replacement_decision_ref (all six fields)."""
+    base = {
+        "evaluation_id": "eval-repl", "task_ref": _ROOT_TASK,
+        "candidate_digest": _ROOT_CANDIDATE,
+        "decision_digest": canonical_digest({"repl": "decision"}),
+        "input_digest": canonical_digest({"repl": "input"}),
+        "policy_record_digest": canonical_digest({"repl": "record"}),
+    }
+    base.update(overrides)
+    return base
 
 _POSITIVE_EXTRAS: dict[str, dict] = {
     "CHANGEGATE_EVALUATION_COMPLETED": {
@@ -794,14 +809,18 @@ def test_event_causal_linkage_negatives_are_rejected():
 # NOT production event processing.
 # ---------------------------------------------------------------------------
 
-CHAIN_PARENT_RULES: dict[str, tuple[tuple[str, str], ...]] = {
-    # event_type -> ((reference field, required type of the referenced event), ...)
+# A decision "head" for a root is either the originating evaluation or a review override
+# that produced a replacement decision for it; both may parent a merge attempt / override.
+_DECISION_HEAD = ("CHANGEGATE_EVALUATION_COMPLETED", "CHANGEGATE_REVIEW_OVERRIDDEN")
+
+CHAIN_PARENT_RULES: dict[str, tuple[tuple[str, object], ...]] = {
+    # event_type -> ((reference field, required type(s) of the referenced event), ...)
     "CHANGEGATE_EVALUATION_COMPLETED": (),
     "CHANGEGATE_REVIEW_OVERRIDDEN": (
-        ("evaluation_event_ref", "CHANGEGATE_EVALUATION_COMPLETED"),
+        ("evaluation_event_ref", _DECISION_HEAD),
     ),
     "CHANGEGATE_MERGE_ATTEMPTED": (
-        ("evaluation_event_ref", "CHANGEGATE_EVALUATION_COMPLETED"),
+        ("evaluation_event_ref", _DECISION_HEAD),
     ),
     "CHANGEGATE_MERGE_COMPLETED": (
         ("attempt_event_ref", "CHANGEGATE_MERGE_ATTEMPTED"),
@@ -819,22 +838,47 @@ CHAIN_PARENT_RULES: dict[str, tuple[tuple[str, str], ...]] = {
 }
 
 
-def validate_event_chain(events: list[dict]) -> list[str]:
-    """Cross-event relationships a JSON Schema cannot express, INCLUDING root
-    task/candidate/decision lineage (§19.3). Returns error strings.
+def _type_matches(actual: str, required: object) -> bool:
+    if required == "*":
+        return True
+    if isinstance(required, tuple):
+        return actual in required
+    return actual == required
 
-    The first CHANGEGATE_EVALUATION_COMPLETED establishes the active root lineage
-    (task_ref, candidate_digest, decision/input/policy-record digests). Every downstream
-    event must match the ACTIVE lineage. A review override carrying a complete replacement
-    decision (all three new_* digests) switches the active decision lineage while
-    preserving task/candidate. A changed candidate cannot continue the chain; it needs a
-    new evaluation event.
+
+_LINEAGE_KEYS = ("task_ref", "candidate_digest", "decision_digest", "input_digest",
+                 "policy_record_digest")
+_PARENT_FIELD_BY_TYPE = {
+    "CHANGEGATE_REVIEW_OVERRIDDEN": "evaluation_event_ref",
+    "CHANGEGATE_MERGE_ATTEMPTED": "evaluation_event_ref",
+    "CHANGEGATE_MERGE_COMPLETED": "attempt_event_ref",
+    "CHANGEGATE_POST_MERGE_VALIDATION": "merge_event_ref",
+    "CHANGEGATE_ROLLBACK_RECORDED": "merge_event_ref",
+    "CHANGEGATE_USER_FEEDBACK_RECORDED": "target_event_ref",
+}
+
+
+def _lineage_of(dref: dict) -> dict:
+    return {k: dref[k] for k in _LINEAGE_KEYS}
+
+
+def validate_event_chain(events: list[dict]) -> list[str]:
+    """Cross-event relationships JSON Schema cannot express, using GRAPH/event-reference
+    semantics (§19.3, multi-root). Returns error strings.
+
+    Each CHANGEGATE_EVALUATION_COMPLETED establishes an INDEPENDENT root keyed by its own
+    event id. Every downstream event derives its lineage from the causal event it
+    references (not list order). A review override carrying a complete atomic
+    replacement_decision_ref (§19.4) creates a replacement lineage for descendants of that
+    override, preserving root task/candidate. Envelope/decision task equality (§19.5) and
+    candidate-subject-digest equality are enforced for every event.
     """
     errors: list[str] = []
     by_id: dict[str, dict] = {}
-    active: dict | None = None  # root/active lineage
+    # lineage_at[event_id] = the lineage that a descendant referencing this event inherits.
+    lineage_at: dict[str, dict] = {}
 
-    def _dref(event: dict) -> dict | None:
+    def dref_of(event: dict) -> dict | None:
         dr = event.get("decision_ref")
         return dr if isinstance(dr, dict) else None
 
@@ -843,6 +887,21 @@ def validate_event_chain(events: list[dict]) -> list[str]:
         etype = event["event_type"]
         if event_id in by_id:
             errors.append(f"duplicate event_id {event_id!r}")
+        dref = dref_of(event)
+
+        # 0. envelope/decision task equality + candidate-subject-digest equality (§19.5).
+        if dref is not None:
+            if event.get("task_ref") != dref.get("task_ref"):
+                errors.append(
+                    f"{event_id}: envelope task_ref {event.get('task_ref')!r} != "
+                    f"decision_ref.task_ref {dref.get('task_ref')!r}"
+                )
+            subject = event.get("subject_ref") or {}
+            if (subject.get("kind") == "git_candidate" and subject.get("digest")
+                    and subject["digest"] != dref.get("candidate_digest")):
+                errors.append(
+                    f"{event_id}: subject_ref.digest != decision_ref.candidate_digest"
+                )
 
         # 1. structural references resolve to an EARLIER event of the correct type.
         for field, required_type in CHAIN_PARENT_RULES[etype]:
@@ -855,7 +914,7 @@ def validate_event_chain(events: list[dict]) -> list[str]:
                     f"{event_id}: {field}={ref!r} does not resolve to an EARLIER event"
                 )
                 continue
-            if required_type != "*" and parent["event_type"] != required_type:
+            if not _type_matches(parent["event_type"], required_type):
                 errors.append(
                     f"{event_id}: {field} points at {parent['event_type']}, "
                     f"expected {required_type}"
@@ -870,73 +929,58 @@ def validate_event_chain(events: list[dict]) -> list[str]:
                     f"!= referenced event type {target['event_type']!r}"
                 )
 
-        # 3. lineage.
-        dref = _dref(event)
+        # 3. lineage — graph-based, keyed by the referenced event.
         if etype == "CHANGEGATE_EVALUATION_COMPLETED":
-            if active is None:
-                if dref is None:
-                    errors.append(f"{event_id}: evaluation without decision_ref")
-                else:
-                    active = {
-                        "task_ref": dref["task_ref"],
-                        "candidate_digest": dref["candidate_digest"],
-                        "decision_digest": dref["decision_digest"],
-                        "input_digest": dref["input_digest"],
-                        "policy_record_digest": dref["policy_record_digest"],
-                    }
-            # A second evaluation for a DIFFERENT candidate legitimately starts a new
-            # root; for the same candidate it must keep the task. (Not exercised by the
-            # positive chain, but kept coherent.)
-        elif dref is not None:
-            if active is None:
-                errors.append(f"{event_id}: causal event before any evaluation event")
+            if dref is None:
+                errors.append(f"{event_id}: evaluation without decision_ref")
             else:
-                if dref["task_ref"] != active["task_ref"]:
-                    errors.append(
-                        f"{event_id}: task_ref {dref['task_ref']!r} != root "
-                        f"{active['task_ref']!r}"
-                    )
-                if dref["candidate_digest"] != active["candidate_digest"]:
-                    errors.append(
-                        f"{event_id}: candidate_digest diverges from the root candidate"
-                    )
-                if dref["decision_digest"] != active["decision_digest"]:
-                    errors.append(f"{event_id}: decision_digest diverges from the chain")
-                if dref["input_digest"] != active["input_digest"]:
-                    errors.append(f"{event_id}: input_digest diverges from the chain")
-                if dref["policy_record_digest"] != active["policy_record_digest"]:
-                    errors.append(
-                        f"{event_id}: policy_record_digest diverges from the chain"
-                    )
+                # Independent root; its descendants inherit THIS lineage.
+                lineage_at[event_id] = _lineage_of(dref)
+        else:
+            parent_field = _PARENT_FIELD_BY_TYPE[etype]
+            parent_ref = event.get(parent_field)
+            inherited = lineage_at.get(parent_ref) if parent_ref else None
+            if inherited is None:
+                errors.append(
+                    f"{event_id}: no reachable evaluation root via {parent_field}"
+                )
+            elif dref is not None:
+                for key in _LINEAGE_KEYS:
+                    if dref[key] != inherited[key]:
+                        errors.append(f"{event_id}: {key} diverges from its root lineage")
+                # this event propagates the inherited lineage to ITS descendants.
+                lineage_at[event_id] = inherited
 
-        # 4. an override with a complete replacement switches the active decision lineage.
+        # 4. review override: atomic replacement decision integrity + lineage switch (§19.4).
         if etype == "CHANGEGATE_REVIEW_OVERRIDDEN":
             override = event.get("override") or {}
-            triple = ("new_decision_digest", "new_input_digest",
-                      "new_policy_record_digest")
-            present = [k for k in triple if override.get(k)]
-            if present and len(present) != 3:
-                errors.append(
-                    f"{event_id}: override mixes an incomplete replacement decision"
-                )
-            elif len(present) == 3 and active is not None:
-                active = {
-                    **active,
-                    "decision_digest": override["new_decision_digest"],
-                    "input_digest": override["new_input_digest"],
-                    "policy_record_digest": override["new_policy_record_digest"],
-                }
+            repl = override.get("replacement_decision_ref")
+            inherited = lineage_at.get(event.get("evaluation_event_ref") or "")
+            if repl is not None and inherited is not None and dref is not None:
+                original = _lineage_of(dref)
+                new = _lineage_of(repl)
+                # replacement task/candidate must equal the root.
+                if new["task_ref"] != inherited["task_ref"]:
+                    errors.append(f"{event_id}: replacement task_ref != root task")
+                if new["candidate_digest"] != inherited["candidate_digest"]:
+                    errors.append(
+                        f"{event_id}: replacement candidate_digest != root candidate"
+                    )
+                # no mixing: if input or record digest changed, decision digest must too.
+                changed_ir = (new["input_digest"] != original["input_digest"]
+                              or new["policy_record_digest"] != original["policy_record_digest"])
+                if changed_ir and new["decision_digest"] == original["decision_digest"]:
+                    errors.append(
+                        f"{event_id}: override mixes the original decision digest with a "
+                        "new input/record digest"
+                    )
+                # a no-op replacement identical to the original is rejected.
+                if new == original:
+                    errors.append(f"{event_id}: replacement decision identical to original")
+                # descendants of the override inherit the REPLACEMENT lineage.
+                lineage_at[event_id] = new
 
         by_id[event_id] = event
-
-    # 5. every non-root event must be causally connected (some *_event_ref present).
-    ref_fields = ("evaluation_event_ref", "attempt_event_ref", "merge_event_ref",
-                  "validation_event_ref", "target_event_ref")
-    for event in events:
-        if event["event_type"] == "CHANGEGATE_EVALUATION_COMPLETED":
-            continue
-        if not any(event.get(f) for f in ref_fields):
-            errors.append(f"{event['event_id']}: causally disconnected (no event ref)")
     return errors
 
 
@@ -1047,10 +1091,11 @@ def test_chain_validator_full_lineage_negative_controls():
         errors = validate_event_chain(mutate(copy.deepcopy(chain)))
         assert any(expected in e for e in errors), f"{name} not detected: {errors}"
 
-    # 14 locally valid but disconnected event.
+    # 14 locally valid but disconnected event (no reachable evaluation root).
     disconnected = copy.deepcopy(chain)
     del disconnected[1]["evaluation_event_ref"]
-    assert any("disconnected" in e for e in validate_event_chain(disconnected))
+    assert any("no reachable evaluation root" in e
+               for e in validate_event_chain(disconnected))
 
     # 15 changed candidate continuing the old chain without a new evaluation event.
     changed_candidate = copy.deepcopy(chain)
@@ -1058,28 +1103,108 @@ def test_chain_validator_full_lineage_negative_controls():
     assert any("candidate_digest diverges" in e
                for e in validate_event_chain(changed_candidate))
 
-    # 16 override mixing the old decision digest with new input/record digests.
+    # 16 override mixing the ORIGINAL decision digest with a new input/record digest.
+    mixed_repl = _replacement_dref(
+        decision_digest=_DECISION_REF["decision_digest"],   # original decision digest
+        input_digest=canonical_digest({"repl": "new-input"}),
+        policy_record_digest=canonical_digest({"repl": "new-record"}))
     override_event = {
         **_base_envelope("CHANGEGATE_REVIEW_OVERRIDDEN"), "event_id": "evt-override-1",
         "decision_ref": _DECISION_REF, "evaluation_event_ref": "evt-eval-1",
         "override": {"actor_ref": "owner-1", "reason_code": "SCOPE_EXCEPTION",
-                     "new_decision_digest": _DIGEST_B, "new_input_digest": None,
-                     "new_policy_record_digest": None, "exception_ref": None,
-                     "expires_at": None},
+                     "replacement_decision_ref": mixed_repl,
+                     "exception_ref": None, "expires_at": None},
     }
     mixed_chain = [chain[0], override_event]
-    assert any("incomplete replacement" in e for e in validate_event_chain(mixed_chain))
+    assert any("mixes the original decision digest" in e
+               for e in validate_event_chain(mixed_chain))
+
+
+def test_replacement_decision_negative_controls_are_all_detected():
+    """§19.4: all nine replacement-integrity controls are detected."""
+    evaluation = {**_base_envelope("CHANGEGATE_EVALUATION_COMPLETED"),
+                  "event_id": "evt-eval-1",
+                  **_POSITIVE_EXTRAS["CHANGEGATE_EVALUATION_COMPLETED"]}
+    orig = _DECISION_REF
+    new_dec = canonical_digest({"repl": "new-decision"})
+    new_in = canonical_digest({"repl": "new-input"})
+    new_rec = canonical_digest({"repl": "new-record"})
+
+    def override_with(repl):
+        return {**_base_envelope("CHANGEGATE_REVIEW_OVERRIDDEN"),
+                "event_id": "evt-override-1", "decision_ref": _DECISION_REF,
+                "evaluation_event_ref": "evt-eval-1",
+                "override": {"actor_ref": "owner-1", "reason_code": "SCOPE_EXCEPTION",
+                             "replacement_decision_ref": repl,
+                             "exception_ref": None, "expires_at": None}}
+
+    controls = {
+        # 1 old decision + new input + new record
+        "old_dec_new_ir": (_replacement_dref(
+            decision_digest=orig["decision_digest"], input_digest=new_in,
+            policy_record_digest=new_rec), "mixes the original decision digest"),
+        # 2 new decision + old input + new record
+        "new_dec_old_input": (_replacement_dref(
+            decision_digest=new_dec, input_digest=orig["input_digest"],
+            policy_record_digest=new_rec), None),  # valid at validator (input unchanged is fine)
+        # 3 new decision + new input + old record (valid — record can change with decision)
+        # (kept as a POSITIVE sanity below, not a negative)
+        # 5 identical replacement / no-op
+        "identical": (_replacement_dref(
+            decision_digest=orig["decision_digest"], input_digest=orig["input_digest"],
+            policy_record_digest=orig["policy_record_digest"]),
+            "identical to original"),
+        # 6 different task
+        "diff_task": (_replacement_dref(
+            task_ref="other-task", decision_digest=new_dec, input_digest=new_in,
+            policy_record_digest=new_rec), "replacement task_ref != root task"),
+        # 7 different candidate
+        "diff_candidate": (_replacement_dref(
+            candidate_digest=canonical_digest({"c": "other"}), decision_digest=new_dec,
+            input_digest=new_in, policy_record_digest=new_rec),
+            "replacement candidate_digest != root candidate"),
+    }
+    for name, (repl, expected) in controls.items():
+        errors = validate_event_chain([evaluation, override_with(repl)])
+        if expected is None:
+            continue
+        assert any(expected in e for e in errors), f"{name} not detected: {errors}"
+
+    # 4 partial replacement object — rejected by the SCHEMA (all six fields required).
+    validator = _validator()
+    partial = override_with({"evaluation_id": "e", "task_ref": _ROOT_TASK,
+                             "candidate_digest": _ROOT_CANDIDATE,
+                             "decision_digest": new_dec})  # missing input/record digests
+    assert list(validator.iter_errors(partial)), "partial replacement must fail schema"
+
+    # 8 downstream event reverting to the original identity after replacement activation.
+    full_repl = _replacement_dref(decision_digest=new_dec, input_digest=new_in,
+                                  policy_record_digest=new_rec)
+    override = override_with(full_repl)
+    revert = {**_base_envelope("CHANGEGATE_MERGE_ATTEMPTED"), "event_id": "evt-attempt-1",
+              "decision_ref": _DECISION_REF,  # original identity after the switch
+              "evaluation_event_ref": "evt-override-1",
+              "outcome": {"status": "SUCCESS", "detail_code": "ATTEMPT_STARTED"}}
+    errs = validate_event_chain([evaluation, override, revert])
+    assert any("diverges" in e for e in errs), f"revert not detected: {errs}"
+
+    # 9 replacement that changes the candidate requires a new evaluation (same as control 7).
+    assert any("candidate" in e for e in validate_event_chain(
+        [evaluation, override_with(_replacement_dref(
+            candidate_digest=canonical_digest({"c": "z"}), decision_digest=new_dec,
+            input_digest=new_in, policy_record_digest=new_rec))]))
 
 
 def test_override_switches_active_decision_lineage():
-    """A complete replacement decision switches the active lineage; a subsequent event
-    matching the REPLACEMENT (not the original) validates, and one matching the original
-    afterwards fails."""
-    new_decision = canonical_digest({"probe": "replacement-decision"})
-    new_input = canonical_digest({"probe": "replacement-input"})
-    new_record = canonical_digest({"probe": "replacement-record"})
-    replacement_dref = _dref(decision_digest=new_decision, input_digest=new_input,
-                             policy_record_digest=new_record)
+    """A complete atomic replacement switches the lineage; a subsequent event matching the
+    REPLACEMENT validates, and one reverting to the original afterwards fails."""
+    new_repl = _replacement_dref(
+        decision_digest=canonical_digest({"probe": "replacement-decision"}),
+        input_digest=canonical_digest({"probe": "replacement-input"}),
+        policy_record_digest=canonical_digest({"probe": "replacement-record"}))
+    replacement_dref = _dref(decision_digest=new_repl["decision_digest"],
+                             input_digest=new_repl["input_digest"],
+                             policy_record_digest=new_repl["policy_record_digest"])
 
     def env(event_id, event_type, **extra):
         return {**_base_envelope(event_type), "event_id": event_id, **extra}
@@ -1087,15 +1212,13 @@ def test_override_switches_active_decision_lineage():
     override = env("evt-override-1", "CHANGEGATE_REVIEW_OVERRIDDEN",
                    decision_ref=_DECISION_REF, evaluation_event_ref="evt-eval-1",
                    override={"actor_ref": "owner-1", "reason_code": "SCOPE_EXCEPTION",
-                             "new_decision_digest": new_decision,
-                             "new_input_digest": new_input,
-                             "new_policy_record_digest": new_record,
+                             "replacement_decision_ref": new_repl,
                              "exception_ref": None, "expires_at": None})
     good_attempt = env("evt-attempt-1", "CHANGEGATE_MERGE_ATTEMPTED",
-                       decision_ref=replacement_dref, evaluation_event_ref="evt-eval-1",
+                       decision_ref=replacement_dref, evaluation_event_ref="evt-override-1",
                        outcome={"status": "SUCCESS", "detail_code": "ATTEMPT_STARTED"})
     stale_attempt = env("evt-attempt-2", "CHANGEGATE_MERGE_ATTEMPTED",
-                        decision_ref=_DECISION_REF, evaluation_event_ref="evt-eval-1",
+                        decision_ref=_DECISION_REF, evaluation_event_ref="evt-override-1",
                         outcome={"status": "SUCCESS", "detail_code": "ATTEMPT_STARTED"})
     evaluation = {**_base_envelope("CHANGEGATE_EVALUATION_COMPLETED"),
                   "event_id": "evt-eval-1",
@@ -1105,12 +1228,181 @@ def test_override_switches_active_decision_lineage():
         assert not list(validator.iter_errors(e)), e["event_id"]
     assert validate_event_chain([evaluation, override, good_attempt]) == []
     stale_errors = validate_event_chain([evaluation, override, stale_attempt])
-    assert any("decision_digest diverges" in e for e in stale_errors)
+    assert any("diverges" in e for e in stale_errors)
 
 
 def _set(chain: list[dict], idx: int, key: str, value) -> list[dict]:
     chain[idx][key] = value
     return chain
+
+
+# ---------------------------------------------------------------------------
+# Multi-root causal graph (M-R3V-01)
+# ---------------------------------------------------------------------------
+
+def _root_lineage(task: str, candidate: str, tag: str) -> dict:
+    return _dref(task_ref=task, candidate_digest=candidate,
+                 decision_digest=canonical_digest({"d": tag}),
+                 input_digest=canonical_digest({"i": tag}),
+                 policy_record_digest=canonical_digest({"r": tag}))
+
+
+def _evt(event_id: str, event_type: str, lineage: dict, **extra) -> dict:
+    """An event whose envelope task/subject-digest match its decision_ref lineage."""
+    e = copy.deepcopy(_base_envelope(event_type))
+    e["event_id"] = event_id
+    e["task_ref"] = lineage["task_ref"]
+    e["subject_ref"] = {"namespace": "changegate", "kind": "git_candidate",
+                        "value": "cand", "commit_sha": _COMMIT,
+                        "digest": lineage["candidate_digest"]}
+    e["decision_ref"] = lineage
+    e.update(extra)
+    return e
+
+
+def _root_event(event_id: str, lineage: dict) -> dict:
+    return _evt(event_id, "CHANGEGATE_EVALUATION_COMPLETED", lineage,
+                context_digest=lineage["input_digest"],
+                policy_version="changegate-policy.v5-draft", evaluator_version="0.1.0",
+                outcome={"status": "SUCCESS", "detail_code": "EVALUATION_OK"},
+                decision_ref={**lineage, "disposition": "BLOCK",
+                              "decision_authority": "AUTHORITATIVE"})
+
+
+def test_multi_root_positive_chains_validate():
+    validator = _validator()
+    A = _root_lineage("task-A", canonical_digest({"c": "A"}), "A")
+    B = _root_lineage("task-B", canonical_digest({"c": "B"}), "B")
+    # same task-A, different candidate:
+    A2 = _root_lineage("task-A", canonical_digest({"c": "A2"}), "A2")
+
+    def attempt(eid, lineage, root_id):
+        return _evt(eid, "CHANGEGATE_MERGE_ATTEMPTED", lineage,
+                    evaluation_event_ref=root_id,
+                    outcome={"status": "SUCCESS", "detail_code": "ATTEMPT_STARTED"})
+
+    scenarios = {
+        # 1 two sequential independent roots
+        "sequential": [_root_event("evt-A", A), attempt("evt-A-att", A, "evt-A"),
+                       _root_event("evt-B", B), attempt("evt-B-att", B, "evt-B")],
+        # 2 two interleaved roots for different tasks
+        "interleaved": [_root_event("evt-A", A), _root_event("evt-B", B),
+                        attempt("evt-B-att", B, "evt-B"),
+                        attempt("evt-A-att", A, "evt-A")],
+        # 3 two roots for the same task, different candidates
+        "same_task_diff_candidate": [_root_event("evt-A", A), _root_event("evt-A2", A2),
+                                     attempt("evt-A-att", A, "evt-A"),
+                                     attempt("evt-A2-att", A2, "evt-A2")],
+    }
+    for name, chain in scenarios.items():
+        for e in chain:
+            assert not list(validator.iter_errors(e)), f"{name}/{e['event_id']}"
+        assert validate_event_chain(chain) == [], f"{name}: {validate_event_chain(chain)}"
+
+    # 4 one root with an override, one without.
+    repl = _replacement_dref(task_ref="task-A", candidate_digest=A["candidate_digest"],
+                             decision_digest=canonical_digest({"d": "A-repl"}),
+                             input_digest=canonical_digest({"i": "A-repl"}),
+                             policy_record_digest=canonical_digest({"r": "A-repl"}))
+    repl_lineage = _dref(task_ref="task-A", candidate_digest=A["candidate_digest"],
+                         decision_digest=repl["decision_digest"],
+                         input_digest=repl["input_digest"],
+                         policy_record_digest=repl["policy_record_digest"])
+    override = _evt("evt-A-ovr", "CHANGEGATE_REVIEW_OVERRIDDEN", A,
+                    evaluation_event_ref="evt-A",
+                    override={"actor_ref": "owner-1", "reason_code": "SCOPE_EXCEPTION",
+                              "replacement_decision_ref": repl,
+                              "exception_ref": None, "expires_at": None})
+    a_after_override = _evt("evt-A-att2", "CHANGEGATE_MERGE_ATTEMPTED", repl_lineage,
+                            evaluation_event_ref="evt-A-ovr",
+                            outcome={"status": "SUCCESS", "detail_code": "ATTEMPT_STARTED"})
+    b_plain = attempt("evt-B-att", B, "evt-B")
+    mixed = [_root_event("evt-A", A), _root_event("evt-B", B), override,
+             a_after_override, b_plain]
+    for e in mixed:
+        assert not list(validator.iter_errors(e)), e["event_id"]
+    assert validate_event_chain(mixed) == [], validate_event_chain(mixed)
+
+
+def test_multi_root_negative_controls_are_detected():
+    A = _root_lineage("task-A", canonical_digest({"c": "A"}), "A")
+    B = _root_lineage("task-B", canonical_digest({"c": "B"}), "B")
+
+    def attempt(eid, lineage, root_id):
+        return _evt(eid, "CHANGEGATE_MERGE_ATTEMPTED", lineage,
+                    evaluation_event_ref=root_id,
+                    outcome={"status": "SUCCESS", "detail_code": "ATTEMPT_STARTED"})
+
+    # attempt carrying its own (task-B) lineage but referencing task-A's evaluation.
+    cross = attempt("evt-x", B, "evt-A")
+    errs = validate_event_chain([_root_event("evt-A", A), _root_event("evt-B", B), cross])
+    assert any("diverges" in e for e in errs), f"cross-root not detected: {errs}"
+
+    # completion linked to an attempt from another candidate.
+    att_A = attempt("evt-A-att", A, "evt-A")
+    comp_wrong = _evt("evt-comp", "CHANGEGATE_MERGE_COMPLETED", B,
+                      attempt_event_ref="evt-A-att",
+                      outcome={"status": "SUCCESS", "detail_code": "MERGE_OK",
+                               "resulting_commit_sha": "c" * 40})
+    errs = validate_event_chain([_root_event("evt-A", A), att_A, comp_wrong])
+    assert any("diverges" in e for e in errs)
+
+    # feedback targeting another root while carrying current-root identity.
+    fb = _evt("evt-fb", "CHANGEGATE_USER_FEEDBACK_RECORDED", B,
+              target_event_ref="evt-A", target_event_type="CHANGEGATE_EVALUATION_COMPLETED",
+              feedback=_FEEDBACK)
+    errs = validate_event_chain([_root_event("evt-A", A), _root_event("evt-B", B), fb])
+    assert any("diverges" in e for e in errs)
+
+    # event with no reachable evaluation root.
+    orphan = attempt("evt-orphan", A, "evt-missing")
+    assert any("no reachable evaluation root" in e
+               for e in validate_event_chain([orphan]))
+
+    # duplicate evaluation identity creating ambiguous lineage.
+    dup = [_root_event("evt-A", A), _root_event("evt-A", B)]
+    assert any("duplicate event_id" in e for e in validate_event_chain(dup))
+
+
+# ---------------------------------------------------------------------------
+# Task identity consistency (M-R3V-02)
+# ---------------------------------------------------------------------------
+
+def test_nested_decision_ref_task_ref_reuses_the_no_whitespace_grammar():
+    schema = _schema()
+    # both event.task_ref and decision_ref.task_ref reference the ONE taskRef def.
+    assert schema["properties"]["task_ref"]["$ref"] == "#/$defs/taskRef"
+    assert schema["properties"]["decision_ref"]["properties"]["task_ref"]["$ref"] == (
+        "#/$defs/taskRef"
+    )
+    assert (schema["properties"]["override"]["properties"]["replacement_decision_ref"]
+            ["properties"]["task_ref"]["$ref"] == "#/$defs/taskRef")
+    validator = _validator()
+    for bad in ("task-A\n", "task-A\t", "task A", "task/A", " taskA"):
+        inst = {**_base_envelope("CHANGEGATE_MERGE_ATTEMPTED"),
+                "evaluation_event_ref": "evt-eval-1",
+                "decision_ref": _dref(task_ref=bad),
+                "outcome": {"status": "SUCCESS", "detail_code": "OK"}}
+        assert list(validator.iter_errors(inst)), f"nested task_ref accepted {bad!r}"
+
+
+def test_envelope_and_decision_task_equality_is_enforced():
+    # envelope task A / decision task B — schema-valid but identity-inconsistent.
+    validator = _validator()
+    inst = {**_base_envelope("CHANGEGATE_EVALUATION_COMPLETED"), "event_id": "evt-eval-1",
+            "task_ref": "task-A",
+            **_POSITIVE_EXTRAS["CHANGEGATE_EVALUATION_COMPLETED"]}
+    inst["decision_ref"] = _dref(task_ref="task-B")
+    assert not list(validator.iter_errors(inst)), "schema shape is still valid"
+    assert any("envelope task_ref" in e for e in validate_event_chain([inst]))
+
+
+def test_candidate_subject_digest_must_match_decision_candidate_digest():
+    inst = {**_base_envelope("CHANGEGATE_EVALUATION_COMPLETED"), "event_id": "evt-eval-1",
+            **_POSITIVE_EXTRAS["CHANGEGATE_EVALUATION_COMPLETED"]}
+    inst["subject_ref"] = {"namespace": "changegate", "kind": "git_candidate",
+                           "value": "cand-1", "digest": canonical_digest({"c": "other"})}
+    assert any("subject_ref.digest" in e for e in validate_event_chain([inst]))
 
 
 # ---------------------------------------------------------------------------
@@ -1230,7 +1522,7 @@ def test_no_artifact_contains_secret_material():
 
 def test_golden_fixture_is_valid_json_with_version_and_status():
     suite = _fixture()
-    assert suite["schema_version"] == "changegate-merge-eligibility-golden.v4"
+    assert suite["schema_version"] == "changegate-merge-eligibility-golden.v5"
     assert suite["status"] == "DRAFT_FOR_OWNER_REVIEW"
     assert suite["policy_spec"] == (
         "docs/strategy/CHANGEGATE_VERTICAL_MVP_SLICE_1_POLICY_SPEC.md"
@@ -1592,7 +1884,8 @@ def test_replay_3_4_trace_and_privacy_metadata_never_change_decision_or_record()
 
 
 @pytest.mark.parametrize("field", [
-    "repository_snapshot_digest", "verification_bundle_digest", "approval_digest",
+    "repository_snapshot_digest", "verification_bundle_digest",
+    "approval_digest_or_sentinel",
     "authority_binding_digest", "verifier_binding_digest", "task_contract_digest",
     "candidate_digest", "policy_digest",
 ])
@@ -1607,7 +1900,7 @@ def test_replay_5_to_8_every_source_digest_changes_decision_and_record(field):
 def test_replay_7_no_approval_sentinel_changes_decision_and_record():
     bindings, facts, mapping = _green()
     d0, r0 = _digests(bindings, facts, mapping)
-    without = {**bindings, "approval_digest": NO_APPROVAL_SENTINEL}
+    without = {**bindings, "approval_digest_or_sentinel": NO_APPROVAL_SENTINEL}
     d1, r1 = _digests(without, facts, mapping)
     assert d1 != d0 and r1 != r0
 
@@ -1982,29 +2275,10 @@ _METADATA_ONLY_FORBIDDEN = {
 
 
 def semantic_fingerprint(suite: dict) -> str:
-    """Deterministic fingerprint over the load-bearing semantic artifacts (§27.3). A
-    metadata-only acceptance patch must preserve it; any semantic change alters it."""
-    return canonical_digest({
-        "kind": "changegate.slice1a.semantic-fingerprint.v1",
-        "reason_code_taxonomy_and_ranks": sorted(
-            (e["code"], e["precedence_rank"], e["default_disposition"])
-            for e in suite["reason_codes"]
-        ),
-        "fact_state_mapping": suite["fact_state_mapping"],
-        "golden_expected_results": [
-            {
-                "case_id": c["case_id"],
-                "disposition": c["expected_disposition"],
-                "authority": c["expected_decision_authority"],
-                "primary": c["expected_primary_reason"],
-                "complete": c["expected_complete_reason_codes"],
-            }
-            for c in sorted(suite["cases"], key=lambda c: c["case_id"])
-        ],
-        "decision_authority_by_mode": suite["fact_state_mapping"]["decision_authority_by_mode"],
-        "identifier_universes": suite["identifier_universes"],
-        "digest_representation": suite["digest_representation"],
-    })
+    """The R4 fingerprint is the canonical digest of the COMPLETE machine manifest (§27.3);
+    the manifest binds every load-bearing semantic area. A metadata-only acceptance patch
+    preserves it; any semantic change alters it."""
+    return canonical_digest(suite["slice_1a_semantic_manifest"])
 
 
 def test_acceptance_governance_declares_allowed_and_forbidden_sets():
@@ -2034,43 +2308,192 @@ def test_acceptance_governance_declares_allowed_and_forbidden_sets():
     assert "fresh independent adversarial reverification" in s10
 
 
+# ---------------------------------------------------------------------------
+# Semantic manifest — the complete manifest binds the executable artifacts (H-R3V-02)
+# ---------------------------------------------------------------------------
+
+def test_semantic_manifest_binds_every_load_bearing_area():
+    suite = _fixture()
+    m = suite["slice_1a_semantic_manifest"]
+    assert m["manifest_version"] == "changegate.slice1a.semantic-manifest.v1"
+    assert set(m) == {"manifest_version", "policy_semantics", "deterministic_identity",
+                      "replay", "event_semantics", "causal_semantics", "golden_semantics"}
+    # POLICY: taxonomy/ranks/dispositions match the reason_codes table.
+    ps = m["policy_semantics"]
+    assert ps["precedence_ranks"] == {
+        e["code"]: e["precedence_rank"] for e in suite["reason_codes"]
+    } == DRAFT_PRECEDENCE_PENDING_OD_S1A_007
+    assert ps["default_dispositions"] == DRAFT_DISPOSITION_BY_CODE
+    assert ps["fact_state_mapping"] == suite["fact_state_mapping"]
+    assert ps["canonical_digest_representation"] == suite["digest_representation"]
+    # DETERMINISTIC IDENTITY: the manifest's source-binding set == the test constant AND
+    # the executable builder's payload field order.
+    di = m["deterministic_identity"]
+    assert list(di["source_binding_field_set"]) == list(SOURCE_DIGEST_FIELDS)
+    assert di["approval_sentinel"] == NO_APPROVAL_SENTINEL
+    bindings, facts, mapping = _green()
+    record_payload = policy_record_payload(bindings, facts, mapping)
+    assert list(record_payload.keys()) == di["policy_record_payload_field_order"], (
+        "manifest payload field order must equal the executable builder's key order"
+    )
+    # EVENT SEMANTICS: schema digest, decision-ref required, override replacement required.
+    es = m["event_semantics"]
+    assert es["event_schema_digest"] == canonical_digest(_schema()), (
+        "manifest event_schema_digest must equal the digest of the actual event schema"
+    )
+    assert es["decision_ref_required_fields"] == _schema()["properties"]["decision_ref"]["required"]
+    assert es["override_replacement_required_fields"] == (
+        _schema()["properties"]["override"]["properties"]
+                 ["replacement_decision_ref"]["required"]
+    )
+    assert set(es["event_type_set"]) == set(EVENT_TYPES)
+    # CAUSAL SEMANTICS: lineage field set, multi-root support, control ids.
+    cs = m["causal_semantics"]
+    assert cs["multi_root_support"] is True
+    assert set(cs["lineage_field_set"]) == {
+        "task_ref", "candidate_digest", "decision_digest", "input_digest",
+        "policy_record_digest",
+    }
+    assert len(cs["causal_negative_control_ids"]) >= 16
+    # GOLDEN SEMANTICS: one entry per case, matching expectations.
+    gs = {g["case_id"]: g for g in m["golden_semantics"]}
+    assert set(gs) == {c["case_id"] for c in suite["cases"]}
+    for c in suite["cases"]:
+        g = gs[c["case_id"]]
+        assert g["disposition"] == c["expected_disposition"]
+        assert g["decision_authority"] == c["expected_decision_authority"]
+        assert g["primary_reason"] == c["expected_primary_reason"]
+        assert g["complete_reason_codes"] == c["expected_complete_reason_codes"]
+
+
 def test_semantic_fingerprint_is_stable_and_reproducible():
     suite = _fixture()
-    assert semantic_fingerprint(suite) == semantic_fingerprint(_fixture())
-    assert CANONICAL_DIGEST_RE.match(semantic_fingerprint(suite))
-    # the fingerprint components named in the spec/fixture match what we digest.
+    fp = semantic_fingerprint(suite)
+    assert fp == canonical_digest(suite["slice_1a_semantic_manifest"])
+    assert fp == semantic_fingerprint(_fixture())
+    assert CANONICAL_DIGEST_RE.match(fp)
     gov = suite["acceptance_governance"]
-    assert set(gov["semantic_fingerprint_components"]) == {
-        "reason_code_taxonomy_and_ranks", "fact_state_mapping",
-        "golden_expected_results", "decision_authority_by_mode",
-        "identifier_universes", "digest_representation",
-    }
+    assert gov["semantic_fingerprint_source"] == "slice_1a_semantic_manifest"
+    # the named components are exactly the manifest's semantic areas.
+    assert set(gov["semantic_fingerprint_components"]) == (
+        set(suite["slice_1a_semantic_manifest"]) - {"manifest_version"}
+    )
 
 
-def test_precedence_change_alters_the_semantic_fingerprint():
-    """A metadata acceptance patch must PRESERVE the fingerprint; a precedence swap (a
-    semantic change) alters it, so it can never be mislabeled as metadata-only."""
+def _fingerprint_after(mutate) -> tuple[str, str]:
+    """Return (baseline, mutated) fingerprints after applying `mutate` to a fixture copy.
+    Independent of any expected-fingerprint value stored in the object."""
     suite = _fixture()
     baseline = semantic_fingerprint(suite)
     mutated = copy.deepcopy(suite)
-    by = {e["code"]: e for e in mutated["reason_codes"]}
-    by["AUTHORITY_INVALID"]["precedence_rank"], by["EVIDENCE_TASK_MISMATCH"]["precedence_rank"] = (
-        by["EVIDENCE_TASK_MISMATCH"]["precedence_rank"],
-        by["AUTHORITY_INVALID"]["precedence_rank"],
-    )
-    assert semantic_fingerprint(mutated) != baseline, (
-        "a precedence swap must change the semantic fingerprint"
-    )
+    mutate(mutated)
+    return baseline, semantic_fingerprint(mutated)
+
+
+def test_fingerprint_changes_for_all_fourteen_forbidden_mutations():
+    m = "slice_1a_semantic_manifest"
+
+    def mut_precedence(s):
+        s[m]["policy_semantics"]["precedence_ranks"]["AUTHORITY_INVALID"] = 999
+
+    def mut_default_disposition(s):
+        s[m]["policy_semantics"]["default_dispositions"]["SCOPE_UNCERTAIN"] = "BLOCK"
+
+    def mut_golden_outcome(s):
+        s[m]["golden_semantics"][0]["disposition"] = "REVIEW_REQUIRED"
+
+    def mut_source_binding_set(s):
+        s[m]["deterministic_identity"]["source_binding_field_set"].append("extra_digest")
+
+    def mut_mep_input_fields(s):
+        s[m]["deterministic_identity"]["merge_eligibility_policy_input_fields"].append("x")
+
+    def mut_record_payload_order(s):
+        order = s[m]["deterministic_identity"]["policy_record_payload_field_order"]
+        order[1], order[2] = order[2], order[1]
+
+    def mut_replay_invariant(s):
+        s[m]["replay"]["replay_invariant_ids"].append("R11")
+
+    def mut_event_schema(s):
+        s[m]["event_semantics"]["event_schema_digest"] = canonical_digest({"x": "other"})
+
+    def mut_decision_ref_required(s):
+        s[m]["event_semantics"]["decision_ref_required_fields"].append("extra")
+
+    def mut_lineage_field_set(s):
+        s[m]["causal_semantics"]["lineage_field_set"].append("extra")
+
+    def mut_override_switch_rule(s):
+        s[m]["causal_semantics"]["override_lineage_switch_rule"] = "changed"
+
+    def mut_multi_root(s):
+        s[m]["causal_semantics"]["multi_root_support"] = False
+
+    def mut_authority_map(s):
+        s[m]["policy_semantics"]["decision_authority_by_mode"]["SHADOW"] = "AUTHORITATIVE"
+
+    def mut_digest_representation(s):
+        s[m]["policy_semantics"]["canonical_digest_representation"] = "hex64"
+
+    mutations = {
+        "1 precedence": mut_precedence,
+        "2 default disposition": mut_default_disposition,
+        "3 golden outcome": mut_golden_outcome,
+        "4 source-binding set": mut_source_binding_set,
+        "5 MEP input fields": mut_mep_input_fields,
+        "6 record payload order": mut_record_payload_order,
+        "7 replay invariant": mut_replay_invariant,
+        "8 event-schema behavior": mut_event_schema,
+        "9 decision-ref required": mut_decision_ref_required,
+        "10 causal lineage field set": mut_lineage_field_set,
+        "11 override-switch rule": mut_override_switch_rule,
+        "12 multi-root rule": mut_multi_root,
+        "13 decision-authority mapping": mut_authority_map,
+        "14 canonical digest representation": mut_digest_representation,
+    }
+    for name, mutate in mutations.items():
+        baseline, changed = _fingerprint_after(mutate)
+        assert changed != baseline, f"fingerprint unchanged for mutation {name}"
+
+
+def test_precedence_change_alters_the_semantic_fingerprint():
+    """A precedence swap in the manifest (the fingerprint's sole input) alters it, so a
+    precedence change can never be mislabeled as metadata-only."""
+    def swap(s):
+        ranks = s["slice_1a_semantic_manifest"]["policy_semantics"]["precedence_ranks"]
+        ranks["AUTHORITY_INVALID"], ranks["EVIDENCE_TASK_MISMATCH"] = (
+            ranks["EVIDENCE_TASK_MISMATCH"], ranks["AUTHORITY_INVALID"])
+    baseline, changed = _fingerprint_after(swap)
+    assert changed != baseline
 
 
 def test_metadata_only_change_preserves_the_semantic_fingerprint():
     """A document-status / acceptance-metadata change must NOT alter the fingerprint."""
-    suite = _fixture()
-    baseline = semantic_fingerprint(suite)
-    metadata_patched = copy.deepcopy(suite)
-    metadata_patched["status"] = "ACCEPTED_BY_OWNER"          # document status
-    metadata_patched["policy_version_ref"] = "accepted-2026-07-15"  # acceptance record
-    assert semantic_fingerprint(metadata_patched) == baseline
+    def metadata(s):
+        s["status"] = "ACCEPTED_BY_OWNER"
+        s["policy_version_ref"] = "accepted-2026-07-16"
+        s["acceptance_governance"]["exact_artifact_hash_contract"]["note"] = "recorded"
+    baseline, changed = _fingerprint_after(metadata)
+    assert changed == baseline
+
+
+def test_exact_artifact_hash_contract_is_declared_without_hardcoded_hashes():
+    gov = _fixture()["acceptance_governance"]
+    contract = gov["exact_artifact_hash_contract"]
+    assert set(contract["compared_files"]) == {
+        "data/schemas/changegate_evaluation_event_v1.schema.json",
+        "tests/build_harness/test_changegate_slice_1_spec_artifacts.py",
+    }
+    assert contract["future_hashes_hard_coded"] is False
+    # no 64-hex or sha256:-prefixed literal is stored as a "recorded" hash value.
+    blob = json.dumps(contract)
+    assert not re.search(r"sha256:[0-9a-f]{64}", blob)
+    assert not re.search(r"\b[0-9a-f]{64}\b", blob)
+    # spec §27.4 defines the comparison contract.
+    text = _spec_text()
+    assert "### 27.4 Exact-artifact no-semantic-change controls" in text
+    assert "does not hard-code any future verifier hash" in " ".join(text.split())
 
 
 # ---------------------------------------------------------------------------

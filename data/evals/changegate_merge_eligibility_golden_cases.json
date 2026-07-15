@@ -1,10 +1,10 @@
 {
   "suite_id": "changegate_merge_eligibility_golden_cases",
-  "schema_version": "changegate-merge-eligibility-golden.v4",
+  "schema_version": "changegate-merge-eligibility-golden.v5",
   "status": "DRAFT_FOR_OWNER_REVIEW",
-  "description": "Golden evaluation cases for the ChangeGate Slice 1 merge-eligibility policy (R3-hardened). evaluation_mode is single-sourced in policy_input_bindings (the A2 MergeEligibilityPolicyInput); it is NOT an EligibilityFact. The deterministic PolicyEvaluationRecord is reproducible from policy_input_bindings + policy_input_facts alone and carries no redaction_classification (that is application/trace metadata). Precedence, taxonomy, dispositions and authorities are byte-identical to v3; a change to any of those is a SEMANTIC patch (see acceptance_governance), not a metadata acceptance patch. No production evaluator exists yet.",
+  "description": "Golden evaluation cases for the ChangeGate Slice 1 merge-eligibility policy (R4-hardened). The approval binding is the single canonical field approval_digest_or_sentinel. slice_1a_semantic_manifest is the complete load-bearing semantic contract; semantic_fingerprint = canonical_digest(slice_1a_semantic_manifest). Policy semantics are byte-identical to v4; any change to a manifest area is a SEMANTIC patch (acceptance_governance), never a metadata acceptance patch. No production evaluator exists yet.",
   "policy_spec": "docs/strategy/CHANGEGATE_VERTICAL_MVP_SLICE_1_POLICY_SPEC.md",
-  "policy_version_ref": "changegate-merge-eligibility-policy.v4-draft",
+  "policy_version_ref": "changegate-merge-eligibility-policy.v5-draft",
   "event_schema": "data/schemas/changegate_evaluation_event_v1.schema.json",
   "dispositions": [
     "ELIGIBLE_TO_MERGE_UNDER_POLICY",
@@ -389,7 +389,7 @@
         "candidate_digest": "sha256:d54b4b5d5c4d6f694e5e24a90e1199cbb6047c5b182f4defae537da0b3dd5246",
         "repository_snapshot_digest": "sha256:d60ff0950c57275a542f9fea6f259fb6fb4d0f96582d164cb94eb16f508f9104",
         "verification_bundle_digest": "sha256:9305cc24dcc296e5fb5ed85bd0e82c2707f0a7d3642841ea9366aa384b5d8f78",
-        "approval_digest": "sha256:007dfeb478183fbe4bee118d33a76b3cb0678a0d02bd6a33dcef33896b0465bb",
+        "approval_digest_or_sentinel": "sha256:007dfeb478183fbe4bee118d33a76b3cb0678a0d02bd6a33dcef33896b0465bb",
         "authority_binding_digest": "sha256:dd2150d35050a6e7d59c7642e67e583e44392df0eea2e30b3539cf1843ee46b9",
         "verifier_binding_digest": "sha256:efe616a1d165ab728aebb15a6aa1e2d4d30ef01bf339f4cf9c25f293147634ee",
         "policy_digest": "sha256:88304ee85d7d10c2124d75b0de11cb8d8f91a8707945cabc651c0cbdedc71934",
@@ -467,7 +467,7 @@
         "candidate_digest": "sha256:d54b4b5d5c4d6f694e5e24a90e1199cbb6047c5b182f4defae537da0b3dd5246",
         "repository_snapshot_digest": "sha256:d60ff0950c57275a542f9fea6f259fb6fb4d0f96582d164cb94eb16f508f9104",
         "verification_bundle_digest": "sha256:363f760f208bcbd31b7fa3c916434a73f64ba21bf4945528be39967e0c47bcfd",
-        "approval_digest": "sha256:007dfeb478183fbe4bee118d33a76b3cb0678a0d02bd6a33dcef33896b0465bb",
+        "approval_digest_or_sentinel": "sha256:007dfeb478183fbe4bee118d33a76b3cb0678a0d02bd6a33dcef33896b0465bb",
         "authority_binding_digest": "sha256:dd2150d35050a6e7d59c7642e67e583e44392df0eea2e30b3539cf1843ee46b9",
         "verifier_binding_digest": "sha256:efe616a1d165ab728aebb15a6aa1e2d4d30ef01bf339f4cf9c25f293147634ee",
         "policy_digest": "sha256:88304ee85d7d10c2124d75b0de11cb8d8f91a8707945cabc651c0cbdedc71934",
@@ -547,7 +547,7 @@
         "candidate_digest": "sha256:d54b4b5d5c4d6f694e5e24a90e1199cbb6047c5b182f4defae537da0b3dd5246",
         "repository_snapshot_digest": "sha256:d60ff0950c57275a542f9fea6f259fb6fb4d0f96582d164cb94eb16f508f9104",
         "verification_bundle_digest": "sha256:e4da9d0ff8b02479a1ee89c45b15d9fda861681808f484f85ec9aa1675b6009d",
-        "approval_digest": "sha256:007dfeb478183fbe4bee118d33a76b3cb0678a0d02bd6a33dcef33896b0465bb",
+        "approval_digest_or_sentinel": "sha256:007dfeb478183fbe4bee118d33a76b3cb0678a0d02bd6a33dcef33896b0465bb",
         "authority_binding_digest": "sha256:dd2150d35050a6e7d59c7642e67e583e44392df0eea2e30b3539cf1843ee46b9",
         "verifier_binding_digest": "sha256:efe616a1d165ab728aebb15a6aa1e2d4d30ef01bf339f4cf9c25f293147634ee",
         "policy_digest": "sha256:88304ee85d7d10c2124d75b0de11cb8d8f91a8707945cabc651c0cbdedc71934",
@@ -628,7 +628,7 @@
         "candidate_digest": "sha256:d54b4b5d5c4d6f694e5e24a90e1199cbb6047c5b182f4defae537da0b3dd5246",
         "repository_snapshot_digest": "sha256:d60ff0950c57275a542f9fea6f259fb6fb4d0f96582d164cb94eb16f508f9104",
         "verification_bundle_digest": "sha256:484ce88f5a4c75e1931fcfbc839939847346e9239e3ea2666d9a5dc95b30e55c",
-        "approval_digest": "sha256:007dfeb478183fbe4bee118d33a76b3cb0678a0d02bd6a33dcef33896b0465bb",
+        "approval_digest_or_sentinel": "sha256:007dfeb478183fbe4bee118d33a76b3cb0678a0d02bd6a33dcef33896b0465bb",
         "authority_binding_digest": "sha256:dd2150d35050a6e7d59c7642e67e583e44392df0eea2e30b3539cf1843ee46b9",
         "verifier_binding_digest": "sha256:efe616a1d165ab728aebb15a6aa1e2d4d30ef01bf339f4cf9c25f293147634ee",
         "policy_digest": "sha256:88304ee85d7d10c2124d75b0de11cb8d8f91a8707945cabc651c0cbdedc71934",
@@ -711,7 +711,7 @@
         "candidate_digest": "sha256:d54b4b5d5c4d6f694e5e24a90e1199cbb6047c5b182f4defae537da0b3dd5246",
         "repository_snapshot_digest": "sha256:d60ff0950c57275a542f9fea6f259fb6fb4d0f96582d164cb94eb16f508f9104",
         "verification_bundle_digest": "sha256:62bad2e45f91d9a5db1c99b3b0eba3f26117694bce2dde30cc362e405ada65d5",
-        "approval_digest": "sha256:007dfeb478183fbe4bee118d33a76b3cb0678a0d02bd6a33dcef33896b0465bb",
+        "approval_digest_or_sentinel": "sha256:007dfeb478183fbe4bee118d33a76b3cb0678a0d02bd6a33dcef33896b0465bb",
         "authority_binding_digest": "sha256:dd2150d35050a6e7d59c7642e67e583e44392df0eea2e30b3539cf1843ee46b9",
         "verifier_binding_digest": "sha256:efe616a1d165ab728aebb15a6aa1e2d4d30ef01bf339f4cf9c25f293147634ee",
         "policy_digest": "sha256:88304ee85d7d10c2124d75b0de11cb8d8f91a8707945cabc651c0cbdedc71934",
@@ -794,7 +794,7 @@
         "candidate_digest": "sha256:d54b4b5d5c4d6f694e5e24a90e1199cbb6047c5b182f4defae537da0b3dd5246",
         "repository_snapshot_digest": "sha256:d60ff0950c57275a542f9fea6f259fb6fb4d0f96582d164cb94eb16f508f9104",
         "verification_bundle_digest": "sha256:f90e9eea9994347dc59e7f761e4ad9b3bdf0d9a1bacd4cc9dd29c445469f2285",
-        "approval_digest": "sha256:007dfeb478183fbe4bee118d33a76b3cb0678a0d02bd6a33dcef33896b0465bb",
+        "approval_digest_or_sentinel": "sha256:007dfeb478183fbe4bee118d33a76b3cb0678a0d02bd6a33dcef33896b0465bb",
         "authority_binding_digest": "sha256:dd2150d35050a6e7d59c7642e67e583e44392df0eea2e30b3539cf1843ee46b9",
         "verifier_binding_digest": "sha256:efe616a1d165ab728aebb15a6aa1e2d4d30ef01bf339f4cf9c25f293147634ee",
         "policy_digest": "sha256:88304ee85d7d10c2124d75b0de11cb8d8f91a8707945cabc651c0cbdedc71934",
@@ -877,7 +877,7 @@
         "candidate_digest": "sha256:d54b4b5d5c4d6f694e5e24a90e1199cbb6047c5b182f4defae537da0b3dd5246",
         "repository_snapshot_digest": "sha256:d60ff0950c57275a542f9fea6f259fb6fb4d0f96582d164cb94eb16f508f9104",
         "verification_bundle_digest": "sha256:f343410a2932de636d259b6c42cea2b5fdec03b224371a184353db5c70d5dac4",
-        "approval_digest": "sha256:007dfeb478183fbe4bee118d33a76b3cb0678a0d02bd6a33dcef33896b0465bb",
+        "approval_digest_or_sentinel": "sha256:007dfeb478183fbe4bee118d33a76b3cb0678a0d02bd6a33dcef33896b0465bb",
         "authority_binding_digest": "sha256:dd2150d35050a6e7d59c7642e67e583e44392df0eea2e30b3539cf1843ee46b9",
         "verifier_binding_digest": "sha256:efe616a1d165ab728aebb15a6aa1e2d4d30ef01bf339f4cf9c25f293147634ee",
         "policy_digest": "sha256:88304ee85d7d10c2124d75b0de11cb8d8f91a8707945cabc651c0cbdedc71934",
@@ -960,7 +960,7 @@
         "candidate_digest": "sha256:d54b4b5d5c4d6f694e5e24a90e1199cbb6047c5b182f4defae537da0b3dd5246",
         "repository_snapshot_digest": "sha256:c023515055a91eec5d394bc7fba92115d2938c85eb7b3ad62661d6e76a50f9df",
         "verification_bundle_digest": "sha256:9305cc24dcc296e5fb5ed85bd0e82c2707f0a7d3642841ea9366aa384b5d8f78",
-        "approval_digest": "sha256:007dfeb478183fbe4bee118d33a76b3cb0678a0d02bd6a33dcef33896b0465bb",
+        "approval_digest_or_sentinel": "sha256:007dfeb478183fbe4bee118d33a76b3cb0678a0d02bd6a33dcef33896b0465bb",
         "authority_binding_digest": "sha256:dd2150d35050a6e7d59c7642e67e583e44392df0eea2e30b3539cf1843ee46b9",
         "verifier_binding_digest": "sha256:efe616a1d165ab728aebb15a6aa1e2d4d30ef01bf339f4cf9c25f293147634ee",
         "policy_digest": "sha256:88304ee85d7d10c2124d75b0de11cb8d8f91a8707945cabc651c0cbdedc71934",
@@ -1040,7 +1040,7 @@
         "candidate_digest": "sha256:d54b4b5d5c4d6f694e5e24a90e1199cbb6047c5b182f4defae537da0b3dd5246",
         "repository_snapshot_digest": "sha256:cebbf322fb9025d75bd397956091437d3dfc3e91439ef9b75823d9248f67c1f4",
         "verification_bundle_digest": "sha256:9305cc24dcc296e5fb5ed85bd0e82c2707f0a7d3642841ea9366aa384b5d8f78",
-        "approval_digest": "sha256:007dfeb478183fbe4bee118d33a76b3cb0678a0d02bd6a33dcef33896b0465bb",
+        "approval_digest_or_sentinel": "sha256:007dfeb478183fbe4bee118d33a76b3cb0678a0d02bd6a33dcef33896b0465bb",
         "authority_binding_digest": "sha256:dd2150d35050a6e7d59c7642e67e583e44392df0eea2e30b3539cf1843ee46b9",
         "verifier_binding_digest": "sha256:efe616a1d165ab728aebb15a6aa1e2d4d30ef01bf339f4cf9c25f293147634ee",
         "policy_digest": "sha256:88304ee85d7d10c2124d75b0de11cb8d8f91a8707945cabc651c0cbdedc71934",
@@ -1120,7 +1120,7 @@
         "candidate_digest": "sha256:d54b4b5d5c4d6f694e5e24a90e1199cbb6047c5b182f4defae537da0b3dd5246",
         "repository_snapshot_digest": "sha256:7fbc681798865ba3a9ca9f1382d3082388904e0132816e698677acf74cabc7c8",
         "verification_bundle_digest": "sha256:9305cc24dcc296e5fb5ed85bd0e82c2707f0a7d3642841ea9366aa384b5d8f78",
-        "approval_digest": "sha256:007dfeb478183fbe4bee118d33a76b3cb0678a0d02bd6a33dcef33896b0465bb",
+        "approval_digest_or_sentinel": "sha256:007dfeb478183fbe4bee118d33a76b3cb0678a0d02bd6a33dcef33896b0465bb",
         "authority_binding_digest": "sha256:dd2150d35050a6e7d59c7642e67e583e44392df0eea2e30b3539cf1843ee46b9",
         "verifier_binding_digest": "sha256:efe616a1d165ab728aebb15a6aa1e2d4d30ef01bf339f4cf9c25f293147634ee",
         "policy_digest": "sha256:88304ee85d7d10c2124d75b0de11cb8d8f91a8707945cabc651c0cbdedc71934",
@@ -1200,7 +1200,7 @@
         "candidate_digest": "sha256:d54b4b5d5c4d6f694e5e24a90e1199cbb6047c5b182f4defae537da0b3dd5246",
         "repository_snapshot_digest": "sha256:d60ff0950c57275a542f9fea6f259fb6fb4d0f96582d164cb94eb16f508f9104",
         "verification_bundle_digest": "sha256:9305cc24dcc296e5fb5ed85bd0e82c2707f0a7d3642841ea9366aa384b5d8f78",
-        "approval_digest": "sha256:007dfeb478183fbe4bee118d33a76b3cb0678a0d02bd6a33dcef33896b0465bb",
+        "approval_digest_or_sentinel": "sha256:007dfeb478183fbe4bee118d33a76b3cb0678a0d02bd6a33dcef33896b0465bb",
         "authority_binding_digest": "sha256:dd2150d35050a6e7d59c7642e67e583e44392df0eea2e30b3539cf1843ee46b9",
         "verifier_binding_digest": "sha256:efe616a1d165ab728aebb15a6aa1e2d4d30ef01bf339f4cf9c25f293147634ee",
         "policy_digest": "sha256:88304ee85d7d10c2124d75b0de11cb8d8f91a8707945cabc651c0cbdedc71934",
@@ -1280,7 +1280,7 @@
         "candidate_digest": "sha256:d54b4b5d5c4d6f694e5e24a90e1199cbb6047c5b182f4defae537da0b3dd5246",
         "repository_snapshot_digest": "sha256:d60ff0950c57275a542f9fea6f259fb6fb4d0f96582d164cb94eb16f508f9104",
         "verification_bundle_digest": "sha256:9305cc24dcc296e5fb5ed85bd0e82c2707f0a7d3642841ea9366aa384b5d8f78",
-        "approval_digest": "sha256:007dfeb478183fbe4bee118d33a76b3cb0678a0d02bd6a33dcef33896b0465bb",
+        "approval_digest_or_sentinel": "sha256:007dfeb478183fbe4bee118d33a76b3cb0678a0d02bd6a33dcef33896b0465bb",
         "authority_binding_digest": "sha256:dd2150d35050a6e7d59c7642e67e583e44392df0eea2e30b3539cf1843ee46b9",
         "verifier_binding_digest": "sha256:efe616a1d165ab728aebb15a6aa1e2d4d30ef01bf339f4cf9c25f293147634ee",
         "policy_digest": "sha256:88304ee85d7d10c2124d75b0de11cb8d8f91a8707945cabc651c0cbdedc71934",
@@ -1360,7 +1360,7 @@
         "candidate_digest": "sha256:d54b4b5d5c4d6f694e5e24a90e1199cbb6047c5b182f4defae537da0b3dd5246",
         "repository_snapshot_digest": "sha256:d60ff0950c57275a542f9fea6f259fb6fb4d0f96582d164cb94eb16f508f9104",
         "verification_bundle_digest": "sha256:9305cc24dcc296e5fb5ed85bd0e82c2707f0a7d3642841ea9366aa384b5d8f78",
-        "approval_digest": "NO_APPROVAL_SUPPLIED",
+        "approval_digest_or_sentinel": "NO_APPROVAL_SUPPLIED",
         "authority_binding_digest": "sha256:dd2150d35050a6e7d59c7642e67e583e44392df0eea2e30b3539cf1843ee46b9",
         "verifier_binding_digest": "sha256:efe616a1d165ab728aebb15a6aa1e2d4d30ef01bf339f4cf9c25f293147634ee",
         "policy_digest": "sha256:88304ee85d7d10c2124d75b0de11cb8d8f91a8707945cabc651c0cbdedc71934",
@@ -1442,7 +1442,7 @@
         "candidate_digest": "sha256:d54b4b5d5c4d6f694e5e24a90e1199cbb6047c5b182f4defae537da0b3dd5246",
         "repository_snapshot_digest": "sha256:d60ff0950c57275a542f9fea6f259fb6fb4d0f96582d164cb94eb16f508f9104",
         "verification_bundle_digest": "sha256:9305cc24dcc296e5fb5ed85bd0e82c2707f0a7d3642841ea9366aa384b5d8f78",
-        "approval_digest": "sha256:1fc9a8612c9d0986a15be18b36440e65f86685b45f3eb207dc6d8be62e855d43",
+        "approval_digest_or_sentinel": "sha256:1fc9a8612c9d0986a15be18b36440e65f86685b45f3eb207dc6d8be62e855d43",
         "authority_binding_digest": "sha256:dd2150d35050a6e7d59c7642e67e583e44392df0eea2e30b3539cf1843ee46b9",
         "verifier_binding_digest": "sha256:efe616a1d165ab728aebb15a6aa1e2d4d30ef01bf339f4cf9c25f293147634ee",
         "policy_digest": "sha256:88304ee85d7d10c2124d75b0de11cb8d8f91a8707945cabc651c0cbdedc71934",
@@ -1524,7 +1524,7 @@
         "candidate_digest": "sha256:d54b4b5d5c4d6f694e5e24a90e1199cbb6047c5b182f4defae537da0b3dd5246",
         "repository_snapshot_digest": "sha256:d60ff0950c57275a542f9fea6f259fb6fb4d0f96582d164cb94eb16f508f9104",
         "verification_bundle_digest": "sha256:9305cc24dcc296e5fb5ed85bd0e82c2707f0a7d3642841ea9366aa384b5d8f78",
-        "approval_digest": "sha256:007dfeb478183fbe4bee118d33a76b3cb0678a0d02bd6a33dcef33896b0465bb",
+        "approval_digest_or_sentinel": "sha256:007dfeb478183fbe4bee118d33a76b3cb0678a0d02bd6a33dcef33896b0465bb",
         "authority_binding_digest": "sha256:ca6cab898094a769c634d5d369f2f54da6af6f165fde5db38590afbb6b7c295b",
         "verifier_binding_digest": "sha256:efe616a1d165ab728aebb15a6aa1e2d4d30ef01bf339f4cf9c25f293147634ee",
         "policy_digest": "sha256:88304ee85d7d10c2124d75b0de11cb8d8f91a8707945cabc651c0cbdedc71934",
@@ -1604,7 +1604,7 @@
         "candidate_digest": "sha256:d54b4b5d5c4d6f694e5e24a90e1199cbb6047c5b182f4defae537da0b3dd5246",
         "repository_snapshot_digest": "sha256:d60ff0950c57275a542f9fea6f259fb6fb4d0f96582d164cb94eb16f508f9104",
         "verification_bundle_digest": "sha256:9305cc24dcc296e5fb5ed85bd0e82c2707f0a7d3642841ea9366aa384b5d8f78",
-        "approval_digest": "sha256:007dfeb478183fbe4bee118d33a76b3cb0678a0d02bd6a33dcef33896b0465bb",
+        "approval_digest_or_sentinel": "sha256:007dfeb478183fbe4bee118d33a76b3cb0678a0d02bd6a33dcef33896b0465bb",
         "authority_binding_digest": "sha256:dd2150d35050a6e7d59c7642e67e583e44392df0eea2e30b3539cf1843ee46b9",
         "verifier_binding_digest": "sha256:4e68df79bb7d9ed8166509f49770ea0a0007d92fac431eb165c6b3dd6c53b93b",
         "policy_digest": "sha256:88304ee85d7d10c2124d75b0de11cb8d8f91a8707945cabc651c0cbdedc71934",
@@ -1684,7 +1684,7 @@
         "candidate_digest": "sha256:d54b4b5d5c4d6f694e5e24a90e1199cbb6047c5b182f4defae537da0b3dd5246",
         "repository_snapshot_digest": "sha256:d60ff0950c57275a542f9fea6f259fb6fb4d0f96582d164cb94eb16f508f9104",
         "verification_bundle_digest": "sha256:9305cc24dcc296e5fb5ed85bd0e82c2707f0a7d3642841ea9366aa384b5d8f78",
-        "approval_digest": "sha256:007dfeb478183fbe4bee118d33a76b3cb0678a0d02bd6a33dcef33896b0465bb",
+        "approval_digest_or_sentinel": "sha256:007dfeb478183fbe4bee118d33a76b3cb0678a0d02bd6a33dcef33896b0465bb",
         "authority_binding_digest": "sha256:dd2150d35050a6e7d59c7642e67e583e44392df0eea2e30b3539cf1843ee46b9",
         "verifier_binding_digest": "sha256:bc3f8a5f0f40e6987a82abf73e39d2173fc2566948ee18ac08e2adf5a1c2bbfb",
         "policy_digest": "sha256:88304ee85d7d10c2124d75b0de11cb8d8f91a8707945cabc651c0cbdedc71934",
@@ -1766,7 +1766,7 @@
         "candidate_digest": "sha256:d54b4b5d5c4d6f694e5e24a90e1199cbb6047c5b182f4defae537da0b3dd5246",
         "repository_snapshot_digest": "sha256:d60ff0950c57275a542f9fea6f259fb6fb4d0f96582d164cb94eb16f508f9104",
         "verification_bundle_digest": "sha256:9305cc24dcc296e5fb5ed85bd0e82c2707f0a7d3642841ea9366aa384b5d8f78",
-        "approval_digest": "sha256:007dfeb478183fbe4bee118d33a76b3cb0678a0d02bd6a33dcef33896b0465bb",
+        "approval_digest_or_sentinel": "sha256:007dfeb478183fbe4bee118d33a76b3cb0678a0d02bd6a33dcef33896b0465bb",
         "authority_binding_digest": "sha256:dd2150d35050a6e7d59c7642e67e583e44392df0eea2e30b3539cf1843ee46b9",
         "verifier_binding_digest": "sha256:efe616a1d165ab728aebb15a6aa1e2d4d30ef01bf339f4cf9c25f293147634ee",
         "policy_digest": "sha256:9b2460a983b6b8222da7d2bd0fc344891a75468fe87f41064f817cdd94bcac48",
@@ -1847,7 +1847,7 @@
         "candidate_digest": "sha256:d54b4b5d5c4d6f694e5e24a90e1199cbb6047c5b182f4defae537da0b3dd5246",
         "repository_snapshot_digest": "sha256:d60ff0950c57275a542f9fea6f259fb6fb4d0f96582d164cb94eb16f508f9104",
         "verification_bundle_digest": "sha256:9305cc24dcc296e5fb5ed85bd0e82c2707f0a7d3642841ea9366aa384b5d8f78",
-        "approval_digest": "sha256:007dfeb478183fbe4bee118d33a76b3cb0678a0d02bd6a33dcef33896b0465bb",
+        "approval_digest_or_sentinel": "sha256:007dfeb478183fbe4bee118d33a76b3cb0678a0d02bd6a33dcef33896b0465bb",
         "authority_binding_digest": "sha256:dd2150d35050a6e7d59c7642e67e583e44392df0eea2e30b3539cf1843ee46b9",
         "verifier_binding_digest": "sha256:efe616a1d165ab728aebb15a6aa1e2d4d30ef01bf339f4cf9c25f293147634ee",
         "policy_digest": "sha256:88304ee85d7d10c2124d75b0de11cb8d8f91a8707945cabc651c0cbdedc71934",
@@ -1927,7 +1927,7 @@
         "candidate_digest": "sha256:d54b4b5d5c4d6f694e5e24a90e1199cbb6047c5b182f4defae537da0b3dd5246",
         "repository_snapshot_digest": "sha256:d60ff0950c57275a542f9fea6f259fb6fb4d0f96582d164cb94eb16f508f9104",
         "verification_bundle_digest": "sha256:363f760f208bcbd31b7fa3c916434a73f64ba21bf4945528be39967e0c47bcfd",
-        "approval_digest": "NO_APPROVAL_SUPPLIED",
+        "approval_digest_or_sentinel": "NO_APPROVAL_SUPPLIED",
         "authority_binding_digest": "sha256:dd2150d35050a6e7d59c7642e67e583e44392df0eea2e30b3539cf1843ee46b9",
         "verifier_binding_digest": "sha256:efe616a1d165ab728aebb15a6aa1e2d4d30ef01bf339f4cf9c25f293147634ee",
         "policy_digest": "sha256:88304ee85d7d10c2124d75b0de11cb8d8f91a8707945cabc651c0cbdedc71934",
@@ -2000,7 +2000,7 @@
         "candidate_digest": "sha256:d54b4b5d5c4d6f694e5e24a90e1199cbb6047c5b182f4defae537da0b3dd5246",
         "repository_snapshot_digest": "sha256:7fbc681798865ba3a9ca9f1382d3082388904e0132816e698677acf74cabc7c8",
         "verification_bundle_digest": "sha256:484ce88f5a4c75e1931fcfbc839939847346e9239e3ea2666d9a5dc95b30e55c",
-        "approval_digest": "NO_APPROVAL_SUPPLIED",
+        "approval_digest_or_sentinel": "NO_APPROVAL_SUPPLIED",
         "authority_binding_digest": "sha256:dd2150d35050a6e7d59c7642e67e583e44392df0eea2e30b3539cf1843ee46b9",
         "verifier_binding_digest": "sha256:efe616a1d165ab728aebb15a6aa1e2d4d30ef01bf339f4cf9c25f293147634ee",
         "policy_digest": "sha256:88304ee85d7d10c2124d75b0de11cb8d8f91a8707945cabc651c0cbdedc71934",
@@ -2089,7 +2089,7 @@
         "candidate_digest": "sha256:d54b4b5d5c4d6f694e5e24a90e1199cbb6047c5b182f4defae537da0b3dd5246",
         "repository_snapshot_digest": "sha256:7fbc681798865ba3a9ca9f1382d3082388904e0132816e698677acf74cabc7c8",
         "verification_bundle_digest": "sha256:9305cc24dcc296e5fb5ed85bd0e82c2707f0a7d3642841ea9366aa384b5d8f78",
-        "approval_digest": "sha256:007dfeb478183fbe4bee118d33a76b3cb0678a0d02bd6a33dcef33896b0465bb",
+        "approval_digest_or_sentinel": "sha256:007dfeb478183fbe4bee118d33a76b3cb0678a0d02bd6a33dcef33896b0465bb",
         "authority_binding_digest": "sha256:dd2150d35050a6e7d59c7642e67e583e44392df0eea2e30b3539cf1843ee46b9",
         "verifier_binding_digest": "sha256:efe616a1d165ab728aebb15a6aa1e2d4d30ef01bf339f4cf9c25f293147634ee",
         "policy_digest": "sha256:88304ee85d7d10c2124d75b0de11cb8d8f91a8707945cabc651c0cbdedc71934",
@@ -2170,7 +2170,7 @@
         "candidate_digest": "sha256:d54b4b5d5c4d6f694e5e24a90e1199cbb6047c5b182f4defae537da0b3dd5246",
         "repository_snapshot_digest": "sha256:d60ff0950c57275a542f9fea6f259fb6fb4d0f96582d164cb94eb16f508f9104",
         "verification_bundle_digest": "sha256:9305cc24dcc296e5fb5ed85bd0e82c2707f0a7d3642841ea9366aa384b5d8f78",
-        "approval_digest": "sha256:1fc9a8612c9d0986a15be18b36440e65f86685b45f3eb207dc6d8be62e855d43",
+        "approval_digest_or_sentinel": "sha256:1fc9a8612c9d0986a15be18b36440e65f86685b45f3eb207dc6d8be62e855d43",
         "authority_binding_digest": "sha256:dd2150d35050a6e7d59c7642e67e583e44392df0eea2e30b3539cf1843ee46b9",
         "verifier_binding_digest": "sha256:efe616a1d165ab728aebb15a6aa1e2d4d30ef01bf339f4cf9c25f293147634ee",
         "policy_digest": "sha256:88304ee85d7d10c2124d75b0de11cb8d8f91a8707945cabc651c0cbdedc71934",
@@ -2253,7 +2253,7 @@
         "candidate_digest": "sha256:d54b4b5d5c4d6f694e5e24a90e1199cbb6047c5b182f4defae537da0b3dd5246",
         "repository_snapshot_digest": "sha256:d60ff0950c57275a542f9fea6f259fb6fb4d0f96582d164cb94eb16f508f9104",
         "verification_bundle_digest": "sha256:9305cc24dcc296e5fb5ed85bd0e82c2707f0a7d3642841ea9366aa384b5d8f78",
-        "approval_digest": "sha256:007dfeb478183fbe4bee118d33a76b3cb0678a0d02bd6a33dcef33896b0465bb",
+        "approval_digest_or_sentinel": "sha256:007dfeb478183fbe4bee118d33a76b3cb0678a0d02bd6a33dcef33896b0465bb",
         "authority_binding_digest": "sha256:ca6cab898094a769c634d5d369f2f54da6af6f165fde5db38590afbb6b7c295b",
         "verifier_binding_digest": "sha256:efe616a1d165ab728aebb15a6aa1e2d4d30ef01bf339f4cf9c25f293147634ee",
         "policy_digest": "sha256:88304ee85d7d10c2124d75b0de11cb8d8f91a8707945cabc651c0cbdedc71934",
@@ -2334,7 +2334,7 @@
         "candidate_digest": "sha256:d54b4b5d5c4d6f694e5e24a90e1199cbb6047c5b182f4defae537da0b3dd5246",
         "repository_snapshot_digest": "sha256:d60ff0950c57275a542f9fea6f259fb6fb4d0f96582d164cb94eb16f508f9104",
         "verification_bundle_digest": "sha256:9305cc24dcc296e5fb5ed85bd0e82c2707f0a7d3642841ea9366aa384b5d8f78",
-        "approval_digest": "sha256:007dfeb478183fbe4bee118d33a76b3cb0678a0d02bd6a33dcef33896b0465bb",
+        "approval_digest_or_sentinel": "sha256:007dfeb478183fbe4bee118d33a76b3cb0678a0d02bd6a33dcef33896b0465bb",
         "authority_binding_digest": "sha256:dd2150d35050a6e7d59c7642e67e583e44392df0eea2e30b3539cf1843ee46b9",
         "verifier_binding_digest": "sha256:efe616a1d165ab728aebb15a6aa1e2d4d30ef01bf339f4cf9c25f293147634ee",
         "policy_digest": "sha256:88304ee85d7d10c2124d75b0de11cb8d8f91a8707945cabc651c0cbdedc71934",
@@ -2419,7 +2419,7 @@
         "candidate_digest": "sha256:d54b4b5d5c4d6f694e5e24a90e1199cbb6047c5b182f4defae537da0b3dd5246",
         "repository_snapshot_digest": "sha256:d60ff0950c57275a542f9fea6f259fb6fb4d0f96582d164cb94eb16f508f9104",
         "verification_bundle_digest": "sha256:5c4c52f2bcb2c63d3beeac6abe54d1400f171d1ccbc04cfd08f24ae78de121a6",
-        "approval_digest": "sha256:007dfeb478183fbe4bee118d33a76b3cb0678a0d02bd6a33dcef33896b0465bb",
+        "approval_digest_or_sentinel": "sha256:007dfeb478183fbe4bee118d33a76b3cb0678a0d02bd6a33dcef33896b0465bb",
         "authority_binding_digest": "sha256:dd2150d35050a6e7d59c7642e67e583e44392df0eea2e30b3539cf1843ee46b9",
         "verifier_binding_digest": "sha256:efe616a1d165ab728aebb15a6aa1e2d4d30ef01bf339f4cf9c25f293147634ee",
         "policy_digest": "sha256:88304ee85d7d10c2124d75b0de11cb8d8f91a8707945cabc651c0cbdedc71934",
@@ -2502,7 +2502,7 @@
         "candidate_digest": "sha256:d54b4b5d5c4d6f694e5e24a90e1199cbb6047c5b182f4defae537da0b3dd5246",
         "repository_snapshot_digest": "sha256:d60ff0950c57275a542f9fea6f259fb6fb4d0f96582d164cb94eb16f508f9104",
         "verification_bundle_digest": "sha256:5a1669ca069f00cb09aced05d467a5a2651d81b9af948e2ffa3996a75a096f29",
-        "approval_digest": "sha256:007dfeb478183fbe4bee118d33a76b3cb0678a0d02bd6a33dcef33896b0465bb",
+        "approval_digest_or_sentinel": "sha256:007dfeb478183fbe4bee118d33a76b3cb0678a0d02bd6a33dcef33896b0465bb",
         "authority_binding_digest": "sha256:dd2150d35050a6e7d59c7642e67e583e44392df0eea2e30b3539cf1843ee46b9",
         "verifier_binding_digest": "sha256:efe616a1d165ab728aebb15a6aa1e2d4d30ef01bf339f4cf9c25f293147634ee",
         "policy_digest": "sha256:88304ee85d7d10c2124d75b0de11cb8d8f91a8707945cabc651c0cbdedc71934",
@@ -2588,7 +2588,7 @@
         "candidate_digest": "sha256:d54b4b5d5c4d6f694e5e24a90e1199cbb6047c5b182f4defae537da0b3dd5246",
         "repository_snapshot_digest": "sha256:d60ff0950c57275a542f9fea6f259fb6fb4d0f96582d164cb94eb16f508f9104",
         "verification_bundle_digest": "sha256:9305cc24dcc296e5fb5ed85bd0e82c2707f0a7d3642841ea9366aa384b5d8f78",
-        "approval_digest": "sha256:007dfeb478183fbe4bee118d33a76b3cb0678a0d02bd6a33dcef33896b0465bb",
+        "approval_digest_or_sentinel": "sha256:007dfeb478183fbe4bee118d33a76b3cb0678a0d02bd6a33dcef33896b0465bb",
         "authority_binding_digest": "sha256:dd2150d35050a6e7d59c7642e67e583e44392df0eea2e30b3539cf1843ee46b9",
         "verifier_binding_digest": "sha256:efe616a1d165ab728aebb15a6aa1e2d4d30ef01bf339f4cf9c25f293147634ee",
         "policy_digest": "sha256:88304ee85d7d10c2124d75b0de11cb8d8f91a8707945cabc651c0cbdedc71934",
@@ -2669,7 +2669,7 @@
         "candidate_digest": "sha256:d54b4b5d5c4d6f694e5e24a90e1199cbb6047c5b182f4defae537da0b3dd5246",
         "repository_snapshot_digest": "sha256:d60ff0950c57275a542f9fea6f259fb6fb4d0f96582d164cb94eb16f508f9104",
         "verification_bundle_digest": "sha256:9305cc24dcc296e5fb5ed85bd0e82c2707f0a7d3642841ea9366aa384b5d8f78",
-        "approval_digest": "sha256:007dfeb478183fbe4bee118d33a76b3cb0678a0d02bd6a33dcef33896b0465bb",
+        "approval_digest_or_sentinel": "sha256:007dfeb478183fbe4bee118d33a76b3cb0678a0d02bd6a33dcef33896b0465bb",
         "authority_binding_digest": "sha256:dd2150d35050a6e7d59c7642e67e583e44392df0eea2e30b3539cf1843ee46b9",
         "verifier_binding_digest": "sha256:efe616a1d165ab728aebb15a6aa1e2d4d30ef01bf339f4cf9c25f293147634ee",
         "policy_digest": "sha256:88304ee85d7d10c2124d75b0de11cb8d8f91a8707945cabc651c0cbdedc71934",
@@ -2749,7 +2749,7 @@
         "candidate_digest": "sha256:d54b4b5d5c4d6f694e5e24a90e1199cbb6047c5b182f4defae537da0b3dd5246",
         "repository_snapshot_digest": "sha256:d60ff0950c57275a542f9fea6f259fb6fb4d0f96582d164cb94eb16f508f9104",
         "verification_bundle_digest": "sha256:9305cc24dcc296e5fb5ed85bd0e82c2707f0a7d3642841ea9366aa384b5d8f78",
-        "approval_digest": "sha256:007dfeb478183fbe4bee118d33a76b3cb0678a0d02bd6a33dcef33896b0465bb",
+        "approval_digest_or_sentinel": "sha256:007dfeb478183fbe4bee118d33a76b3cb0678a0d02bd6a33dcef33896b0465bb",
         "authority_binding_digest": "sha256:dd2150d35050a6e7d59c7642e67e583e44392df0eea2e30b3539cf1843ee46b9",
         "verifier_binding_digest": "sha256:efe616a1d165ab728aebb15a6aa1e2d4d30ef01bf339f4cf9c25f293147634ee",
         "policy_digest": "sha256:88304ee85d7d10c2124d75b0de11cb8d8f91a8707945cabc651c0cbdedc71934",
@@ -2832,7 +2832,7 @@
         "candidate_digest": "sha256:d54b4b5d5c4d6f694e5e24a90e1199cbb6047c5b182f4defae537da0b3dd5246",
         "repository_snapshot_digest": "sha256:d60ff0950c57275a542f9fea6f259fb6fb4d0f96582d164cb94eb16f508f9104",
         "verification_bundle_digest": "sha256:9305cc24dcc296e5fb5ed85bd0e82c2707f0a7d3642841ea9366aa384b5d8f78",
-        "approval_digest": "sha256:007dfeb478183fbe4bee118d33a76b3cb0678a0d02bd6a33dcef33896b0465bb",
+        "approval_digest_or_sentinel": "sha256:007dfeb478183fbe4bee118d33a76b3cb0678a0d02bd6a33dcef33896b0465bb",
         "authority_binding_digest": "sha256:dd2150d35050a6e7d59c7642e67e583e44392df0eea2e30b3539cf1843ee46b9",
         "verifier_binding_digest": "sha256:efe616a1d165ab728aebb15a6aa1e2d4d30ef01bf339f4cf9c25f293147634ee",
         "policy_digest": "sha256:88304ee85d7d10c2124d75b0de11cb8d8f91a8707945cabc651c0cbdedc71934",
@@ -2911,7 +2911,7 @@
         "candidate_digest": "sha256:d54b4b5d5c4d6f694e5e24a90e1199cbb6047c5b182f4defae537da0b3dd5246",
         "repository_snapshot_digest": "sha256:7fbc681798865ba3a9ca9f1382d3082388904e0132816e698677acf74cabc7c8",
         "verification_bundle_digest": "sha256:9305cc24dcc296e5fb5ed85bd0e82c2707f0a7d3642841ea9366aa384b5d8f78",
-        "approval_digest": "sha256:007dfeb478183fbe4bee118d33a76b3cb0678a0d02bd6a33dcef33896b0465bb",
+        "approval_digest_or_sentinel": "sha256:007dfeb478183fbe4bee118d33a76b3cb0678a0d02bd6a33dcef33896b0465bb",
         "authority_binding_digest": "sha256:dd2150d35050a6e7d59c7642e67e583e44392df0eea2e30b3539cf1843ee46b9",
         "verifier_binding_digest": "sha256:efe616a1d165ab728aebb15a6aa1e2d4d30ef01bf339f4cf9c25f293147634ee",
         "policy_digest": "sha256:88304ee85d7d10c2124d75b0de11cb8d8f91a8707945cabc651c0cbdedc71934",
@@ -2991,7 +2991,7 @@
         "candidate_digest": "sha256:d54b4b5d5c4d6f694e5e24a90e1199cbb6047c5b182f4defae537da0b3dd5246",
         "repository_snapshot_digest": "sha256:7fbc681798865ba3a9ca9f1382d3082388904e0132816e698677acf74cabc7c8",
         "verification_bundle_digest": "sha256:9305cc24dcc296e5fb5ed85bd0e82c2707f0a7d3642841ea9366aa384b5d8f78",
-        "approval_digest": "sha256:007dfeb478183fbe4bee118d33a76b3cb0678a0d02bd6a33dcef33896b0465bb",
+        "approval_digest_or_sentinel": "sha256:007dfeb478183fbe4bee118d33a76b3cb0678a0d02bd6a33dcef33896b0465bb",
         "authority_binding_digest": "sha256:dd2150d35050a6e7d59c7642e67e583e44392df0eea2e30b3539cf1843ee46b9",
         "verifier_binding_digest": "sha256:efe616a1d165ab728aebb15a6aa1e2d4d30ef01bf339f4cf9c25f293147634ee",
         "policy_digest": "sha256:88304ee85d7d10c2124d75b0de11cb8d8f91a8707945cabc651c0cbdedc71934",
@@ -3072,7 +3072,7 @@
         "candidate_digest": "sha256:d54b4b5d5c4d6f694e5e24a90e1199cbb6047c5b182f4defae537da0b3dd5246",
         "repository_snapshot_digest": "sha256:d60ff0950c57275a542f9fea6f259fb6fb4d0f96582d164cb94eb16f508f9104",
         "verification_bundle_digest": "sha256:33231d8a533f0f08eebb40d3c7ac2d24cab4ae9dc1b32ca7617de3d1178f94ce",
-        "approval_digest": "sha256:007dfeb478183fbe4bee118d33a76b3cb0678a0d02bd6a33dcef33896b0465bb",
+        "approval_digest_or_sentinel": "sha256:007dfeb478183fbe4bee118d33a76b3cb0678a0d02bd6a33dcef33896b0465bb",
         "authority_binding_digest": "sha256:dd2150d35050a6e7d59c7642e67e583e44392df0eea2e30b3539cf1843ee46b9",
         "verifier_binding_digest": "sha256:efe616a1d165ab728aebb15a6aa1e2d4d30ef01bf339f4cf9c25f293147634ee",
         "policy_digest": "sha256:88304ee85d7d10c2124d75b0de11cb8d8f91a8707945cabc651c0cbdedc71934",
@@ -3153,7 +3153,7 @@
         "candidate_digest": "sha256:d54b4b5d5c4d6f694e5e24a90e1199cbb6047c5b182f4defae537da0b3dd5246",
         "repository_snapshot_digest": "sha256:d60ff0950c57275a542f9fea6f259fb6fb4d0f96582d164cb94eb16f508f9104",
         "verification_bundle_digest": "sha256:3a56a452e9a8037a75a184632ec54c45a5748051c0b8844e35a2e32ae8653abb",
-        "approval_digest": "sha256:007dfeb478183fbe4bee118d33a76b3cb0678a0d02bd6a33dcef33896b0465bb",
+        "approval_digest_or_sentinel": "sha256:007dfeb478183fbe4bee118d33a76b3cb0678a0d02bd6a33dcef33896b0465bb",
         "authority_binding_digest": "sha256:dd2150d35050a6e7d59c7642e67e583e44392df0eea2e30b3539cf1843ee46b9",
         "verifier_binding_digest": "sha256:efe616a1d165ab728aebb15a6aa1e2d4d30ef01bf339f4cf9c25f293147634ee",
         "policy_digest": "sha256:88304ee85d7d10c2124d75b0de11cb8d8f91a8707945cabc651c0cbdedc71934",
@@ -3238,7 +3238,7 @@
         "candidate_digest": "sha256:d54b4b5d5c4d6f694e5e24a90e1199cbb6047c5b182f4defae537da0b3dd5246",
         "repository_snapshot_digest": "sha256:d60ff0950c57275a542f9fea6f259fb6fb4d0f96582d164cb94eb16f508f9104",
         "verification_bundle_digest": "sha256:9305cc24dcc296e5fb5ed85bd0e82c2707f0a7d3642841ea9366aa384b5d8f78",
-        "approval_digest": "sha256:007dfeb478183fbe4bee118d33a76b3cb0678a0d02bd6a33dcef33896b0465bb",
+        "approval_digest_or_sentinel": "sha256:007dfeb478183fbe4bee118d33a76b3cb0678a0d02bd6a33dcef33896b0465bb",
         "authority_binding_digest": "sha256:dd2150d35050a6e7d59c7642e67e583e44392df0eea2e30b3539cf1843ee46b9",
         "verifier_binding_digest": "sha256:df1251060784eb3d3b5681b2994e285f0f1de1b021368d73ef2ae7f6d4294c98",
         "policy_digest": "sha256:88304ee85d7d10c2124d75b0de11cb8d8f91a8707945cabc651c0cbdedc71934",
@@ -3320,7 +3320,7 @@
         "candidate_digest": "sha256:d54b4b5d5c4d6f694e5e24a90e1199cbb6047c5b182f4defae537da0b3dd5246",
         "repository_snapshot_digest": "sha256:d60ff0950c57275a542f9fea6f259fb6fb4d0f96582d164cb94eb16f508f9104",
         "verification_bundle_digest": "sha256:9305cc24dcc296e5fb5ed85bd0e82c2707f0a7d3642841ea9366aa384b5d8f78",
-        "approval_digest": "sha256:007dfeb478183fbe4bee118d33a76b3cb0678a0d02bd6a33dcef33896b0465bb",
+        "approval_digest_or_sentinel": "sha256:007dfeb478183fbe4bee118d33a76b3cb0678a0d02bd6a33dcef33896b0465bb",
         "authority_binding_digest": "sha256:dd2150d35050a6e7d59c7642e67e583e44392df0eea2e30b3539cf1843ee46b9",
         "verifier_binding_digest": "sha256:4a79a83c84b437d619c6644498902537c45d871baf0ecb015993a08bff454d2e",
         "policy_digest": "sha256:88304ee85d7d10c2124d75b0de11cb8d8f91a8707945cabc651c0cbdedc71934",
@@ -3402,7 +3402,7 @@
         "candidate_digest": "sha256:d54b4b5d5c4d6f694e5e24a90e1199cbb6047c5b182f4defae537da0b3dd5246",
         "repository_snapshot_digest": "sha256:d60ff0950c57275a542f9fea6f259fb6fb4d0f96582d164cb94eb16f508f9104",
         "verification_bundle_digest": "sha256:9305cc24dcc296e5fb5ed85bd0e82c2707f0a7d3642841ea9366aa384b5d8f78",
-        "approval_digest": "sha256:007dfeb478183fbe4bee118d33a76b3cb0678a0d02bd6a33dcef33896b0465bb",
+        "approval_digest_or_sentinel": "sha256:007dfeb478183fbe4bee118d33a76b3cb0678a0d02bd6a33dcef33896b0465bb",
         "authority_binding_digest": "sha256:dd2150d35050a6e7d59c7642e67e583e44392df0eea2e30b3539cf1843ee46b9",
         "verifier_binding_digest": "sha256:efe616a1d165ab728aebb15a6aa1e2d4d30ef01bf339f4cf9c25f293147634ee",
         "policy_digest": "sha256:88304ee85d7d10c2124d75b0de11cb8d8f91a8707945cabc651c0cbdedc71934",
@@ -3483,7 +3483,7 @@
         "candidate_digest": "sha256:d54b4b5d5c4d6f694e5e24a90e1199cbb6047c5b182f4defae537da0b3dd5246",
         "repository_snapshot_digest": "sha256:d60ff0950c57275a542f9fea6f259fb6fb4d0f96582d164cb94eb16f508f9104",
         "verification_bundle_digest": "sha256:9305cc24dcc296e5fb5ed85bd0e82c2707f0a7d3642841ea9366aa384b5d8f78",
-        "approval_digest": "sha256:007dfeb478183fbe4bee118d33a76b3cb0678a0d02bd6a33dcef33896b0465bb",
+        "approval_digest_or_sentinel": "sha256:007dfeb478183fbe4bee118d33a76b3cb0678a0d02bd6a33dcef33896b0465bb",
         "authority_binding_digest": "sha256:dd2150d35050a6e7d59c7642e67e583e44392df0eea2e30b3539cf1843ee46b9",
         "verifier_binding_digest": "sha256:efe616a1d165ab728aebb15a6aa1e2d4d30ef01bf339f4cf9c25f293147634ee",
         "policy_digest": "sha256:88304ee85d7d10c2124d75b0de11cb8d8f91a8707945cabc651c0cbdedc71934",
@@ -3568,7 +3568,7 @@
         "candidate_digest": "sha256:d54b4b5d5c4d6f694e5e24a90e1199cbb6047c5b182f4defae537da0b3dd5246",
         "repository_snapshot_digest": "sha256:d60ff0950c57275a542f9fea6f259fb6fb4d0f96582d164cb94eb16f508f9104",
         "verification_bundle_digest": "sha256:484ce88f5a4c75e1931fcfbc839939847346e9239e3ea2666d9a5dc95b30e55c",
-        "approval_digest": "sha256:007dfeb478183fbe4bee118d33a76b3cb0678a0d02bd6a33dcef33896b0465bb",
+        "approval_digest_or_sentinel": "sha256:007dfeb478183fbe4bee118d33a76b3cb0678a0d02bd6a33dcef33896b0465bb",
         "authority_binding_digest": "sha256:ca6cab898094a769c634d5d369f2f54da6af6f165fde5db38590afbb6b7c295b",
         "verifier_binding_digest": "sha256:efe616a1d165ab728aebb15a6aa1e2d4d30ef01bf339f4cf9c25f293147634ee",
         "policy_digest": "sha256:88304ee85d7d10c2124d75b0de11cb8d8f91a8707945cabc651c0cbdedc71934",
@@ -3655,7 +3655,7 @@
         "candidate_digest": "sha256:d54b4b5d5c4d6f694e5e24a90e1199cbb6047c5b182f4defae537da0b3dd5246",
         "repository_snapshot_digest": "sha256:d60ff0950c57275a542f9fea6f259fb6fb4d0f96582d164cb94eb16f508f9104",
         "verification_bundle_digest": "sha256:9305cc24dcc296e5fb5ed85bd0e82c2707f0a7d3642841ea9366aa384b5d8f78",
-        "approval_digest": "sha256:007dfeb478183fbe4bee118d33a76b3cb0678a0d02bd6a33dcef33896b0465bb",
+        "approval_digest_or_sentinel": "sha256:007dfeb478183fbe4bee118d33a76b3cb0678a0d02bd6a33dcef33896b0465bb",
         "authority_binding_digest": "sha256:dd2150d35050a6e7d59c7642e67e583e44392df0eea2e30b3539cf1843ee46b9",
         "verifier_binding_digest": "sha256:efe616a1d165ab728aebb15a6aa1e2d4d30ef01bf339f4cf9c25f293147634ee",
         "policy_digest": "sha256:88304ee85d7d10c2124d75b0de11cb8d8f91a8707945cabc651c0cbdedc71934",
@@ -3739,13 +3739,23 @@
     "semantic_change_rule": "owner decision changes any contract or behavior -> current verifier result invalidated -> new implementation candidate required -> fresh independent adversarial verification required",
     "precedence_change_classification": "SEMANTIC_PATCH_REQUIRES_REVERIFICATION",
     "semantic_fingerprint_components": [
-      "reason_code_taxonomy_and_ranks",
-      "fact_state_mapping",
-      "golden_expected_results",
-      "decision_authority_by_mode",
-      "identifier_universes",
-      "digest_representation"
-    ]
+      "policy_semantics",
+      "deterministic_identity",
+      "replay",
+      "event_semantics",
+      "causal_semantics",
+      "golden_semantics"
+    ],
+    "semantic_fingerprint_source": "slice_1a_semantic_manifest",
+    "exact_artifact_hash_contract": {
+      "compared_files": [
+        "data/schemas/changegate_evaluation_event_v1.schema.json",
+        "tests/build_harness/test_changegate_slice_1_spec_artifacts.py"
+      ],
+      "rule": "the fresh independent verifier records these two file hashes at the accepted candidate; a metadata-only acceptance patch must preserve them exactly, and must preserve the semantic fingerprint for spec and fixture",
+      "future_hashes_hard_coded": false,
+      "note": "this defines the comparison contract only, not any future hash value"
+    }
   },
   "od_s1a_008_decision_record": {
     "id": "OD-S1A-008",
@@ -3818,5 +3828,1192 @@
       "conflict_policy"
     ],
     "note": "This record is COMPLETE as a pending decision: it enumerates every owner question and every pre-A3 declaration field. It does NOT choose any answer; A3 (Slice 1C-1) remains blocked until owner acceptance. No mapping is implemented."
+  },
+  "slice_1a_semantic_manifest": {
+    "manifest_version": "changegate.slice1a.semantic-manifest.v1",
+    "policy_semantics": {
+      "reason_code_taxonomy": [
+        {
+          "code": "AUTHORITY_INVALID",
+          "precedence_rank": 10,
+          "category": "INTEGRITY",
+          "kind": "FACTUAL",
+          "default_disposition": "BLOCK",
+          "override_class": "NOT_OVERRIDEABLE"
+        },
+        {
+          "code": "REQUIRED_CONTEXT_INCOMPLETE",
+          "precedence_rank": 20,
+          "category": "CONTEXT",
+          "kind": "FACTUAL",
+          "default_disposition": "BLOCK",
+          "override_class": "NOT_OVERRIDEABLE"
+        },
+        {
+          "code": "EVIDENCE_TASK_MISMATCH",
+          "precedence_rank": 30,
+          "category": "INTEGRITY",
+          "kind": "FACTUAL",
+          "default_disposition": "BLOCK",
+          "override_class": "NOT_OVERRIDEABLE"
+        },
+        {
+          "code": "EVIDENCE_RUN_MISMATCH",
+          "precedence_rank": 40,
+          "category": "INTEGRITY",
+          "kind": "FACTUAL",
+          "default_disposition": "BLOCK",
+          "override_class": "NOT_OVERRIDEABLE"
+        },
+        {
+          "code": "EVIDENCE_CANDIDATE_MISMATCH",
+          "precedence_rank": 50,
+          "category": "INTEGRITY",
+          "kind": "FACTUAL",
+          "default_disposition": "BLOCK",
+          "override_class": "NOT_OVERRIDEABLE"
+        },
+        {
+          "code": "REPOSITORY_CONTEXT_MISMATCH",
+          "precedence_rank": 60,
+          "category": "INTEGRITY",
+          "kind": "FACTUAL",
+          "default_disposition": "BLOCK",
+          "override_class": "NOT_OVERRIDEABLE"
+        },
+        {
+          "code": "EVIDENCE_PROVENANCE_INVALID",
+          "precedence_rank": 70,
+          "category": "INTEGRITY",
+          "kind": "FACTUAL",
+          "default_disposition": "BLOCK",
+          "override_class": "NOT_OVERRIDEABLE"
+        },
+        {
+          "code": "EVIDENCE_DUPLICATE_IDENTITY",
+          "precedence_rank": 80,
+          "category": "INTEGRITY",
+          "kind": "FACTUAL",
+          "default_disposition": "BLOCK",
+          "override_class": "NOT_OVERRIDEABLE"
+        },
+        {
+          "code": "REQUIRED_EVIDENCE_INVALID",
+          "precedence_rank": 90,
+          "category": "EVIDENCE",
+          "kind": "FACTUAL",
+          "default_disposition": "BLOCK",
+          "override_class": "POLICY_EXCEPTION_REQUIRED"
+        },
+        {
+          "code": "TASK_CONTEXT_STALE",
+          "precedence_rank": 95,
+          "category": "FRESHNESS",
+          "kind": "FACTUAL",
+          "default_disposition": "BLOCK",
+          "override_class": "POLICY_EXCEPTION_REQUIRED"
+        },
+        {
+          "code": "CANDIDATE_STALE",
+          "precedence_rank": 100,
+          "category": "FRESHNESS",
+          "kind": "FACTUAL",
+          "default_disposition": "BLOCK",
+          "override_class": "POLICY_EXCEPTION_REQUIRED"
+        },
+        {
+          "code": "POLICY_CONTEXT_STALE",
+          "precedence_rank": 110,
+          "category": "FRESHNESS",
+          "kind": "FACTUAL",
+          "default_disposition": "BLOCK",
+          "override_class": "POLICY_EXCEPTION_REQUIRED"
+        },
+        {
+          "code": "REQUIRED_EVIDENCE_MISSING",
+          "precedence_rank": 120,
+          "category": "EVIDENCE",
+          "kind": "FACTUAL",
+          "default_disposition": "BLOCK",
+          "override_class": "POLICY_EXCEPTION_REQUIRED"
+        },
+        {
+          "code": "RELEASE_STATE_NOT_CLEAN",
+          "precedence_rank": 130,
+          "category": "REPO_STATE",
+          "kind": "FACTUAL",
+          "default_disposition": "BLOCK",
+          "override_class": "POLICY_EXCEPTION_REQUIRED"
+        },
+        {
+          "code": "SCOPE_VIOLATION",
+          "precedence_rank": 140,
+          "category": "SCOPE",
+          "kind": "FACTUAL",
+          "default_disposition": "BLOCK",
+          "override_class": "POLICY_EXCEPTION_REQUIRED"
+        },
+        {
+          "code": "APPROVAL_MISSING",
+          "precedence_rank": 150,
+          "category": "APPROVAL",
+          "kind": "FACTUAL",
+          "default_disposition": "BLOCK",
+          "override_class": "HUMAN_REVIEW_RESOLVABLE"
+        },
+        {
+          "code": "APPROVAL_STALE",
+          "precedence_rank": 160,
+          "category": "APPROVAL",
+          "kind": "FACTUAL",
+          "default_disposition": "BLOCK",
+          "override_class": "HUMAN_REVIEW_RESOLVABLE"
+        },
+        {
+          "code": "VERIFIER_NOT_INDEPENDENT",
+          "precedence_rank": 170,
+          "category": "INDEPENDENCE",
+          "kind": "FACTUAL",
+          "default_disposition": "BLOCK",
+          "override_class": "NOT_OVERRIDEABLE"
+        },
+        {
+          "code": "SCOPE_UNCERTAIN",
+          "precedence_rank": 180,
+          "category": "SCOPE",
+          "kind": "SEMANTIC",
+          "default_disposition": "REVIEW_REQUIRED",
+          "override_class": "HUMAN_REVIEW_RESOLVABLE"
+        },
+        {
+          "code": "VERIFIER_INDEPENDENCE_UNKNOWN",
+          "precedence_rank": 190,
+          "category": "INDEPENDENCE",
+          "kind": "SEMANTIC",
+          "default_disposition": "REVIEW_REQUIRED",
+          "override_class": "HUMAN_REVIEW_RESOLVABLE"
+        }
+      ],
+      "precedence_ranks": {
+        "AUTHORITY_INVALID": 10,
+        "REQUIRED_CONTEXT_INCOMPLETE": 20,
+        "EVIDENCE_TASK_MISMATCH": 30,
+        "EVIDENCE_RUN_MISMATCH": 40,
+        "EVIDENCE_CANDIDATE_MISMATCH": 50,
+        "REPOSITORY_CONTEXT_MISMATCH": 60,
+        "EVIDENCE_PROVENANCE_INVALID": 70,
+        "EVIDENCE_DUPLICATE_IDENTITY": 80,
+        "REQUIRED_EVIDENCE_INVALID": 90,
+        "TASK_CONTEXT_STALE": 95,
+        "CANDIDATE_STALE": 100,
+        "POLICY_CONTEXT_STALE": 110,
+        "REQUIRED_EVIDENCE_MISSING": 120,
+        "RELEASE_STATE_NOT_CLEAN": 130,
+        "SCOPE_VIOLATION": 140,
+        "APPROVAL_MISSING": 150,
+        "APPROVAL_STALE": 160,
+        "VERIFIER_NOT_INDEPENDENT": 170,
+        "SCOPE_UNCERTAIN": 180,
+        "VERIFIER_INDEPENDENCE_UNKNOWN": 190
+      },
+      "default_dispositions": {
+        "AUTHORITY_INVALID": "BLOCK",
+        "REQUIRED_CONTEXT_INCOMPLETE": "BLOCK",
+        "EVIDENCE_TASK_MISMATCH": "BLOCK",
+        "EVIDENCE_RUN_MISMATCH": "BLOCK",
+        "EVIDENCE_CANDIDATE_MISMATCH": "BLOCK",
+        "REPOSITORY_CONTEXT_MISMATCH": "BLOCK",
+        "EVIDENCE_PROVENANCE_INVALID": "BLOCK",
+        "EVIDENCE_DUPLICATE_IDENTITY": "BLOCK",
+        "REQUIRED_EVIDENCE_INVALID": "BLOCK",
+        "TASK_CONTEXT_STALE": "BLOCK",
+        "CANDIDATE_STALE": "BLOCK",
+        "POLICY_CONTEXT_STALE": "BLOCK",
+        "REQUIRED_EVIDENCE_MISSING": "BLOCK",
+        "RELEASE_STATE_NOT_CLEAN": "BLOCK",
+        "SCOPE_VIOLATION": "BLOCK",
+        "APPROVAL_MISSING": "BLOCK",
+        "APPROVAL_STALE": "BLOCK",
+        "VERIFIER_NOT_INDEPENDENT": "BLOCK",
+        "SCOPE_UNCERTAIN": "REVIEW_REQUIRED",
+        "VERIFIER_INDEPENDENCE_UNKNOWN": "REVIEW_REQUIRED"
+      },
+      "fact_state_mapping": {
+        "enum_facts": {
+          "task_context_current": {
+            "CURRENT": null,
+            "STALE": "TASK_CONTEXT_STALE",
+            "UNKNOWN": "REQUIRED_CONTEXT_INCOMPLETE"
+          },
+          "candidate_binding_current": {
+            "CURRENT": null,
+            "STALE": "CANDIDATE_STALE",
+            "UNKNOWN": "REQUIRED_CONTEXT_INCOMPLETE"
+          },
+          "repository_snapshot_current": {
+            "CURRENT": null,
+            "MISMATCH": "REPOSITORY_CONTEXT_MISMATCH",
+            "UNKNOWN": "REQUIRED_CONTEXT_INCOMPLETE"
+          },
+          "repository_release_clean": {
+            "CLEAN": null,
+            "DIRTY": "RELEASE_STATE_NOT_CLEAN",
+            "UNKNOWN": "REQUIRED_CONTEXT_INCOMPLETE"
+          },
+          "policy_context_current": {
+            "CURRENT": null,
+            "STALE": "POLICY_CONTEXT_STALE",
+            "UNKNOWN": "REQUIRED_CONTEXT_INCOMPLETE"
+          },
+          "evidence_context_status": {
+            "COHERENT": null,
+            "INCOHERENT": null,
+            "UNKNOWN": "REQUIRED_CONTEXT_INCOMPLETE"
+          },
+          "scope_status": {
+            "COMPLIANT": null,
+            "VIOLATION": "SCOPE_VIOLATION",
+            "SEMANTIC_UNCERTAIN": "SCOPE_UNCERTAIN",
+            "NOT_EVALUATED": "REQUIRED_CONTEXT_INCOMPLETE"
+          },
+          "approval_status": {
+            "VALID": null,
+            "MISSING": "APPROVAL_MISSING",
+            "STALE": "APPROVAL_STALE",
+            "UNKNOWN": "APPROVAL_MISSING"
+          },
+          "authority_status": {
+            "VALID": null,
+            "INVALID": "AUTHORITY_INVALID",
+            "UNKNOWN": "REQUIRED_CONTEXT_INCOMPLETE"
+          }
+        },
+        "violation_tag_reasons": {
+          "TASK_MISMATCH": "EVIDENCE_TASK_MISMATCH",
+          "RUN_MISMATCH": "EVIDENCE_RUN_MISMATCH",
+          "CANDIDATE_MISMATCH": "EVIDENCE_CANDIDATE_MISMATCH",
+          "PROVENANCE_INVALID": "EVIDENCE_PROVENANCE_INVALID",
+          "DUPLICATE_IDENTITY": "EVIDENCE_DUPLICATE_IDENTITY"
+        },
+        "set_facts": {
+          "required_requirement_ids": null,
+          "satisfied_requirement_ids": null,
+          "missing_requirement_ids": "REQUIRED_EVIDENCE_MISSING",
+          "invalid_requirement_ids": "REQUIRED_EVIDENCE_INVALID",
+          "invalid_provenance_evidence_ids": "EVIDENCE_PROVENANCE_INVALID",
+          "rejected_evidence_ids": null,
+          "unexpected_evidence_ids": null
+        },
+        "verifier_rule": [
+          {
+            "identity": [
+              "INVALID"
+            ],
+            "independence": "*",
+            "reason": "AUTHORITY_INVALID"
+          },
+          {
+            "identity": [
+              "ABSENT"
+            ],
+            "independence": "*",
+            "reason": "REQUIRED_CONTEXT_INCOMPLETE"
+          },
+          {
+            "identity": [
+              "ATTESTED",
+              "PRESENT_UNATTESTED"
+            ],
+            "independence": [
+              "NOT_INDEPENDENT"
+            ],
+            "reason": "VERIFIER_NOT_INDEPENDENT"
+          },
+          {
+            "identity": [
+              "ATTESTED"
+            ],
+            "independence": [
+              "INDEPENDENT"
+            ],
+            "reason": null
+          },
+          {
+            "identity": [
+              "ATTESTED"
+            ],
+            "independence": [
+              "UNKNOWN"
+            ],
+            "reason": "VERIFIER_INDEPENDENCE_UNKNOWN"
+          },
+          {
+            "identity": [
+              "PRESENT_UNATTESTED"
+            ],
+            "independence": [
+              "INDEPENDENT",
+              "UNKNOWN"
+            ],
+            "reason": "VERIFIER_INDEPENDENCE_UNKNOWN"
+          }
+        ],
+        "verifier_identity_values": [
+          "ATTESTED",
+          "PRESENT_UNATTESTED",
+          "ABSENT",
+          "INVALID"
+        ],
+        "verifier_independence_values": [
+          "INDEPENDENT",
+          "NOT_INDEPENDENT",
+          "UNKNOWN"
+        ],
+        "decision_authority_by_mode": {
+          "ENFORCE": "AUTHORITATIVE",
+          "SHADOW": "ADVISORY_ONLY"
+        }
+      },
+      "decision_authority_by_mode": {
+        "ENFORCE": "AUTHORITATIVE",
+        "SHADOW": "ADVISORY_ONLY"
+      },
+      "identifier_namespace_rule": {
+        "disjoint": true,
+        "requirement_sets": [
+          "required_requirement_ids",
+          "satisfied_requirement_ids",
+          "invalid_requirement_ids",
+          "missing_requirement_ids"
+        ],
+        "evidence_record_sets": [
+          "rejected_evidence_ids",
+          "invalid_provenance_evidence_ids",
+          "unexpected_evidence_ids"
+        ],
+        "requirement_id_universe": [
+          "req-compileall",
+          "req-pytest-full"
+        ],
+        "evidence_record_id_universe": [
+          "ev-compileall-1",
+          "ev-extra-benchmark",
+          "ev-foreign-1",
+          "ev-pytest-1",
+          "ev-pytest-bad",
+          "ev-pytest-forged",
+          "ev-pytest-try1"
+        ]
+      },
+      "canonical_digest_representation": "sha256:<64 lowercase hex>"
+    },
+    "deterministic_identity": {
+      "source_binding_field_set": [
+        "task_contract_digest",
+        "candidate_digest",
+        "repository_snapshot_digest",
+        "verification_bundle_digest",
+        "approval_digest_or_sentinel",
+        "authority_binding_digest",
+        "verifier_binding_digest",
+        "policy_digest"
+      ],
+      "merge_eligibility_policy_input_fields": [
+        "task_id",
+        "task_contract_digest",
+        "candidate_digest",
+        "repository_snapshot_digest",
+        "verification_bundle_digest",
+        "approval_digest_or_sentinel",
+        "authority_binding_digest",
+        "verifier_binding_digest",
+        "policy_digest",
+        "policy_version",
+        "evaluator_version",
+        "evaluation_mode",
+        "facts"
+      ],
+      "policy_record_payload_field_order": [
+        "schema_version",
+        "task_id",
+        "task_contract_digest",
+        "candidate_digest",
+        "repository_snapshot_digest",
+        "verification_bundle_digest",
+        "approval_digest_or_sentinel",
+        "authority_binding_digest",
+        "verifier_binding_digest",
+        "policy_digest",
+        "policy_version",
+        "evaluator_version",
+        "evaluation_mode",
+        "input_digest",
+        "disposition",
+        "decision_authority",
+        "primary_reason_code",
+        "complete_reason_codes",
+        "blocking_reason_codes",
+        "review_reason_codes",
+        "required_requirement_ids",
+        "satisfied_requirement_ids",
+        "invalid_requirement_ids",
+        "missing_requirement_ids",
+        "rejected_evidence_ids",
+        "invalid_provenance_evidence_ids",
+        "unexpected_evidence_ids",
+        "decision_digest"
+      ],
+      "decision_payload_contract_id": "changegate.merge-eligibility-decision.test-oracle.v1",
+      "record_payload_contract_id": "changegate.policy-evaluation-record.v1",
+      "approval_sentinel": "NO_APPROVAL_SUPPLIED",
+      "set_normalization_rule": "each set is lexicographically sorted and deduplicated"
+    },
+    "replay": {
+      "replay_contract_version": "changegate.replay.v1",
+      "replay_invariant_ids": [
+        "R1",
+        "R2",
+        "R3",
+        "R4",
+        "R5",
+        "R6",
+        "R7",
+        "R8",
+        "R9",
+        "R10"
+      ],
+      "decision_identity_fields": [
+        "task_id",
+        "task_contract_digest",
+        "candidate_digest",
+        "repository_snapshot_digest",
+        "verification_bundle_digest",
+        "approval_digest_or_sentinel",
+        "authority_binding_digest",
+        "verifier_binding_digest",
+        "policy_digest",
+        "policy_version",
+        "evaluator_version",
+        "evaluation_mode",
+        "input_digest",
+        "disposition",
+        "decision_authority",
+        "primary_reason_code",
+        "complete_reason_codes",
+        "blocking_reason_codes",
+        "review_reason_codes",
+        "required_requirement_ids",
+        "satisfied_requirement_ids",
+        "invalid_requirement_ids",
+        "missing_requirement_ids",
+        "rejected_evidence_ids",
+        "invalid_provenance_evidence_ids",
+        "unexpected_evidence_ids"
+      ],
+      "runtime_metadata_excluded_fields": [
+        "trace_id",
+        "evaluation_id",
+        "request_id",
+        "occurred_at",
+        "evaluation_latency_ms",
+        "redaction_classification",
+        "event_id",
+        "storage_location"
+      ],
+      "trace_equality_invariants": [
+        "trace.policy_record_digest == canonical_digest(trace.policy_record payload)",
+        "trace.input_digest == trace.policy_record.input_digest",
+        "trace.decision_digest == trace.policy_record.decision_digest"
+      ]
+    },
+    "event_semantics": {
+      "event_schema_digest": "sha256:8a748f1fd6770f610ecb944265ba0ec65016c337fc023efdf34fa2c994168971",
+      "event_type_set": [
+        "CHANGEGATE_EVALUATION_COMPLETED",
+        "CHANGEGATE_REVIEW_OVERRIDDEN",
+        "CHANGEGATE_MERGE_ATTEMPTED",
+        "CHANGEGATE_MERGE_COMPLETED",
+        "CHANGEGATE_POST_MERGE_VALIDATION",
+        "CHANGEGATE_ROLLBACK_RECORDED",
+        "CHANGEGATE_USER_FEEDBACK_RECORDED"
+      ],
+      "decision_ref_required_fields": [
+        "evaluation_id",
+        "decision_digest",
+        "input_digest",
+        "policy_record_digest",
+        "task_ref",
+        "candidate_digest"
+      ],
+      "override_replacement_required_fields": [
+        "evaluation_id",
+        "task_ref",
+        "candidate_digest",
+        "decision_digest",
+        "input_digest",
+        "policy_record_digest"
+      ],
+      "causal_reference_requirements": {
+        "CHANGEGATE_EVALUATION_COMPLETED": [],
+        "CHANGEGATE_REVIEW_OVERRIDDEN": [
+          "evaluation_event_ref"
+        ],
+        "CHANGEGATE_MERGE_ATTEMPTED": [
+          "evaluation_event_ref"
+        ],
+        "CHANGEGATE_MERGE_COMPLETED": [
+          "attempt_event_ref"
+        ],
+        "CHANGEGATE_POST_MERGE_VALIDATION": [
+          "merge_event_ref"
+        ],
+        "CHANGEGATE_ROLLBACK_RECORDED": [
+          "merge_event_ref"
+        ],
+        "CHANGEGATE_USER_FEEDBACK_RECORDED": [
+          "target_event_ref",
+          "target_event_type"
+        ]
+      }
+    },
+    "causal_semantics": {
+      "causal_contract_version": "changegate.causal.v2-multiroot",
+      "lineage_field_set": [
+        "task_ref",
+        "candidate_digest",
+        "decision_digest",
+        "input_digest",
+        "policy_record_digest"
+      ],
+      "root_creation_rule": "each CHANGEGATE_EVALUATION_COMPLETED establishes an independent root keyed by its evaluation event id",
+      "override_lineage_switch_rule": "a complete replacement_decision_ref switches the active decision lineage for descendants of that override, preserving root task/candidate",
+      "changed_candidate_new_root_rule": "a changed candidate requires a new evaluation root; it can never continue the old chain or use an override",
+      "multi_root_support": true,
+      "causal_negative_control_ids": [
+        "LNC-01",
+        "LNC-02",
+        "LNC-03",
+        "LNC-04",
+        "LNC-05",
+        "LNC-06",
+        "LNC-07",
+        "LNC-08",
+        "LNC-09",
+        "LNC-10",
+        "LNC-11",
+        "LNC-12",
+        "LNC-13",
+        "LNC-14",
+        "LNC-15",
+        "LNC-16"
+      ],
+      "replacement_negative_control_ids": [
+        "RNC-01",
+        "RNC-02",
+        "RNC-03",
+        "RNC-04",
+        "RNC-05",
+        "RNC-06",
+        "RNC-07",
+        "RNC-08",
+        "RNC-09"
+      ]
+    },
+    "golden_semantics": [
+      {
+        "case_id": "GC-S1-001",
+        "disposition": "ELIGIBLE_TO_MERGE_UNDER_POLICY",
+        "decision_authority": "AUTHORITATIVE",
+        "primary_reason": null,
+        "complete_reason_codes": [],
+        "blocking_reason_codes": [],
+        "review_reason_codes": [],
+        "owner_decisions_pending": []
+      },
+      {
+        "case_id": "GC-S1-002",
+        "disposition": "BLOCK",
+        "decision_authority": "AUTHORITATIVE",
+        "primary_reason": "REQUIRED_EVIDENCE_MISSING",
+        "complete_reason_codes": [
+          "REQUIRED_EVIDENCE_MISSING"
+        ],
+        "blocking_reason_codes": [
+          "REQUIRED_EVIDENCE_MISSING"
+        ],
+        "review_reason_codes": [],
+        "owner_decisions_pending": []
+      },
+      {
+        "case_id": "GC-S1-003",
+        "disposition": "BLOCK",
+        "decision_authority": "AUTHORITATIVE",
+        "primary_reason": "REQUIRED_EVIDENCE_MISSING",
+        "complete_reason_codes": [
+          "REQUIRED_EVIDENCE_MISSING"
+        ],
+        "blocking_reason_codes": [
+          "REQUIRED_EVIDENCE_MISSING"
+        ],
+        "review_reason_codes": [],
+        "owner_decisions_pending": []
+      },
+      {
+        "case_id": "GC-S1-004",
+        "disposition": "BLOCK",
+        "decision_authority": "AUTHORITATIVE",
+        "primary_reason": "EVIDENCE_TASK_MISMATCH",
+        "complete_reason_codes": [
+          "EVIDENCE_TASK_MISMATCH",
+          "REQUIRED_EVIDENCE_MISSING"
+        ],
+        "blocking_reason_codes": [
+          "EVIDENCE_TASK_MISMATCH",
+          "REQUIRED_EVIDENCE_MISSING"
+        ],
+        "review_reason_codes": [],
+        "owner_decisions_pending": []
+      },
+      {
+        "case_id": "GC-S1-005",
+        "disposition": "BLOCK",
+        "decision_authority": "AUTHORITATIVE",
+        "primary_reason": "EVIDENCE_RUN_MISMATCH",
+        "complete_reason_codes": [
+          "EVIDENCE_RUN_MISMATCH",
+          "REQUIRED_EVIDENCE_MISSING"
+        ],
+        "blocking_reason_codes": [
+          "EVIDENCE_RUN_MISMATCH",
+          "REQUIRED_EVIDENCE_MISSING"
+        ],
+        "review_reason_codes": [],
+        "owner_decisions_pending": []
+      },
+      {
+        "case_id": "GC-S1-006",
+        "disposition": "BLOCK",
+        "decision_authority": "AUTHORITATIVE",
+        "primary_reason": "EVIDENCE_CANDIDATE_MISMATCH",
+        "complete_reason_codes": [
+          "EVIDENCE_CANDIDATE_MISMATCH",
+          "REQUIRED_EVIDENCE_MISSING"
+        ],
+        "blocking_reason_codes": [
+          "EVIDENCE_CANDIDATE_MISMATCH",
+          "REQUIRED_EVIDENCE_MISSING"
+        ],
+        "review_reason_codes": [],
+        "owner_decisions_pending": []
+      },
+      {
+        "case_id": "GC-S1-007",
+        "disposition": "BLOCK",
+        "decision_authority": "AUTHORITATIVE",
+        "primary_reason": "EVIDENCE_DUPLICATE_IDENTITY",
+        "complete_reason_codes": [
+          "EVIDENCE_DUPLICATE_IDENTITY",
+          "REQUIRED_EVIDENCE_MISSING"
+        ],
+        "blocking_reason_codes": [
+          "EVIDENCE_DUPLICATE_IDENTITY",
+          "REQUIRED_EVIDENCE_MISSING"
+        ],
+        "review_reason_codes": [],
+        "owner_decisions_pending": []
+      },
+      {
+        "case_id": "GC-S1-008",
+        "disposition": "BLOCK",
+        "decision_authority": "AUTHORITATIVE",
+        "primary_reason": "CANDIDATE_STALE",
+        "complete_reason_codes": [
+          "CANDIDATE_STALE"
+        ],
+        "blocking_reason_codes": [
+          "CANDIDATE_STALE"
+        ],
+        "review_reason_codes": [],
+        "owner_decisions_pending": []
+      },
+      {
+        "case_id": "GC-S1-009",
+        "disposition": "BLOCK",
+        "decision_authority": "AUTHORITATIVE",
+        "primary_reason": "REPOSITORY_CONTEXT_MISMATCH",
+        "complete_reason_codes": [
+          "REPOSITORY_CONTEXT_MISMATCH"
+        ],
+        "blocking_reason_codes": [
+          "REPOSITORY_CONTEXT_MISMATCH"
+        ],
+        "review_reason_codes": [],
+        "owner_decisions_pending": []
+      },
+      {
+        "case_id": "GC-S1-010",
+        "disposition": "BLOCK",
+        "decision_authority": "AUTHORITATIVE",
+        "primary_reason": "RELEASE_STATE_NOT_CLEAN",
+        "complete_reason_codes": [
+          "RELEASE_STATE_NOT_CLEAN"
+        ],
+        "blocking_reason_codes": [
+          "RELEASE_STATE_NOT_CLEAN"
+        ],
+        "review_reason_codes": [],
+        "owner_decisions_pending": []
+      },
+      {
+        "case_id": "GC-S1-011",
+        "disposition": "BLOCK",
+        "decision_authority": "AUTHORITATIVE",
+        "primary_reason": "SCOPE_VIOLATION",
+        "complete_reason_codes": [
+          "SCOPE_VIOLATION"
+        ],
+        "blocking_reason_codes": [
+          "SCOPE_VIOLATION"
+        ],
+        "review_reason_codes": [],
+        "owner_decisions_pending": []
+      },
+      {
+        "case_id": "GC-S1-012",
+        "disposition": "REVIEW_REQUIRED",
+        "decision_authority": "AUTHORITATIVE",
+        "primary_reason": "SCOPE_UNCERTAIN",
+        "complete_reason_codes": [
+          "SCOPE_UNCERTAIN"
+        ],
+        "blocking_reason_codes": [],
+        "review_reason_codes": [
+          "SCOPE_UNCERTAIN"
+        ],
+        "owner_decisions_pending": []
+      },
+      {
+        "case_id": "GC-S1-013",
+        "disposition": "BLOCK",
+        "decision_authority": "AUTHORITATIVE",
+        "primary_reason": "APPROVAL_MISSING",
+        "complete_reason_codes": [
+          "APPROVAL_MISSING"
+        ],
+        "blocking_reason_codes": [
+          "APPROVAL_MISSING"
+        ],
+        "review_reason_codes": [],
+        "owner_decisions_pending": [
+          "OD-S1A-001"
+        ]
+      },
+      {
+        "case_id": "GC-S1-014",
+        "disposition": "BLOCK",
+        "decision_authority": "AUTHORITATIVE",
+        "primary_reason": "APPROVAL_STALE",
+        "complete_reason_codes": [
+          "APPROVAL_STALE"
+        ],
+        "blocking_reason_codes": [
+          "APPROVAL_STALE"
+        ],
+        "review_reason_codes": [],
+        "owner_decisions_pending": [
+          "OD-S1A-002"
+        ]
+      },
+      {
+        "case_id": "GC-S1-015",
+        "disposition": "BLOCK",
+        "decision_authority": "AUTHORITATIVE",
+        "primary_reason": "AUTHORITY_INVALID",
+        "complete_reason_codes": [
+          "AUTHORITY_INVALID"
+        ],
+        "blocking_reason_codes": [
+          "AUTHORITY_INVALID"
+        ],
+        "review_reason_codes": [],
+        "owner_decisions_pending": []
+      },
+      {
+        "case_id": "GC-S1-016",
+        "disposition": "BLOCK",
+        "decision_authority": "AUTHORITATIVE",
+        "primary_reason": "VERIFIER_NOT_INDEPENDENT",
+        "complete_reason_codes": [
+          "VERIFIER_NOT_INDEPENDENT"
+        ],
+        "blocking_reason_codes": [
+          "VERIFIER_NOT_INDEPENDENT"
+        ],
+        "review_reason_codes": [],
+        "owner_decisions_pending": []
+      },
+      {
+        "case_id": "GC-S1-017",
+        "disposition": "REVIEW_REQUIRED",
+        "decision_authority": "AUTHORITATIVE",
+        "primary_reason": "VERIFIER_INDEPENDENCE_UNKNOWN",
+        "complete_reason_codes": [
+          "VERIFIER_INDEPENDENCE_UNKNOWN"
+        ],
+        "blocking_reason_codes": [],
+        "review_reason_codes": [
+          "VERIFIER_INDEPENDENCE_UNKNOWN"
+        ],
+        "owner_decisions_pending": [
+          "OD-S1A-003"
+        ]
+      },
+      {
+        "case_id": "GC-S1-018",
+        "disposition": "BLOCK",
+        "decision_authority": "AUTHORITATIVE",
+        "primary_reason": "POLICY_CONTEXT_STALE",
+        "complete_reason_codes": [
+          "POLICY_CONTEXT_STALE"
+        ],
+        "blocking_reason_codes": [
+          "POLICY_CONTEXT_STALE"
+        ],
+        "review_reason_codes": [],
+        "owner_decisions_pending": []
+      },
+      {
+        "case_id": "GC-S1-019",
+        "disposition": "BLOCK",
+        "decision_authority": "AUTHORITATIVE",
+        "primary_reason": "REQUIRED_CONTEXT_INCOMPLETE",
+        "complete_reason_codes": [
+          "REQUIRED_CONTEXT_INCOMPLETE"
+        ],
+        "blocking_reason_codes": [
+          "REQUIRED_CONTEXT_INCOMPLETE"
+        ],
+        "review_reason_codes": [],
+        "owner_decisions_pending": []
+      },
+      {
+        "case_id": "GC-S1-020",
+        "disposition": "ELIGIBLE_TO_MERGE_UNDER_POLICY",
+        "decision_authority": "AUTHORITATIVE",
+        "primary_reason": null,
+        "complete_reason_codes": [],
+        "blocking_reason_codes": [],
+        "review_reason_codes": [],
+        "owner_decisions_pending": []
+      },
+      {
+        "case_id": "GC-S1-021",
+        "disposition": "BLOCK",
+        "decision_authority": "AUTHORITATIVE",
+        "primary_reason": "EVIDENCE_TASK_MISMATCH",
+        "complete_reason_codes": [
+          "APPROVAL_MISSING",
+          "EVIDENCE_TASK_MISMATCH",
+          "RELEASE_STATE_NOT_CLEAN",
+          "REQUIRED_EVIDENCE_MISSING"
+        ],
+        "blocking_reason_codes": [
+          "APPROVAL_MISSING",
+          "EVIDENCE_TASK_MISMATCH",
+          "RELEASE_STATE_NOT_CLEAN",
+          "REQUIRED_EVIDENCE_MISSING"
+        ],
+        "review_reason_codes": [],
+        "owner_decisions_pending": [
+          "OD-S1A-001",
+          "OD-S1A-007"
+        ]
+      },
+      {
+        "case_id": "GC-S1-022",
+        "disposition": "BLOCK",
+        "decision_authority": "AUTHORITATIVE",
+        "primary_reason": "RELEASE_STATE_NOT_CLEAN",
+        "complete_reason_codes": [
+          "RELEASE_STATE_NOT_CLEAN"
+        ],
+        "blocking_reason_codes": [
+          "RELEASE_STATE_NOT_CLEAN"
+        ],
+        "review_reason_codes": [],
+        "owner_decisions_pending": []
+      },
+      {
+        "case_id": "GC-S1-023",
+        "disposition": "BLOCK",
+        "decision_authority": "AUTHORITATIVE",
+        "primary_reason": "APPROVAL_STALE",
+        "complete_reason_codes": [
+          "APPROVAL_STALE"
+        ],
+        "blocking_reason_codes": [
+          "APPROVAL_STALE"
+        ],
+        "review_reason_codes": [],
+        "owner_decisions_pending": [
+          "OD-S1A-002"
+        ]
+      },
+      {
+        "case_id": "GC-S1-024",
+        "disposition": "BLOCK",
+        "decision_authority": "AUTHORITATIVE",
+        "primary_reason": "AUTHORITY_INVALID",
+        "complete_reason_codes": [
+          "AUTHORITY_INVALID"
+        ],
+        "blocking_reason_codes": [
+          "AUTHORITY_INVALID"
+        ],
+        "review_reason_codes": [],
+        "owner_decisions_pending": []
+      },
+      {
+        "case_id": "GC-S1-025",
+        "disposition": "BLOCK",
+        "decision_authority": "AUTHORITATIVE",
+        "primary_reason": "SCOPE_VIOLATION",
+        "complete_reason_codes": [
+          "SCOPE_VIOLATION"
+        ],
+        "blocking_reason_codes": [
+          "SCOPE_VIOLATION"
+        ],
+        "review_reason_codes": [],
+        "owner_decisions_pending": []
+      },
+      {
+        "case_id": "GC-S1-026",
+        "disposition": "BLOCK",
+        "decision_authority": "AUTHORITATIVE",
+        "primary_reason": "REQUIRED_EVIDENCE_INVALID",
+        "complete_reason_codes": [
+          "REQUIRED_EVIDENCE_INVALID"
+        ],
+        "blocking_reason_codes": [
+          "REQUIRED_EVIDENCE_INVALID"
+        ],
+        "review_reason_codes": [],
+        "owner_decisions_pending": []
+      },
+      {
+        "case_id": "GC-S1-027",
+        "disposition": "BLOCK",
+        "decision_authority": "AUTHORITATIVE",
+        "primary_reason": "EVIDENCE_PROVENANCE_INVALID",
+        "complete_reason_codes": [
+          "EVIDENCE_PROVENANCE_INVALID",
+          "REQUIRED_EVIDENCE_INVALID"
+        ],
+        "blocking_reason_codes": [
+          "EVIDENCE_PROVENANCE_INVALID",
+          "REQUIRED_EVIDENCE_INVALID"
+        ],
+        "review_reason_codes": [],
+        "owner_decisions_pending": []
+      },
+      {
+        "case_id": "GC-S1-028",
+        "disposition": "BLOCK",
+        "decision_authority": "AUTHORITATIVE",
+        "primary_reason": "TASK_CONTEXT_STALE",
+        "complete_reason_codes": [
+          "TASK_CONTEXT_STALE"
+        ],
+        "blocking_reason_codes": [
+          "TASK_CONTEXT_STALE"
+        ],
+        "review_reason_codes": [],
+        "owner_decisions_pending": []
+      },
+      {
+        "case_id": "GC-S1-029",
+        "disposition": "BLOCK",
+        "decision_authority": "AUTHORITATIVE",
+        "primary_reason": "REQUIRED_CONTEXT_INCOMPLETE",
+        "complete_reason_codes": [
+          "REQUIRED_CONTEXT_INCOMPLETE"
+        ],
+        "blocking_reason_codes": [
+          "REQUIRED_CONTEXT_INCOMPLETE"
+        ],
+        "review_reason_codes": [],
+        "owner_decisions_pending": []
+      },
+      {
+        "case_id": "GC-S1-030",
+        "disposition": "ELIGIBLE_TO_MERGE_UNDER_POLICY",
+        "decision_authority": "AUTHORITATIVE",
+        "primary_reason": null,
+        "complete_reason_codes": [],
+        "blocking_reason_codes": [],
+        "review_reason_codes": [],
+        "owner_decisions_pending": [
+          "OD-S1A-006"
+        ]
+      },
+      {
+        "case_id": "GC-S1-031",
+        "disposition": "ELIGIBLE_TO_MERGE_UNDER_POLICY",
+        "decision_authority": "ADVISORY_ONLY",
+        "primary_reason": null,
+        "complete_reason_codes": [],
+        "blocking_reason_codes": [],
+        "review_reason_codes": [],
+        "owner_decisions_pending": []
+      },
+      {
+        "case_id": "GC-S1-032",
+        "disposition": "BLOCK",
+        "decision_authority": "ADVISORY_ONLY",
+        "primary_reason": "RELEASE_STATE_NOT_CLEAN",
+        "complete_reason_codes": [
+          "RELEASE_STATE_NOT_CLEAN"
+        ],
+        "blocking_reason_codes": [
+          "RELEASE_STATE_NOT_CLEAN"
+        ],
+        "review_reason_codes": [],
+        "owner_decisions_pending": []
+      },
+      {
+        "case_id": "GC-S1-033",
+        "disposition": "BLOCK",
+        "decision_authority": "AUTHORITATIVE",
+        "primary_reason": "RELEASE_STATE_NOT_CLEAN",
+        "complete_reason_codes": [
+          "RELEASE_STATE_NOT_CLEAN",
+          "SCOPE_UNCERTAIN"
+        ],
+        "blocking_reason_codes": [
+          "RELEASE_STATE_NOT_CLEAN"
+        ],
+        "review_reason_codes": [
+          "SCOPE_UNCERTAIN"
+        ],
+        "owner_decisions_pending": []
+      },
+      {
+        "case_id": "GC-S1-034",
+        "disposition": "ELIGIBLE_TO_MERGE_UNDER_POLICY",
+        "decision_authority": "AUTHORITATIVE",
+        "primary_reason": null,
+        "complete_reason_codes": [],
+        "blocking_reason_codes": [],
+        "review_reason_codes": [],
+        "owner_decisions_pending": []
+      },
+      {
+        "case_id": "GC-S1-035",
+        "disposition": "BLOCK",
+        "decision_authority": "AUTHORITATIVE",
+        "primary_reason": "EVIDENCE_PROVENANCE_INVALID",
+        "complete_reason_codes": [
+          "EVIDENCE_PROVENANCE_INVALID"
+        ],
+        "blocking_reason_codes": [
+          "EVIDENCE_PROVENANCE_INVALID"
+        ],
+        "review_reason_codes": [],
+        "owner_decisions_pending": []
+      },
+      {
+        "case_id": "GC-S1-036",
+        "disposition": "BLOCK",
+        "decision_authority": "AUTHORITATIVE",
+        "primary_reason": "REQUIRED_CONTEXT_INCOMPLETE",
+        "complete_reason_codes": [
+          "REQUIRED_CONTEXT_INCOMPLETE"
+        ],
+        "blocking_reason_codes": [
+          "REQUIRED_CONTEXT_INCOMPLETE"
+        ],
+        "review_reason_codes": [],
+        "owner_decisions_pending": [
+          "OD-S1A-003"
+        ]
+      },
+      {
+        "case_id": "GC-S1-037",
+        "disposition": "REVIEW_REQUIRED",
+        "decision_authority": "AUTHORITATIVE",
+        "primary_reason": "VERIFIER_INDEPENDENCE_UNKNOWN",
+        "complete_reason_codes": [
+          "VERIFIER_INDEPENDENCE_UNKNOWN"
+        ],
+        "blocking_reason_codes": [],
+        "review_reason_codes": [
+          "VERIFIER_INDEPENDENCE_UNKNOWN"
+        ],
+        "owner_decisions_pending": [
+          "OD-S1A-003"
+        ]
+      },
+      {
+        "case_id": "GC-S1-038",
+        "disposition": "ELIGIBLE_TO_MERGE_UNDER_POLICY",
+        "decision_authority": "AUTHORITATIVE",
+        "primary_reason": null,
+        "complete_reason_codes": [],
+        "blocking_reason_codes": [],
+        "review_reason_codes": [],
+        "owner_decisions_pending": [
+          "OD-S1A-004"
+        ]
+      },
+      {
+        "case_id": "GC-S1-039",
+        "disposition": "BLOCK",
+        "decision_authority": "AUTHORITATIVE",
+        "primary_reason": "SCOPE_VIOLATION",
+        "complete_reason_codes": [
+          "SCOPE_VIOLATION"
+        ],
+        "blocking_reason_codes": [
+          "SCOPE_VIOLATION"
+        ],
+        "review_reason_codes": [],
+        "owner_decisions_pending": [
+          "OD-S1A-005"
+        ]
+      },
+      {
+        "case_id": "GC-S1-040",
+        "disposition": "BLOCK",
+        "decision_authority": "AUTHORITATIVE",
+        "primary_reason": "AUTHORITY_INVALID",
+        "complete_reason_codes": [
+          "AUTHORITY_INVALID",
+          "EVIDENCE_TASK_MISMATCH",
+          "REQUIRED_EVIDENCE_MISSING"
+        ],
+        "blocking_reason_codes": [
+          "AUTHORITY_INVALID",
+          "EVIDENCE_TASK_MISMATCH",
+          "REQUIRED_EVIDENCE_MISSING"
+        ],
+        "review_reason_codes": [],
+        "owner_decisions_pending": [
+          "OD-S1A-007"
+        ]
+      },
+      {
+        "case_id": "GC-S1-041",
+        "disposition": "ELIGIBLE_TO_MERGE_UNDER_POLICY",
+        "decision_authority": "AUTHORITATIVE",
+        "primary_reason": null,
+        "complete_reason_codes": [],
+        "blocking_reason_codes": [],
+        "review_reason_codes": [],
+        "owner_decisions_pending": [
+          "OD-S1A-008"
+        ]
+      }
+    ]
   }
 }
