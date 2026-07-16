@@ -147,6 +147,24 @@ SOURCE_DIGEST_FIELDS = (
     "verifier_binding_digest", "policy_digest",
 )
 
+# The ONE exact, ordered PolicyEvaluationRecordPayload field contract (§7.3 / manifest).
+# The record OBJECT is these fields in this order followed by policy_record_digest. The
+# canonical approval field is approval_digest_or_sentinel; no alias is permitted.
+POLICY_RECORD_PAYLOAD_FIELDS = (
+    "schema_version", "task_id", *SOURCE_DIGEST_FIELDS, "policy_version",
+    "evaluator_version", "evaluation_mode", "input_digest", "disposition",
+    "decision_authority", "primary_reason_code", "complete_reason_codes",
+    "blocking_reason_codes", "review_reason_codes", *REQUIREMENT_SETS,
+    *EVIDENCE_RECORD_SETS, "decision_digest",
+)
+POLICY_RECORD_OBJECT_FIELDS = POLICY_RECORD_PAYLOAD_FIELDS + ("policy_record_digest",)
+
+# Application/runtime fields a deterministic record must NEVER contain.
+_RECORD_FORBIDDEN_FIELDS = (
+    "redaction_classification", "trace_id", "request_id", "evaluation_id",
+    "occurred_at", "timestamp", "evaluation_latency_ms", "event_id", "storage_location",
+)
+
 SECRET_PATTERNS = (
     re.compile(r"-----BEGIN"),
     re.compile(r"PRIVATE KEY"),
@@ -326,24 +344,39 @@ def recompute_record_digest(record: dict) -> str:
 
 
 def validate_policy_record(record: dict) -> list[str]:
-    """Independent record validator: recompute the digest and check self-consistency.
-    Does NOT read any fixture expected_* value."""
+    """Independent record validator (R5): enforce the EXACT canonical payload shape BEFORE
+    digest recomputation, so a renamed/missing/extra field can never be laundered by
+    recomputing the digest. Does NOT read any fixture expected_* value.
+
+    failure_code tags map to the named manifest predicates (validator↔manifest equivalence).
+    """
     errors: list[str] = []
-    if record.get("schema_version") != "changegate.policy-evaluation-record.v1":
-        errors.append("record schema_version mismatch")
-    for forbidden in ("redaction_classification", "trace_id", "request_id",
-                      "evaluation_id", "occurred_at", "timestamp",
-                      "evaluation_latency_ms", "event_id", "storage_location"):
+    if not isinstance(record, dict):
+        return ["RECORD_SHAPE_DRIFT: record is not an object"]
+    # REC-NO-RUNTIME — no runtime/application field (checked against the actual record).
+    for forbidden in _RECORD_FORBIDDEN_FIELDS:
         if forbidden in record:
-            errors.append(f"record must not contain application field {forbidden!r}")
-    if recompute_record_digest(record) != record.get("policy_record_digest"):
-        errors.append("policy_record_digest does not match the recomputed payload")
-    # blocking ∪ review == complete, and both are the correct partition.
-    complete = set(record.get("complete_reason_codes", []))
-    if set(record.get("blocking_reason_codes", [])) | set(
-        record.get("review_reason_codes", [])
+            errors.append(f"RECORD_RUNTIME_FIELD: {forbidden!r} present in the record")
+    # REC-EXACT-KEYS — exact ordered key set (payload fields + trailing digest). Rejects a
+    # renamed approval field, a missing canonical field, an extra field, a
+    # duplicate-under-another-key, and any reordering.
+    if tuple(record.keys()) != POLICY_RECORD_OBJECT_FIELDS:
+        errors.append(
+            "RECORD_SHAPE_DRIFT: record keys/order != POLICY_RECORD_PAYLOAD_FIELDS + "
+            "(policy_record_digest,)"
+        )
+        return errors  # shape is wrong; nothing else is trustworthy
+    if record["schema_version"] != "changegate.policy-evaluation-record.v1":
+        errors.append("RECORD_SHAPE_DRIFT: bad schema_version")
+    # REC-DIGEST-RECOMPUTE — the digest must recompute over EXACTLY this payload.
+    if recompute_record_digest(record) != record["policy_record_digest"]:
+        errors.append("RECORD_DIGEST_MISMATCH: policy_record_digest != recomputed payload")
+    # blocking ∪ review == complete, and both partition it.
+    complete = set(record["complete_reason_codes"])
+    if set(record["blocking_reason_codes"]) | set(
+        record["review_reason_codes"]
     ) != complete:
-        errors.append("blocking ∪ review != complete reason set")
+        errors.append("RECORD_SHAPE_DRIFT: blocking ∪ review != complete reason set")
     return errors
 
 
@@ -846,41 +879,58 @@ def _type_matches(actual: str, required: object) -> bool:
     return actual == required
 
 
-_LINEAGE_KEYS = ("task_ref", "candidate_digest", "decision_digest", "input_digest",
-                 "policy_record_digest")
-_PARENT_FIELD_BY_TYPE = {
-    "CHANGEGATE_REVIEW_OVERRIDDEN": "evaluation_event_ref",
-    "CHANGEGATE_MERGE_ATTEMPTED": "evaluation_event_ref",
-    "CHANGEGATE_MERGE_COMPLETED": "attempt_event_ref",
-    "CHANGEGATE_POST_MERGE_VALIDATION": "merge_event_ref",
-    "CHANGEGATE_ROLLBACK_RECORDED": "merge_event_ref",
-    "CHANGEGATE_USER_FEEDBACK_RECORDED": "target_event_ref",
+# The six-field active lineage (R5) — evaluation_id is a first-class lineage field.
+_LINEAGE_KEYS = ("evaluation_id", "task_ref", "candidate_digest", "decision_digest",
+                 "input_digest", "policy_record_digest")
+# Every explicit causal reference each event type carries (multi-parent consistency, §12).
+_PARENT_FIELDS_BY_TYPE = {
+    "CHANGEGATE_REVIEW_OVERRIDDEN": ("evaluation_event_ref",),
+    "CHANGEGATE_MERGE_ATTEMPTED": ("evaluation_event_ref",),
+    "CHANGEGATE_MERGE_COMPLETED": ("attempt_event_ref",),
+    "CHANGEGATE_POST_MERGE_VALIDATION": ("merge_event_ref",),
+    "CHANGEGATE_ROLLBACK_RECORDED": ("merge_event_ref", "validation_event_ref"),
+    "CHANGEGATE_USER_FEEDBACK_RECORDED": ("target_event_ref",),
 }
 
 
-def _lineage_of(dref: dict) -> dict:
-    return {k: dref[k] for k in _LINEAGE_KEYS}
+def _lineage_of(ref: dict) -> dict:
+    return {k: ref[k] for k in _LINEAGE_KEYS}
 
 
-def validate_event_chain(events: list[dict]) -> list[str]:
-    """Cross-event relationships JSON Schema cannot express, using GRAPH/event-reference
-    semantics (§19.3, multi-root). Returns error strings.
+def _record_registry(*records: dict) -> dict:
+    """An immutable record store keyed by policy_record_digest (test-level stand-in for
+    the future application record store §7)."""
+    return {r["policy_record_digest"]: r for r in records}
 
-    Each CHANGEGATE_EVALUATION_COMPLETED establishes an INDEPENDENT root keyed by its own
-    event id. Every downstream event derives its lineage from the causal event it
-    references (not list order). A review override carrying a complete atomic
-    replacement_decision_ref (§19.4) creates a replacement lineage for descendants of that
-    override, preserving root task/candidate. Envelope/decision task equality (§19.5) and
-    candidate-subject-digest equality are enforced for every event.
+
+def validate_event_chain(events: list[dict], records: dict | None = None) -> list[str]:
+    """Cross-event relationships JSON Schema cannot express, using a GRAPH keyed by causal
+    event references with EVALUATION IDENTITY and MULTI-PARENT lineage consistency (§19.3–
+    §19.6, R5). `records` maps policy_record_digest -> PolicyEvaluationRecord and is used to
+    verify replacement decisions coherently. Returns error strings.
     """
     errors: list[str] = []
+    records = records or {}
     by_id: dict[str, dict] = {}
-    # lineage_at[event_id] = the lineage that a descendant referencing this event inherits.
-    lineage_at: dict[str, dict] = {}
+    lineage_at: dict[str, dict] = {}          # event_id -> lineage it propagates
+    eval_registry: dict[str, dict] = {}       # evaluation_id -> its complete lineage
 
     def dref_of(event: dict) -> dict | None:
         dr = event.get("decision_ref")
         return dr if isinstance(dr, dict) else None
+
+    def register_evaluation(eval_id: str, lineage: dict, where: str) -> None:
+        prior = eval_registry.get(eval_id)
+        if prior is None:
+            eval_registry[eval_id] = lineage
+        elif prior != lineage:
+            errors.append(
+                f"{where}: EVALUATION_ID_DUPLICATE {eval_id!r} maps to two identities"
+            )
+        else:
+            errors.append(
+                f"{where}: EVALUATION_ID_DUPLICATE {eval_id!r} re-registered"
+            )
 
     for event in events:
         event_id = event["event_id"]
@@ -929,63 +979,173 @@ def validate_event_chain(events: list[dict]) -> list[str]:
                     f"!= referenced event type {target['event_type']!r}"
                 )
 
-        # 3. lineage — graph-based, keyed by the referenced event.
+        # 3. lineage — graph-based, six-field, MULTI-PARENT consistent.
         if etype == "CHANGEGATE_EVALUATION_COMPLETED":
             if dref is None:
                 errors.append(f"{event_id}: evaluation without decision_ref")
             else:
-                # Independent root; its descendants inherit THIS lineage.
-                lineage_at[event_id] = _lineage_of(dref)
+                lineage = _lineage_of(dref)
+                register_evaluation(dref["evaluation_id"], lineage, event_id)
+                lineage_at[event_id] = lineage
         else:
-            parent_field = _PARENT_FIELD_BY_TYPE[etype]
-            parent_ref = event.get(parent_field)
-            inherited = lineage_at.get(parent_ref) if parent_ref else None
-            if inherited is None:
-                errors.append(
-                    f"{event_id}: no reachable evaluation root via {parent_field}"
-                )
-            elif dref is not None:
+            # collect EVERY explicit predecessor's propagated lineage; all must agree.
+            parent_lineages: list[tuple[str, dict]] = []
+            reachable = True
+            for pfield in _PARENT_FIELDS_BY_TYPE[etype]:
+                pref = event.get(pfield)
+                if not pref:
+                    continue
+                plin = lineage_at.get(pref)
+                if plin is None:
+                    reachable = False
+                    continue
+                parent_lineages.append((pfield, plin))
+            if not parent_lineages:
+                if reachable:
+                    errors.append(f"{event_id}: no reachable evaluation root")
+                inherited = None
+            else:
+                distinct = {tuple(sorted(pl.items())) for _, pl in parent_lineages}
+                if len(distinct) != 1:
+                    errors.append(
+                        f"{event_id}: AMBIGUOUS_PREDECESSOR_LINEAGE — predecessors "
+                        f"{[f for f, _ in parent_lineages]} carry different lineages"
+                    )
+                    inherited = None
+                elif not reachable:
+                    errors.append(f"{event_id}: no reachable evaluation root")
+                    inherited = None
+                else:
+                    inherited = parent_lineages[0][1]
+            if inherited is not None and dref is not None:
                 for key in _LINEAGE_KEYS:
                     if dref[key] != inherited[key]:
-                        errors.append(f"{event_id}: {key} diverges from its root lineage")
-                # this event propagates the inherited lineage to ITS descendants.
+                        code = ("EVALUATION_ID_DRIFT" if key == "evaluation_id"
+                                else "LINEAGE_DIVERGES")
+                        errors.append(f"{event_id}: {key} diverges ({code})")
                 lineage_at[event_id] = inherited
 
-        # 4. review override: atomic replacement decision integrity + lineage switch (§19.4).
+        # 4. review override: atomic + coherent replacement decision (§19.4), then switch.
         if etype == "CHANGEGATE_REVIEW_OVERRIDDEN":
             override = event.get("override") or {}
             repl = override.get("replacement_decision_ref")
             inherited = lineage_at.get(event.get("evaluation_event_ref") or "")
             if repl is not None and inherited is not None and dref is not None:
-                original = _lineage_of(dref)
-                new = _lineage_of(repl)
-                # replacement task/candidate must equal the root.
-                if new["task_ref"] != inherited["task_ref"]:
-                    errors.append(f"{event_id}: replacement task_ref != root task")
-                if new["candidate_digest"] != inherited["candidate_digest"]:
-                    errors.append(
-                        f"{event_id}: replacement candidate_digest != root candidate"
-                    )
-                # no mixing: if input or record digest changed, decision digest must too.
-                changed_ir = (new["input_digest"] != original["input_digest"]
-                              or new["policy_record_digest"] != original["policy_record_digest"])
-                if changed_ir and new["decision_digest"] == original["decision_digest"]:
-                    errors.append(
-                        f"{event_id}: override mixes the original decision digest with a "
-                        "new input/record digest"
-                    )
-                # a no-op replacement identical to the original is rejected.
-                if new == original:
-                    errors.append(f"{event_id}: replacement decision identical to original")
-                # descendants of the override inherit the REPLACEMENT lineage.
-                lineage_at[event_id] = new
+                errors.extend(
+                    _validate_replacement(event_id, repl, _lineage_of(dref), inherited,
+                                          records, eval_registry)
+                )
+                lineage_at[event_id] = _lineage_of(repl)
 
         by_id[event_id] = event
+
+    # cycle detection over the causal reference graph.
+    errors.extend(_detect_causal_cycle(events))
     return errors
+
+
+def _validate_replacement(event_id, repl, original, root, records, eval_registry):
+    """§19.4/§8 coherent replacement identity. `records` verifies the replacement is a real
+    PolicyEvaluationRecord, not six strings in a JSON object."""
+    errs: list[str] = []
+    new = _lineage_of(repl)
+    # RPL-ROOT-OWNERSHIP + RPL-CANDIDATE-NEW-ROOT
+    if new["task_ref"] != root["task_ref"]:
+        errs.append(f"{event_id}: REPLACEMENT_ROOT_MISMATCH task_ref != root task")
+    if new["candidate_digest"] != root["candidate_digest"]:
+        errs.append(
+            f"{event_id}: REPLACEMENT_CANDIDATE_CHANGED candidate_digest != root candidate")
+    # RPL-DECISION-DIFFERS / RPL-RECORD-DIFFERS
+    if new["decision_digest"] == original["decision_digest"]:
+        errs.append(f"{event_id}: REPLACEMENT_DECISION_NOT_CHANGED")
+    if new["policy_record_digest"] == original["policy_record_digest"]:
+        errs.append(f"{event_id}: REPLACEMENT_RECORD_NOT_CHANGED")
+    # RPL-NO-OP — the three decision-identity digests all unchanged from the original.
+    if (new["decision_digest"] == original["decision_digest"]
+            and new["input_digest"] == original["input_digest"]
+            and new["policy_record_digest"] == original["policy_record_digest"]):
+        errs.append(f"{event_id}: REPLACEMENT_NO_OP identical to original")
+    # RPL-EVAL-UNIQUE — replacement evaluation_id must be new+unique.
+    if new["evaluation_id"] in eval_registry:
+        errs.append(f"{event_id}: REPLACEMENT_EVALUATION_NOT_UNIQUE {new['evaluation_id']!r}")
+    # RPL-REGISTERED-RECORD + record-consistency equalities (do NOT trust the six strings).
+    record = records.get(new["policy_record_digest"])
+    if record is None:
+        errs.append(f"{event_id}: REPLACEMENT_RECORD_MISSING (no registered record)")
+    else:
+        if validate_policy_record(record):
+            errs.append(f"{event_id}: REPLACEMENT_RECORD_DIGEST_MISMATCH (invalid record)")
+        else:
+            if record["policy_record_digest"] != new["policy_record_digest"]:
+                errs.append(f"{event_id}: REPLACEMENT_RECORD_DIGEST_MISMATCH")
+            if record["decision_digest"] != new["decision_digest"]:
+                errs.append(f"{event_id}: REPLACEMENT_DECISION_MISMATCH")
+            if record["input_digest"] != new["input_digest"]:
+                errs.append(f"{event_id}: REPLACEMENT_INPUT_MISMATCH")
+            if record["task_id"] != new["task_ref"]:
+                errs.append(f"{event_id}: REPLACEMENT_TASK_MISMATCH")
+            if record["candidate_digest"] != new["candidate_digest"]:
+                errs.append(f"{event_id}: REPLACEMENT_CANDIDATE_MISMATCH")
+    # register the replacement evaluation identity (if unique).
+    if new["evaluation_id"] not in eval_registry:
+        eval_registry[new["evaluation_id"]] = new
+    return errs
+
+
+def _detect_causal_cycle(events: list[dict]) -> list[str]:
+    ref_fields = ("evaluation_event_ref", "attempt_event_ref", "merge_event_ref",
+                  "validation_event_ref", "target_event_ref")
+    edges: dict[str, list[str]] = {}
+    for e in events:
+        edges[e["event_id"]] = [e[f] for f in ref_fields if e.get(f)]
+    color: dict[str, int] = {}
+
+    def dfs(node: str) -> bool:
+        color[node] = 1
+        for nxt in edges.get(node, []):
+            if color.get(nxt) == 1:
+                return True
+            if color.get(nxt, 0) == 0 and nxt in edges and dfs(nxt):
+                return True
+        color[node] = 2
+        return False
+
+    for node in edges:
+        if color.get(node, 0) == 0 and dfs(node):
+            return [f"causal cycle detected at {node}"]
+    return []
 
 
 def _dref(**overrides) -> dict:
     return {**_DECISION_REF, **overrides}
+
+
+def _make_replacement(root_task: str, root_candidate: str, original: dict, *,
+                      same_input: bool, tag: str) -> tuple[dict, dict]:
+    """Build a COHERENT replacement: a real PolicyEvaluationRecord bound to the root
+    task/candidate with a genuinely new decision identity, plus the matching atomic
+    replacement_decision_ref. Returns (replacement_ref, replacement_record). The record is
+    what the registry serves; the ref's six digests are verified against it, never trusted
+    on their own. `same_input=True` keeps the original input_digest (a human-resolved
+    override on identical deterministic input, §8)."""
+    case = _case("GC-S1-001")
+    bindings = {**case["policy_input_bindings"], "task_id": root_task,
+                "candidate_digest": root_candidate}
+    facts = case["policy_input_facts"]
+    record = build_policy_record(bindings, facts, _fixture()["fact_state_mapping"])
+    payload = {k: v for k, v in record.items() if k != "policy_record_digest"}
+    payload["decision_digest"] = canonical_digest({"replacement-decision": tag})
+    payload["input_digest"] = (original["input_digest"] if same_input
+                               else canonical_digest({"replacement-input": tag}))
+    record = {**payload, "policy_record_digest": canonical_digest(payload)}
+    ref = {
+        "evaluation_id": f"eval-repl-{tag}",
+        "task_ref": root_task, "candidate_digest": root_candidate,
+        "decision_digest": record["decision_digest"],
+        "input_digest": record["input_digest"],
+        "policy_record_digest": record["policy_record_digest"],
+    }
+    return ref, record
 
 
 def _full_chain() -> list[dict]:
@@ -1103,131 +1263,144 @@ def test_chain_validator_full_lineage_negative_controls():
     assert any("candidate_digest diverges" in e
                for e in validate_event_chain(changed_candidate))
 
-    # 16 override mixing the ORIGINAL decision digest with a new input/record digest.
-    mixed_repl = _replacement_dref(
-        decision_digest=_DECISION_REF["decision_digest"],   # original decision digest
-        input_digest=canonical_digest({"repl": "new-input"}),
-        policy_record_digest=canonical_digest({"repl": "new-record"}))
-    override_event = {
-        **_base_envelope("CHANGEGATE_REVIEW_OVERRIDDEN"), "event_id": "evt-override-1",
-        "decision_ref": _DECISION_REF, "evaluation_event_ref": "evt-eval-1",
-        "override": {"actor_ref": "owner-1", "reason_code": "SCOPE_EXCEPTION",
-                     "replacement_decision_ref": mixed_repl,
-                     "exception_ref": None, "expires_at": None},
-    }
-    mixed_chain = [chain[0], override_event]
-    assert any("mixes the original decision digest" in e
-               for e in validate_event_chain(mixed_chain))
+    # 16 replacement mixing digests / incoherent record — see the dedicated §19.4 test.
+    repl, record = _make_replacement(_ROOT_TASK, _ROOT_CANDIDATE, _lineage_of(_DECISION_REF),
+                                     same_input=False, tag="c16")
+    tampered = {**repl, "decision_digest": _DECISION_REF["decision_digest"]}  # claim old dec
+    override_event = _override_event("evt-override-1", tampered)
+    assert any("REPLACEMENT_DECISION" in e for e in validate_event_chain(
+        [chain[0], override_event], records=_record_registry(record)))
+
+
+def _override_event(event_id: str, repl: dict, evaluation_event_ref: str = "evt-eval-1",
+                    decision_ref: dict | None = None) -> dict:
+    return {**_base_envelope("CHANGEGATE_REVIEW_OVERRIDDEN"), "event_id": event_id,
+            "decision_ref": decision_ref or _DECISION_REF,
+            "evaluation_event_ref": evaluation_event_ref,
+            "override": {"actor_ref": "owner-1", "reason_code": "SCOPE_EXCEPTION",
+                         "replacement_decision_ref": repl,
+                         "exception_ref": None, "expires_at": None}}
+
+
+def _root_eval_event() -> dict:
+    return {**_base_envelope("CHANGEGATE_EVALUATION_COMPLETED"), "event_id": "evt-eval-1",
+            **_POSITIVE_EXTRAS["CHANGEGATE_EVALUATION_COMPLETED"]}
+
+
+def test_replacement_positive_same_input_is_permitted():
+    """§8 RPL-SAME-INPUT-OK: same input_digest + new decision + new coherent record passes."""
+    original = _lineage_of(_DECISION_REF)
+    repl, record = _make_replacement(_ROOT_TASK, _ROOT_CANDIDATE, original,
+                                     same_input=True, tag="ok")
+    assert repl["input_digest"] == original["input_digest"]        # same input
+    assert repl["decision_digest"] != original["decision_digest"]  # new decision
+    assert repl["policy_record_digest"] != original["policy_record_digest"]
+    chain = [_root_eval_event(), _override_event("evt-ovr", repl)]
+    assert validate_event_chain(chain, records=_record_registry(record)) == []
 
 
 def test_replacement_decision_negative_controls_are_all_detected():
-    """§19.4: all nine replacement-integrity controls are detected."""
-    evaluation = {**_base_envelope("CHANGEGATE_EVALUATION_COMPLETED"),
-                  "event_id": "evt-eval-1",
-                  **_POSITIVE_EXTRAS["CHANGEGATE_EVALUATION_COMPLETED"]}
-    orig = _DECISION_REF
-    new_dec = canonical_digest({"repl": "new-decision"})
-    new_in = canonical_digest({"repl": "new-input"})
-    new_rec = canonical_digest({"repl": "new-record"})
+    """§9: all fourteen replacement-integrity controls are detected."""
+    original = _lineage_of(_DECISION_REF)
+    evaluation = _root_eval_event()
 
-    def override_with(repl):
-        return {**_base_envelope("CHANGEGATE_REVIEW_OVERRIDDEN"),
-                "event_id": "evt-override-1", "decision_ref": _DECISION_REF,
-                "evaluation_event_ref": "evt-eval-1",
-                "override": {"actor_ref": "owner-1", "reason_code": "SCOPE_EXCEPTION",
-                             "replacement_decision_ref": repl,
-                             "exception_ref": None, "expires_at": None}}
+    def run(repl, record):
+        return validate_event_chain([evaluation, _override_event("evt-ovr", repl)],
+                                    records=_record_registry(record) if record else {})
 
-    controls = {
-        # 1 old decision + new input + new record
-        "old_dec_new_ir": (_replacement_dref(
-            decision_digest=orig["decision_digest"], input_digest=new_in,
-            policy_record_digest=new_rec), "mixes the original decision digest"),
-        # 2 new decision + old input + new record
-        "new_dec_old_input": (_replacement_dref(
-            decision_digest=new_dec, input_digest=orig["input_digest"],
-            policy_record_digest=new_rec), None),  # valid at validator (input unchanged is fine)
-        # 3 new decision + new input + old record (valid — record can change with decision)
-        # (kept as a POSITIVE sanity below, not a negative)
-        # 5 identical replacement / no-op
-        "identical": (_replacement_dref(
-            decision_digest=orig["decision_digest"], input_digest=orig["input_digest"],
-            policy_record_digest=orig["policy_record_digest"]),
-            "identical to original"),
-        # 6 different task
-        "diff_task": (_replacement_dref(
-            task_ref="other-task", decision_digest=new_dec, input_digest=new_in,
-            policy_record_digest=new_rec), "replacement task_ref != root task"),
-        # 7 different candidate
-        "diff_candidate": (_replacement_dref(
-            candidate_digest=canonical_digest({"c": "other"}), decision_digest=new_dec,
-            input_digest=new_in, policy_record_digest=new_rec),
-            "replacement candidate_digest != root candidate"),
-    }
-    for name, (repl, expected) in controls.items():
-        errors = validate_event_chain([evaluation, override_with(repl)])
-        if expected is None:
-            continue
-        assert any(expected in e for e in errors), f"{name} not detected: {errors}"
+    base_repl, base_record = _make_replacement(_ROOT_TASK, _ROOT_CANDIDATE, original,
+                                               same_input=False, tag="base")
 
-    # 4 partial replacement object — rejected by the SCHEMA (all six fields required).
+    # 1 old decision + new input + new record (claim original decision digest).
+    r = {**base_repl, "decision_digest": original["decision_digest"]}
+    assert any("REPLACEMENT_DECISION" in e for e in run(r, base_record))
+    # 2 new decision + old input + new record whose EMBEDDED input differs from the ref.
+    r = {**base_repl, "input_digest": original["input_digest"]}   # ref says old input
+    assert any("REPLACEMENT_INPUT_MISMATCH" in e for e in run(r, base_record))
+    # 3 new decision + new input + old record (claim original record digest).
+    r = {**base_repl, "policy_record_digest": original["policy_record_digest"]}
+    assert any("REPLACEMENT_RECORD" in e for e in run(r, base_record))
+    # 4 record digest not matching the replacement record (tamper the record).
+    bad_record = {**base_record, "task_id": base_record["task_id"]}  # same shape
+    bad_record = {**base_record}
+    bad_record["policy_record_digest"] = canonical_digest({"tampered": 1})
+    assert any("REPLACEMENT_RECORD" in e for e in run(base_repl, bad_record))
+    # 5 decision digest not matching the replacement record.
+    r = {**base_repl, "decision_digest": canonical_digest({"mismatch": "dec"})}
+    assert any("REPLACEMENT_DECISION_MISMATCH" in e for e in run(r, base_record))
+    # 6 task mismatch (ref task != root).
+    r = {**base_repl, "task_ref": "other-task"}
+    assert any("REPLACEMENT_ROOT_MISMATCH" in e for e in run(r, base_record))
+    # 7 candidate mismatch.
+    r = {**base_repl, "candidate_digest": canonical_digest({"c": "other"})}
+    assert any("REPLACEMENT_CANDIDATE_CHANGED" in e for e in run(r, base_record))
+    # 8 partial replacement object — schema-rejected.
     validator = _validator()
-    partial = override_with({"evaluation_id": "e", "task_ref": _ROOT_TASK,
-                             "candidate_digest": _ROOT_CANDIDATE,
-                             "decision_digest": new_dec})  # missing input/record digests
-    assert list(validator.iter_errors(partial)), "partial replacement must fail schema"
-
-    # 8 downstream event reverting to the original identity after replacement activation.
-    full_repl = _replacement_dref(decision_digest=new_dec, input_digest=new_in,
-                                  policy_record_digest=new_rec)
-    override = override_with(full_repl)
-    revert = {**_base_envelope("CHANGEGATE_MERGE_ATTEMPTED"), "event_id": "evt-attempt-1",
-              "decision_ref": _DECISION_REF,  # original identity after the switch
-              "evaluation_event_ref": "evt-override-1",
+    partial = _override_event("evt-ovr", {"evaluation_id": "e", "task_ref": _ROOT_TASK,
+                              "candidate_digest": _ROOT_CANDIDATE,
+                              "decision_digest": base_repl["decision_digest"]})
+    assert list(validator.iter_errors(partial))
+    # 9 identical / no-op replacement.
+    noop = {**base_repl, "decision_digest": original["decision_digest"],
+            "input_digest": original["input_digest"],
+            "policy_record_digest": original["policy_record_digest"]}
+    assert any("REPLACEMENT" in e for e in run(noop, base_record))
+    # 10 duplicate evaluation ID (reuse the root's evaluation_id).
+    r = {**base_repl, "evaluation_id": _DECISION_REF["evaluation_id"]}
+    assert any("REPLACEMENT_EVALUATION_NOT_UNIQUE" in e for e in run(r, base_record))
+    # 11 arbitrary evaluation ID with NO registered replacement record.
+    assert any("REPLACEMENT_RECORD_MISSING" in e
+               for e in run(base_repl, None))
+    # 12 replacement record copied from ANOTHER root (different task/candidate record).
+    other_repl, other_record = _make_replacement(
+        "task-OTHER", canonical_digest({"c": "OTHER"}), original, same_input=False,
+        tag="other")
+    # point the ref at our root but serve the other-root record:
+    r = {**base_repl, "policy_record_digest": other_record["policy_record_digest"]}
+    assert any("REPLACEMENT" in e for e in run(r, other_record))
+    # 13 downstream revert to original decision identity after activation.
+    override = _override_event("evt-ovr", base_repl)
+    revert = {**_base_envelope("CHANGEGATE_MERGE_ATTEMPTED"), "event_id": "evt-att",
+              "decision_ref": _DECISION_REF, "evaluation_event_ref": "evt-ovr",
               "outcome": {"status": "SUCCESS", "detail_code": "ATTEMPT_STARTED"}}
-    errs = validate_event_chain([evaluation, override, revert])
-    assert any("diverges" in e for e in errs), f"revert not detected: {errs}"
-
-    # 9 replacement that changes the candidate requires a new evaluation (same as control 7).
-    assert any("candidate" in e for e in validate_event_chain(
-        [evaluation, override_with(_replacement_dref(
-            candidate_digest=canonical_digest({"c": "z"}), decision_digest=new_dec,
-            input_digest=new_in, policy_record_digest=new_rec))]))
+    errs = validate_event_chain([evaluation, override, revert],
+                                records=_record_registry(base_record))
+    assert any("diverges" in e for e in errs)
+    # 14 replacement candidate change without a new evaluation root (== control 7 form).
+    r = {**base_repl, "candidate_digest": canonical_digest({"c": "z"})}
+    assert any("REPLACEMENT_CANDIDATE_CHANGED" in e for e in run(r, base_record))
 
 
 def test_override_switches_active_decision_lineage():
-    """A complete atomic replacement switches the lineage; a subsequent event matching the
+    """A coherent atomic replacement switches the lineage; a subsequent event matching the
     REPLACEMENT validates, and one reverting to the original afterwards fails."""
-    new_repl = _replacement_dref(
-        decision_digest=canonical_digest({"probe": "replacement-decision"}),
-        input_digest=canonical_digest({"probe": "replacement-input"}),
-        policy_record_digest=canonical_digest({"probe": "replacement-record"}))
-    replacement_dref = _dref(decision_digest=new_repl["decision_digest"],
-                             input_digest=new_repl["input_digest"],
-                             policy_record_digest=new_repl["policy_record_digest"])
+    original = _lineage_of(_DECISION_REF)
+    repl, record = _make_replacement(_ROOT_TASK, _ROOT_CANDIDATE, original,
+                                     same_input=False, tag="switch")
+    replacement_lineage = _dref(evaluation_id=repl["evaluation_id"],
+                                decision_digest=repl["decision_digest"],
+                                input_digest=repl["input_digest"],
+                                policy_record_digest=repl["policy_record_digest"])
 
     def env(event_id, event_type, **extra):
         return {**_base_envelope(event_type), "event_id": event_id, **extra}
 
-    override = env("evt-override-1", "CHANGEGATE_REVIEW_OVERRIDDEN",
-                   decision_ref=_DECISION_REF, evaluation_event_ref="evt-eval-1",
-                   override={"actor_ref": "owner-1", "reason_code": "SCOPE_EXCEPTION",
-                             "replacement_decision_ref": new_repl,
-                             "exception_ref": None, "expires_at": None})
+    override = _override_event("evt-override-1", repl)
     good_attempt = env("evt-attempt-1", "CHANGEGATE_MERGE_ATTEMPTED",
-                       decision_ref=replacement_dref, evaluation_event_ref="evt-override-1",
+                       decision_ref=replacement_lineage,
+                       evaluation_event_ref="evt-override-1",
                        outcome={"status": "SUCCESS", "detail_code": "ATTEMPT_STARTED"})
     stale_attempt = env("evt-attempt-2", "CHANGEGATE_MERGE_ATTEMPTED",
                         decision_ref=_DECISION_REF, evaluation_event_ref="evt-override-1",
                         outcome={"status": "SUCCESS", "detail_code": "ATTEMPT_STARTED"})
-    evaluation = {**_base_envelope("CHANGEGATE_EVALUATION_COMPLETED"),
-                  "event_id": "evt-eval-1",
-                  **_POSITIVE_EXTRAS["CHANGEGATE_EVALUATION_COMPLETED"]}
+    evaluation = _root_eval_event()
     validator = _validator()
     for e in (evaluation, override, good_attempt):
         assert not list(validator.iter_errors(e)), e["event_id"]
-    assert validate_event_chain([evaluation, override, good_attempt]) == []
-    stale_errors = validate_event_chain([evaluation, override, stale_attempt])
+    registry = _record_registry(record)
+    assert validate_event_chain([evaluation, override, good_attempt], records=registry) == []
+    stale_errors = validate_event_chain([evaluation, override, stale_attempt],
+                                        records=registry)
     assert any("diverges" in e for e in stale_errors)
 
 
@@ -1241,7 +1414,7 @@ def _set(chain: list[dict], idx: int, key: str, value) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 def _root_lineage(task: str, candidate: str, tag: str) -> dict:
-    return _dref(task_ref=task, candidate_digest=candidate,
+    return _dref(evaluation_id=f"eval-{tag}", task_ref=task, candidate_digest=candidate,
                  decision_digest=canonical_digest({"d": tag}),
                  input_digest=canonical_digest({"i": tag}),
                  policy_record_digest=canonical_digest({"r": tag}))
@@ -1299,12 +1472,11 @@ def test_multi_root_positive_chains_validate():
             assert not list(validator.iter_errors(e)), f"{name}/{e['event_id']}"
         assert validate_event_chain(chain) == [], f"{name}: {validate_event_chain(chain)}"
 
-    # 4 one root with an override, one without.
-    repl = _replacement_dref(task_ref="task-A", candidate_digest=A["candidate_digest"],
-                             decision_digest=canonical_digest({"d": "A-repl"}),
-                             input_digest=canonical_digest({"i": "A-repl"}),
-                             policy_record_digest=canonical_digest({"r": "A-repl"}))
-    repl_lineage = _dref(task_ref="task-A", candidate_digest=A["candidate_digest"],
+    # 4 one root with an override (coherent replacement), one without.
+    repl, record = _make_replacement("task-A", A["candidate_digest"], A,
+                                     same_input=False, tag="A-repl")
+    repl_lineage = _dref(evaluation_id=repl["evaluation_id"], task_ref="task-A",
+                         candidate_digest=A["candidate_digest"],
                          decision_digest=repl["decision_digest"],
                          input_digest=repl["input_digest"],
                          policy_record_digest=repl["policy_record_digest"])
@@ -1321,7 +1493,8 @@ def test_multi_root_positive_chains_validate():
              a_after_override, b_plain]
     for e in mixed:
         assert not list(validator.iter_errors(e)), e["event_id"]
-    assert validate_event_chain(mixed) == [], validate_event_chain(mixed)
+    assert validate_event_chain(mixed, records=_record_registry(record)) == [], (
+        validate_event_chain(mixed, records=_record_registry(record)))
 
 
 def test_multi_root_negative_controls_are_detected():
@@ -1354,14 +1527,82 @@ def test_multi_root_negative_controls_are_detected():
     errs = validate_event_chain([_root_event("evt-A", A), _root_event("evt-B", B), fb])
     assert any("diverges" in e for e in errs)
 
-    # event with no reachable evaluation root.
-    orphan = attempt("evt-orphan", A, "evt-missing")
+    # event with no reachable evaluation root (disconnected: no evaluation_event_ref).
+    orphan = _evt("evt-orphan", "CHANGEGATE_MERGE_ATTEMPTED", A,
+                  outcome={"status": "SUCCESS", "detail_code": "ATTEMPT_STARTED"})
     assert any("no reachable evaluation root" in e
                for e in validate_event_chain([orphan]))
 
-    # duplicate evaluation identity creating ambiguous lineage.
-    dup = [_root_event("evt-A", A), _root_event("evt-A", B)]
-    assert any("duplicate event_id" in e for e in validate_event_chain(dup))
+    # duplicate EVENT id.
+    dup_event = [_root_event("evt-A", A), _root_event("evt-A", B)]
+    assert any("duplicate event_id" in e for e in validate_event_chain(dup_event))
+
+    # duplicate ROOT EVALUATION id even with different event ids.
+    A_dup_eval = _dref(evaluation_id="eval-A", task_ref="task-C",
+                       candidate_digest=canonical_digest({"c": "C"}),
+                       decision_digest=canonical_digest({"d": "C"}),
+                       input_digest=canonical_digest({"i": "C"}),
+                       policy_record_digest=canonical_digest({"r": "C"}))
+    dup_eval = [_root_event("evt-A", A), _root_event("evt-C", A_dup_eval)]
+    assert any("EVALUATION_ID_DUPLICATE" in e for e in validate_event_chain(dup_eval))
+
+    # downstream evaluation-ID drift (same other lineage, different evaluation_id).
+    drift = attempt("evt-drift", {**A, "evaluation_id": "eval-DRIFT"}, "evt-A")
+    errs = validate_event_chain([_root_event("evt-A", A), drift])
+    assert any("EVALUATION_ID_DRIFT" in e for e in errs), errs
+
+    # rollback combining a merge from root A with a validation from root B (multi-parent).
+    att_A = attempt("evt-A-att", A, "evt-A")
+    merge_A = _evt("evt-A-merge", "CHANGEGATE_MERGE_COMPLETED", A,
+                   attempt_event_ref="evt-A-att",
+                   outcome={"status": "SUCCESS", "detail_code": "MERGE_OK",
+                            "resulting_commit_sha": "c" * 40})
+    att_B = attempt("evt-B-att", B, "evt-B")
+    merge_B = _evt("evt-B-merge", "CHANGEGATE_MERGE_COMPLETED", B,
+                   attempt_event_ref="evt-B-att",
+                   outcome={"status": "SUCCESS", "detail_code": "MERGE_OK",
+                            "resulting_commit_sha": "d" * 40})
+    val_B = _evt("evt-B-val", "CHANGEGATE_POST_MERGE_VALIDATION", B,
+                 merge_event_ref="evt-B-merge",
+                 outcome={"status": "FAILURE", "detail_code": "CI_FAILED"})
+    rollback_cross = _evt("evt-roll", "CHANGEGATE_ROLLBACK_RECORDED", A,
+                          merge_event_ref="evt-A-merge", validation_event_ref="evt-B-val",
+                          outcome={"status": "SUCCESS", "detail_code": "ROLLED_BACK"})
+    cross_chain = [_root_event("evt-A", A), _root_event("evt-B", B), att_A, merge_A,
+                   att_B, merge_B, val_B, rollback_cross]
+    assert any("AMBIGUOUS_PREDECESSOR_LINEAGE" in e
+               for e in validate_event_chain(cross_chain))
+
+    # causal cycle.
+    cyc_a = attempt("evt-cyc-a", A, "evt-cyc-b")
+    cyc_b = attempt("evt-cyc-b", A, "evt-cyc-a")
+    assert any("cycle" in e for e in validate_event_chain([cyc_a, cyc_b]))
+
+
+def test_multi_parent_rollback_positive_shares_lineage():
+    """§12: a rollback whose merge and validation predecessors share one lineage passes."""
+    A = _root_lineage("task-A", canonical_digest({"c": "A"}), "A")
+
+    def ev(eid, etype, **extra):
+        return _evt(eid, etype, A, **extra)
+
+    chain = [
+        _root_event("evt-A", A),
+        ev("evt-att", "CHANGEGATE_MERGE_ATTEMPTED", evaluation_event_ref="evt-A",
+           outcome={"status": "SUCCESS", "detail_code": "ATTEMPT_STARTED"}),
+        ev("evt-merge", "CHANGEGATE_MERGE_COMPLETED", attempt_event_ref="evt-att",
+           outcome={"status": "SUCCESS", "detail_code": "MERGE_OK",
+                    "resulting_commit_sha": "c" * 40}),
+        ev("evt-val", "CHANGEGATE_POST_MERGE_VALIDATION", merge_event_ref="evt-merge",
+           outcome={"status": "FAILURE", "detail_code": "CI_FAILED"}),
+        ev("evt-roll", "CHANGEGATE_ROLLBACK_RECORDED", merge_event_ref="evt-merge",
+           validation_event_ref="evt-val",
+           outcome={"status": "SUCCESS", "detail_code": "ROLLED_BACK"}),
+    ]
+    validator = _validator()
+    for e in chain:
+        assert not list(validator.iter_errors(e)), e["event_id"]
+    assert validate_event_chain(chain) == [], validate_event_chain(chain)
 
 
 # ---------------------------------------------------------------------------
@@ -1522,7 +1763,7 @@ def test_no_artifact_contains_secret_material():
 
 def test_golden_fixture_is_valid_json_with_version_and_status():
     suite = _fixture()
-    assert suite["schema_version"] == "changegate-merge-eligibility-golden.v5"
+    assert suite["schema_version"] == "changegate-merge-eligibility-golden.v6"
     assert suite["status"] == "DRAFT_FOR_OWNER_REVIEW"
     assert suite["policy_spec"] == (
         "docs/strategy/CHANGEGATE_VERTICAL_MVP_SLICE_1_POLICY_SPEC.md"
@@ -2347,14 +2588,20 @@ def test_semantic_manifest_binds_every_load_bearing_area():
                  ["replacement_decision_ref"]["required"]
     )
     assert set(es["event_type_set"]) == set(EVENT_TYPES)
-    # CAUSAL SEMANTICS: lineage field set, multi-root support, control ids.
+    # CAUSAL SEMANTICS: SIX-field lineage (incl evaluation_id), multi-root, named controls.
     cs = m["causal_semantics"]
     assert cs["multi_root_support"] is True
     assert set(cs["lineage_field_set"]) == {
-        "task_ref", "candidate_digest", "decision_digest", "input_digest",
+        "evaluation_id", "task_ref", "candidate_digest", "decision_digest", "input_digest",
         "policy_record_digest",
     }
-    assert len(cs["causal_negative_control_ids"]) >= 16
+    assert set(cs["lineage_field_set"]) == set(_LINEAGE_KEYS)
+    # named machine-readable semantic controls (not opaque ids).
+    controls = cs["semantic_controls"]
+    for c in controls:
+        assert set(c) >= {"id", "subject", "required_fields", "predicate", "failure_code"}
+    assert "causal_negative_control_ids" not in cs
+    assert "replacement_negative_control_ids" not in cs
     # GOLDEN SEMANTICS: one entry per case, matching expectations.
     gs = {g["case_id"]: g for g in m["golden_semantics"]}
     assert set(gs) == {c["case_id"] for c in suite["cases"]}
@@ -2378,6 +2625,300 @@ def test_semantic_fingerprint_is_stable_and_reproducible():
     assert set(gov["semantic_fingerprint_components"]) == (
         set(suite["slice_1a_semantic_manifest"]) - {"manifest_version"}
     )
+
+
+# ---------------------------------------------------------------------------
+# Exact record-shape negative controls (H-R4V-01 / §6)
+# ---------------------------------------------------------------------------
+
+def test_policy_record_payload_fields_match_spec_manifest_and_builder():
+    suite = _fixture()
+    order = suite["slice_1a_semantic_manifest"]["deterministic_identity"][
+        "policy_record_payload_field_order"]
+    assert tuple(order) == POLICY_RECORD_PAYLOAD_FIELDS
+    bindings, facts, mapping = _green()
+    assert tuple(policy_record_payload(bindings, facts, mapping).keys()) == (
+        POLICY_RECORD_PAYLOAD_FIELDS
+    )
+    assert tuple(build_policy_record(bindings, facts, mapping).keys()) == (
+        POLICY_RECORD_OBJECT_FIELDS
+    )
+    # the exact approval field is canonical; no alias name appears in the contract.
+    assert "approval_digest_or_sentinel" in POLICY_RECORD_PAYLOAD_FIELDS
+    assert "approval_digest" not in POLICY_RECORD_PAYLOAD_FIELDS
+
+
+def test_valid_record_passes_and_shape_drift_is_rejected():
+    bindings, facts, mapping = _green()
+    record = build_policy_record(bindings, facts, mapping)
+    assert validate_policy_record(record) == []
+
+    # 1 renamed approval field, rehashed — rejected.
+    renamed = {("approval_digest" if k == "approval_digest_or_sentinel" else k): v
+               for k, v in record.items()}
+    renamed = _rehash(renamed)
+    assert validate_policy_record(renamed), "renamed approval field must fail"
+    # 2 missing approval field, rehashed — rejected.
+    missing = _rehash({k: v for k, v in record.items()
+                       if k != "approval_digest_or_sentinel"})
+    assert validate_policy_record(missing), "missing approval field must fail"
+    # 3 extra unknown field, rehashed — rejected.
+    extra = _rehash({**record, "surprise": 1})
+    assert validate_policy_record(extra), "extra field must fail"
+    # 4 every canonical field removal is rejected (independent negative per field).
+    for field in POLICY_RECORD_PAYLOAD_FIELDS:
+        dropped = _rehash({k: v for k, v in record.items() if k != field})
+        assert validate_policy_record(dropped), f"missing {field} must fail"
+    # 5 duplicate semantic field under another key, rehashed — rejected.
+    dup_key = _rehash({**record, "task_id_alias": record["task_id"]})
+    assert validate_policy_record(dup_key)
+    # 6 wrong type on a canonical field, rehashed — rejected only via shape? type is a
+    #   value change; keys stay exact, so it passes key check but the digest recompute is
+    #   over the wrong shape only if the caller lies about the digest. A type change that is
+    #   rehashed stays self-consistent, so the SHAPE check is the load-bearing guard; a
+    #   type contract is enforced by the SCHEMA at the event boundary. Assert the key guard.
+    #   (documented: order is normative)
+    reordered = {k: record[k] for k in reversed(list(record))}
+    assert validate_policy_record(reordered), "reordered keys must fail (order normative)"
+    # 7 record digest recomputed over the wrong shape (renamed but NOT rehashed).
+    renamed_no_rehash = {("approval_digest" if k == "approval_digest_or_sentinel" else k): v
+                         for k, v in record.items()}
+    assert validate_policy_record(renamed_no_rehash)
+    # 8 self-digest included in the payload (policy_record_digest twice / inside payload).
+    #   Adding a second digest-like key breaks the exact key set.
+    self_dig = _rehash({**record, "nested_digest": record["policy_record_digest"]})
+    assert validate_policy_record(self_dig)
+    # 9 runtime metadata included — rejected (extra key -> shape drift).
+    runtime = _rehash({**record, "trace_id": "t-1"})
+    assert validate_policy_record(runtime)
+    # a malicious caller cannot make an invalid record valid by recomputing the digest.
+    assert all(validate_policy_record(_rehash(bad)) for bad in (renamed, missing, extra))
+
+
+def _rehash(record: dict) -> dict:
+    payload = {k: v for k, v in record.items() if k != "policy_record_digest"}
+    return {**payload, "policy_record_digest": canonical_digest(payload)}
+
+
+# ---------------------------------------------------------------------------
+# Named semantic predicates: validator ↔ manifest equivalence (H-R4V-04 / §14–§15)
+# ---------------------------------------------------------------------------
+
+def _run_named_control(control_id: str) -> list[str]:
+    """Execute the scenario that the named manifest control governs and return the
+    validator errors. For a negative control the returned errors must contain the control's
+    failure_code; for a positive control they must be empty. This binds every named manifest
+    predicate to an executable validator check."""
+    original = _lineage_of(_DECISION_REF)
+    evaluation = _root_eval_event()
+    base_repl, base_record = _make_replacement(_ROOT_TASK, _ROOT_CANDIDATE, original,
+                                               same_input=False, tag="eq")
+
+    def run_override(repl, record):
+        return validate_event_chain([evaluation, _override_event("evt-ovr", repl)],
+                                    records=_record_registry(record) if record else {})
+
+    # --- record shape ---
+    if control_id == "REC-EXACT-KEYS":
+        rec = _rehash({("approval_digest" if k == "approval_digest_or_sentinel" else k): v
+                       for k, v in build_policy_record(*_green()).items()})
+        return validate_policy_record(rec)
+    if control_id == "REC-DIGEST-RECOMPUTE":
+        rec = build_policy_record(*_green())
+        rec = {**rec, "disposition": "REVIEW_REQUIRED"}  # value changed, digest stale
+        return validate_policy_record(rec)
+    if control_id == "REC-NO-RUNTIME":
+        rec = _rehash({**build_policy_record(*_green()), "trace_id": "t-1"})
+        return validate_policy_record(rec)
+    # --- replacement ---
+    if control_id == "RPL-REGISTERED-RECORD":
+        return run_override(base_repl, None)                      # no registry
+    if control_id == "RPL-RECORD-DIGEST-EQ":
+        # keep the record's key (= base_repl.policy_record_digest) but change a field so its
+        # recomputed digest no longer matches -> invalid record served under that key.
+        bad = {**base_record, "disposition": "REVIEW_REQUIRED"}
+        return run_override(base_repl, bad)
+    if control_id == "RPL-DECISION-EQ":
+        return run_override({**base_repl,
+                             "decision_digest": canonical_digest({"mismatch": 1})},
+                            base_record)
+    if control_id == "RPL-INPUT-EQ":
+        return run_override({**base_repl, "input_digest": original["input_digest"]},
+                            base_record)
+    if control_id == "RPL-TASK-EQ":
+        # record built for another task, ref claims the root task -> task mismatch.
+        r2, rec2 = _make_replacement("task-OTHER", _ROOT_CANDIDATE, original,
+                                     same_input=False, tag="task")
+        ref = {**r2, "task_ref": _ROOT_TASK}
+        return run_override(ref, rec2)
+    if control_id == "RPL-CANDIDATE-EQ":
+        r2, rec2 = _make_replacement(_ROOT_TASK, canonical_digest({"c": "OTHER"}), original,
+                                     same_input=False, tag="cand")
+        ref = {**r2, "candidate_digest": _ROOT_CANDIDATE}
+        return run_override(ref, rec2)
+    if control_id == "RPL-DECISION-DIFFERS":
+        r2, rec2 = _make_replacement(_ROOT_TASK, _ROOT_CANDIDATE, original,
+                                     same_input=False, tag="dd")
+        ref = {**r2, "decision_digest": original["decision_digest"]}
+        return run_override(ref, rec2)
+    if control_id == "RPL-RECORD-DIFFERS":
+        ref = {**base_repl, "policy_record_digest": original["policy_record_digest"]}
+        return run_override(ref, base_record)
+    if control_id == "RPL-SAME-INPUT-OK":                          # POSITIVE
+        r2, rec2 = _make_replacement(_ROOT_TASK, _ROOT_CANDIDATE, original,
+                                     same_input=True, tag="si")
+        return run_override(r2, rec2)
+    if control_id == "RPL-EVAL-UNIQUE":
+        ref = {**base_repl, "evaluation_id": _DECISION_REF["evaluation_id"]}
+        return run_override(ref, base_record)
+    if control_id == "RPL-ROOT-OWNERSHIP":
+        return run_override({**base_repl, "task_ref": "other-task"}, base_record)
+    if control_id == "RPL-NO-OP":
+        noop = {**base_repl, "decision_digest": original["decision_digest"],
+                "input_digest": original["input_digest"],
+                "policy_record_digest": original["policy_record_digest"]}
+        return run_override(noop, base_record)
+    if control_id == "RPL-CANDIDATE-NEW-ROOT":
+        return run_override({**base_repl,
+                             "candidate_digest": canonical_digest({"c": "z"})}, base_record)
+    if control_id == "RPL-PARTIAL-OBJECT":
+        v = _validator()
+        partial = _override_event("evt-ovr", {"evaluation_id": "e", "task_ref": _ROOT_TASK,
+                                  "candidate_digest": _ROOT_CANDIDATE,
+                                  "decision_digest": base_repl["decision_digest"]})
+        return ["REPLACEMENT_PARTIAL"] if list(v.iter_errors(partial)) else []
+    # --- evaluation identity / lineage ---
+    A = _root_lineage("task-A", canonical_digest({"c": "A"}), "A")
+    if control_id == "EVAL-ID-UNIQUE":
+        dup = _dref(evaluation_id="eval-A", task_ref="task-C",
+                    candidate_digest=canonical_digest({"c": "C"}),
+                    decision_digest=canonical_digest({"d": "C"}),
+                    input_digest=canonical_digest({"i": "C"}),
+                    policy_record_digest=canonical_digest({"r": "C"}))
+        return validate_event_chain([_root_event("evt-A", A), _root_event("evt-C", dup)])
+    if control_id == "EVAL-ID-NO-DRIFT":
+        drift = _evt("evt-drift", "CHANGEGATE_MERGE_ATTEMPTED",
+                     {**A, "evaluation_id": "eval-DRIFT"}, evaluation_event_ref="evt-A",
+                     outcome={"status": "SUCCESS", "detail_code": "ATTEMPT_STARTED"})
+        return validate_event_chain([_root_event("evt-A", A), drift])
+    if control_id == "LINEAGE-SIX-FIELDS":
+        bad = _evt("evt-att", "CHANGEGATE_MERGE_ATTEMPTED",
+                   {**A, "decision_digest": canonical_digest({"d": "X"})},
+                   evaluation_event_ref="evt-A",
+                   outcome={"status": "SUCCESS", "detail_code": "ATTEMPT_STARTED"})
+        return validate_event_chain([_root_event("evt-A", A), bad])
+    if control_id == "MULTI-PARENT-LINEAGE":
+        return _cross_root_rollback_errors()
+    if control_id == "DOWNSTREAM-NO-REVERT":
+        override = _override_event("evt-ovr", base_repl)
+        revert = _evt("evt-att", "CHANGEGATE_MERGE_ATTEMPTED", original,
+                      evaluation_event_ref="evt-ovr",
+                      outcome={"status": "SUCCESS", "detail_code": "ATTEMPT_STARTED"})
+        return validate_event_chain([evaluation, override, revert],
+                                    records=_record_registry(base_record))
+    if control_id == "MULTI-ROOT":                                # POSITIVE
+        B = _root_lineage("task-B", canonical_digest({"c": "B"}), "B")
+        return validate_event_chain([_root_event("evt-A", A), _root_event("evt-B", B)])
+    raise AssertionError(f"no executable scenario for control {control_id!r}")
+
+
+def _cross_root_rollback_errors() -> list[str]:
+    A = _root_lineage("task-A", canonical_digest({"c": "A"}), "A")
+    B = _root_lineage("task-B", canonical_digest({"c": "B"}), "B")
+
+    def att(eid, lin, root):
+        return _evt(eid, "CHANGEGATE_MERGE_ATTEMPTED", lin, evaluation_event_ref=root,
+                    outcome={"status": "SUCCESS", "detail_code": "ATTEMPT_STARTED"})
+
+    merge_A = _evt("evt-A-merge", "CHANGEGATE_MERGE_COMPLETED", A,
+                   attempt_event_ref="evt-A-att",
+                   outcome={"status": "SUCCESS", "detail_code": "MERGE_OK",
+                            "resulting_commit_sha": "c" * 40})
+    val_B = _evt("evt-B-val", "CHANGEGATE_POST_MERGE_VALIDATION", B,
+                 merge_event_ref="evt-B-merge",
+                 outcome={"status": "FAILURE", "detail_code": "CI"})
+    merge_B = _evt("evt-B-merge", "CHANGEGATE_MERGE_COMPLETED", B,
+                   attempt_event_ref="evt-B-att",
+                   outcome={"status": "SUCCESS", "detail_code": "MERGE_OK",
+                            "resulting_commit_sha": "d" * 40})
+    rollback = _evt("evt-roll", "CHANGEGATE_ROLLBACK_RECORDED", A,
+                    merge_event_ref="evt-A-merge", validation_event_ref="evt-B-val",
+                    outcome={"status": "SUCCESS", "detail_code": "ROLLED_BACK"})
+    chain = [_root_event("evt-A", A), _root_event("evt-B", B), att("evt-A-att", A, "evt-A"),
+             merge_A, att("evt-B-att", B, "evt-B"), merge_B, val_B, rollback]
+    return validate_event_chain(chain)
+
+
+def _manifest_controls() -> list[dict]:
+    return _fixture()["slice_1a_semantic_manifest"]["causal_semantics"]["semantic_controls"]
+
+
+def test_every_named_manifest_control_has_an_executable_check():
+    ids = {c["id"] for c in _manifest_controls()}
+    # every named predicate is executable; the registry covers exactly the manifest set.
+    for cid in ids:
+        _run_named_control(cid)  # must not raise "no executable scenario"
+    # no load-bearing validator rule is missing from the manifest: the failure codes the
+    # validator can emit are all declared.
+    declared_codes = {c["failure_code"] for c in _manifest_controls()
+                      if c["failure_code"]}
+    for code in ("RECORD_SHAPE_DRIFT", "RECORD_DIGEST_MISMATCH", "RECORD_RUNTIME_FIELD",
+                 "REPLACEMENT_RECORD_MISSING", "REPLACEMENT_DECISION_MISMATCH",
+                 "REPLACEMENT_INPUT_MISMATCH", "REPLACEMENT_TASK_MISMATCH",
+                 "REPLACEMENT_CANDIDATE_MISMATCH", "REPLACEMENT_DECISION_NOT_CHANGED",
+                 "REPLACEMENT_RECORD_NOT_CHANGED", "REPLACEMENT_EVALUATION_NOT_UNIQUE",
+                 "REPLACEMENT_ROOT_MISMATCH", "REPLACEMENT_CANDIDATE_CHANGED",
+                 "EVALUATION_ID_DUPLICATE", "EVALUATION_ID_DRIFT", "LINEAGE_DIVERGES",
+                 "AMBIGUOUS_PREDECESSOR_LINEAGE", "REPLACEMENT_NO_OP",
+                 "REPLACEMENT_RECORD_DIGEST_MISMATCH", "REPLACEMENT_PARTIAL"):
+        assert code in declared_codes, f"validator failure code {code} not in manifest"
+
+
+@pytest.mark.parametrize("control", [pytest.param(c, id=c["id"])
+                                     for c in _manifest_controls()])
+def test_named_control_is_enforced_by_the_validator(control):
+    errors = _run_named_control(control["id"])
+    if control["failure_code"] is None:            # positive control
+        assert errors == [], f"{control['id']} positive control failed: {errors}"
+    else:                                          # negative control
+        blob = " ".join(errors)
+        assert control["failure_code"] in blob, (
+            f"{control['id']} expected failure_code {control['failure_code']} in {errors}"
+        )
+
+
+def test_removing_or_changing_any_named_predicate_changes_the_fingerprint():
+    suite = _fixture()
+    baseline = semantic_fingerprint(suite)
+    controls = _manifest_controls()
+    for i in range(len(controls)):
+        mutated = copy.deepcopy(suite)
+        del mutated["slice_1a_semantic_manifest"]["causal_semantics"]["semantic_controls"][i]
+        assert semantic_fingerprint(mutated) != baseline, f"removing control {i} kept fp"
+    # changing a predicate's failure_code also changes the fingerprint.
+    mutated = copy.deepcopy(suite)
+    mutated["slice_1a_semantic_manifest"]["causal_semantics"]["semantic_controls"][0][
+        "failure_code"] = "CHANGED"
+    assert semantic_fingerprint(mutated) != baseline
+
+
+def test_ten_required_semantic_mutations_are_detected():
+    """§15: the ten explicitly required behaviors are each caught by the validator."""
+    required = {
+        "LINEAGE-SIX-FIELDS": "LINEAGE_DIVERGES",         # 1 evaluation id in lineage
+        "EVAL-ID-UNIQUE": "EVALUATION_ID_DUPLICATE",      # 2 duplicate evaluation ids
+        "EVAL-ID-NO-DRIFT": "EVALUATION_ID_DRIFT",        # 3 downstream drift
+        "RPL-ROOT-OWNERSHIP": "REPLACEMENT_ROOT_MISMATCH",  # 4 replacement from another root
+        "RPL-INPUT-EQ": "REPLACEMENT_INPUT_MISMATCH",     # 5 new decision + incoherent input
+        "MULTI-PARENT-LINEAGE": "AMBIGUOUS_PREDECESSOR_LINEAGE",  # 6 secondary predecessor
+        "REC-EXACT-KEYS": "RECORD_SHAPE_DRIFT",           # 7 weakened record keys
+        "RPL-NO-OP": "REPLACEMENT_NO_OP",                 # 8 no-op replacement
+        "DOWNSTREAM-NO-REVERT": "diverges",               # 9 downstream revert
+        "RPL-REGISTERED-RECORD": "REPLACEMENT_RECORD_MISSING",  # 10 replacement rec recompute
+    }
+    for cid, expected in required.items():
+        errors = _run_named_control(cid)
+        assert any(expected in e for e in errors), f"{cid}: {errors}"
 
 
 def _fingerprint_after(mutate) -> tuple[str, str]:

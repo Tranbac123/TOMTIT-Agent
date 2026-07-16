@@ -1,10 +1,10 @@
 {
   "suite_id": "changegate_merge_eligibility_golden_cases",
-  "schema_version": "changegate-merge-eligibility-golden.v5",
+  "schema_version": "changegate-merge-eligibility-golden.v6",
   "status": "DRAFT_FOR_OWNER_REVIEW",
-  "description": "Golden evaluation cases for the ChangeGate Slice 1 merge-eligibility policy (R4-hardened). The approval binding is the single canonical field approval_digest_or_sentinel. slice_1a_semantic_manifest is the complete load-bearing semantic contract; semantic_fingerprint = canonical_digest(slice_1a_semantic_manifest). Policy semantics are byte-identical to v4; any change to a manifest area is a SEMANTIC patch (acceptance_governance), never a metadata acceptance patch. No production evaluator exists yet.",
+  "description": "Golden evaluation cases for the ChangeGate Slice 1 merge-eligibility policy (R5-hardened). The active lineage is a six-field tuple including evaluation_id. slice_1a_semantic_manifest.causal_semantics.semantic_controls names every load-bearing causal/record predicate (id, subject, required_fields, predicate, failure_code); the artifact tests bind each to an executable validator check. Policy semantics are byte-identical to v5. No production evaluator exists yet.",
   "policy_spec": "docs/strategy/CHANGEGATE_VERTICAL_MVP_SLICE_1_POLICY_SPEC.md",
-  "policy_version_ref": "changegate-merge-eligibility-policy.v5-draft",
+  "policy_version_ref": "changegate-merge-eligibility-policy.v6-draft",
   "event_schema": "data/schemas/changegate_evaluation_event_v1.schema.json",
   "dispositions": [
     "ELIGIBLE_TO_MERGE_UNDER_POLICY",
@@ -4377,8 +4377,9 @@
       }
     },
     "causal_semantics": {
-      "causal_contract_version": "changegate.causal.v2-multiroot",
+      "causal_contract_version": "changegate.causal.v3-evaluation-lineage",
       "lineage_field_set": [
+        "evaluation_id",
         "task_ref",
         "candidate_digest",
         "decision_digest",
@@ -4389,34 +4390,216 @@
       "override_lineage_switch_rule": "a complete replacement_decision_ref switches the active decision lineage for descendants of that override, preserving root task/candidate",
       "changed_candidate_new_root_rule": "a changed candidate requires a new evaluation root; it can never continue the old chain or use an override",
       "multi_root_support": true,
-      "causal_negative_control_ids": [
-        "LNC-01",
-        "LNC-02",
-        "LNC-03",
-        "LNC-04",
-        "LNC-05",
-        "LNC-06",
-        "LNC-07",
-        "LNC-08",
-        "LNC-09",
-        "LNC-10",
-        "LNC-11",
-        "LNC-12",
-        "LNC-13",
-        "LNC-14",
-        "LNC-15",
-        "LNC-16"
-      ],
-      "replacement_negative_control_ids": [
-        "RNC-01",
-        "RNC-02",
-        "RNC-03",
-        "RNC-04",
-        "RNC-05",
-        "RNC-06",
-        "RNC-07",
-        "RNC-08",
-        "RNC-09"
+      "semantic_controls": [
+        {
+          "id": "REC-EXACT-KEYS",
+          "subject": "policy_record",
+          "required_fields": [
+            "<POLICY_RECORD_PAYLOAD_FIELDS>",
+            "policy_record_digest"
+          ],
+          "predicate": "tuple(record.keys()) == POLICY_RECORD_PAYLOAD_FIELDS + (policy_record_digest,)",
+          "failure_code": "RECORD_SHAPE_DRIFT"
+        },
+        {
+          "id": "REC-DIGEST-RECOMPUTE",
+          "subject": "policy_record",
+          "required_fields": [
+            "policy_record_digest"
+          ],
+          "predicate": "policy_record_digest == canonical_digest(payload)",
+          "failure_code": "RECORD_DIGEST_MISMATCH"
+        },
+        {
+          "id": "REC-NO-RUNTIME",
+          "subject": "policy_record",
+          "required_fields": [],
+          "predicate": "no runtime/application field and no self-digest inside the payload",
+          "failure_code": "RECORD_RUNTIME_FIELD"
+        },
+        {
+          "id": "RPL-REGISTERED-RECORD",
+          "subject": "replacement_decision_ref",
+          "required_fields": [
+            "policy_record_digest"
+          ],
+          "predicate": "the replacement PolicyEvaluationRecord is present in the record registry",
+          "failure_code": "REPLACEMENT_RECORD_MISSING"
+        },
+        {
+          "id": "RPL-RECORD-DIGEST-EQ",
+          "subject": "replacement_decision_ref",
+          "required_fields": [
+            "policy_record_digest"
+          ],
+          "predicate": "replacement.policy_record_digest == canonical_digest(replacement.policy_record payload)",
+          "failure_code": "REPLACEMENT_RECORD_DIGEST_MISMATCH"
+        },
+        {
+          "id": "RPL-DECISION-EQ",
+          "subject": "replacement_decision_ref",
+          "required_fields": [
+            "decision_digest"
+          ],
+          "predicate": "replacement.decision_digest == replacement.policy_record.decision_digest",
+          "failure_code": "REPLACEMENT_DECISION_MISMATCH"
+        },
+        {
+          "id": "RPL-INPUT-EQ",
+          "subject": "replacement_decision_ref",
+          "required_fields": [
+            "input_digest"
+          ],
+          "predicate": "replacement.input_digest == replacement.policy_record.input_digest",
+          "failure_code": "REPLACEMENT_INPUT_MISMATCH"
+        },
+        {
+          "id": "RPL-TASK-EQ",
+          "subject": "replacement_decision_ref",
+          "required_fields": [
+            "task_ref"
+          ],
+          "predicate": "replacement.task_ref == replacement.policy_record.task_id",
+          "failure_code": "REPLACEMENT_TASK_MISMATCH"
+        },
+        {
+          "id": "RPL-CANDIDATE-EQ",
+          "subject": "replacement_decision_ref",
+          "required_fields": [
+            "candidate_digest"
+          ],
+          "predicate": "replacement.candidate_digest == replacement.policy_record.candidate_digest",
+          "failure_code": "REPLACEMENT_CANDIDATE_MISMATCH"
+        },
+        {
+          "id": "RPL-DECISION-DIFFERS",
+          "subject": "replacement_decision_ref",
+          "required_fields": [
+            "decision_digest"
+          ],
+          "predicate": "replacement.decision_digest != original.decision_digest",
+          "failure_code": "REPLACEMENT_DECISION_NOT_CHANGED"
+        },
+        {
+          "id": "RPL-RECORD-DIFFERS",
+          "subject": "replacement_decision_ref",
+          "required_fields": [
+            "policy_record_digest"
+          ],
+          "predicate": "replacement.policy_record_digest != original.policy_record_digest",
+          "failure_code": "REPLACEMENT_RECORD_NOT_CHANGED"
+        },
+        {
+          "id": "RPL-SAME-INPUT-OK",
+          "subject": "replacement_decision_ref",
+          "required_fields": [
+            "input_digest"
+          ],
+          "predicate": "same input_digest is PERMITTED when the replacement record recomputes and decision/record digests differ",
+          "failure_code": null
+        },
+        {
+          "id": "RPL-EVAL-UNIQUE",
+          "subject": "replacement_decision_ref",
+          "required_fields": [
+            "evaluation_id"
+          ],
+          "predicate": "replacement.evaluation_id is new and globally unique in the event graph",
+          "failure_code": "REPLACEMENT_EVALUATION_NOT_UNIQUE"
+        },
+        {
+          "id": "RPL-ROOT-OWNERSHIP",
+          "subject": "replacement_decision_ref",
+          "required_fields": [
+            "task_ref",
+            "candidate_digest"
+          ],
+          "predicate": "replacement task/candidate == the root's task/candidate",
+          "failure_code": "REPLACEMENT_ROOT_MISMATCH"
+        },
+        {
+          "id": "RPL-NO-OP",
+          "subject": "replacement_decision_ref",
+          "required_fields": [],
+          "predicate": "the replacement identity is not identical to the original (no-op)",
+          "failure_code": "REPLACEMENT_NO_OP"
+        },
+        {
+          "id": "RPL-CANDIDATE-NEW-ROOT",
+          "subject": "replacement_decision_ref",
+          "required_fields": [
+            "candidate_digest"
+          ],
+          "predicate": "a changed candidate cannot use an override; it requires a new evaluation root",
+          "failure_code": "REPLACEMENT_CANDIDATE_CHANGED"
+        },
+        {
+          "id": "RPL-PARTIAL-OBJECT",
+          "subject": "replacement_decision_ref",
+          "required_fields": [
+            "evaluation_id",
+            "task_ref",
+            "candidate_digest",
+            "decision_digest",
+            "input_digest",
+            "policy_record_digest"
+          ],
+          "predicate": "a replacement object missing any of the six fields is invalid (schema)",
+          "failure_code": "REPLACEMENT_PARTIAL"
+        },
+        {
+          "id": "EVAL-ID-UNIQUE",
+          "subject": "evaluation_identity",
+          "required_fields": [
+            "evaluation_id"
+          ],
+          "predicate": "every evaluation_id (root or replacement) is globally unique and maps to one lineage",
+          "failure_code": "EVALUATION_ID_DUPLICATE"
+        },
+        {
+          "id": "EVAL-ID-NO-DRIFT",
+          "subject": "evaluation_identity",
+          "required_fields": [
+            "evaluation_id"
+          ],
+          "predicate": "a downstream event preserves the active evaluation_id (no drift without a replacement/new root)",
+          "failure_code": "EVALUATION_ID_DRIFT"
+        },
+        {
+          "id": "LINEAGE-SIX-FIELDS",
+          "subject": "lineage",
+          "required_fields": [
+            "evaluation_id",
+            "task_ref",
+            "candidate_digest",
+            "decision_digest",
+            "input_digest",
+            "policy_record_digest"
+          ],
+          "predicate": "the active lineage is the six-field tuple including evaluation_id",
+          "failure_code": "LINEAGE_DIVERGES"
+        },
+        {
+          "id": "MULTI-PARENT-LINEAGE",
+          "subject": "lineage",
+          "required_fields": [],
+          "predicate": "every explicit predecessor of an event shares one identical lineage; disagreement is ambiguous",
+          "failure_code": "AMBIGUOUS_PREDECESSOR_LINEAGE"
+        },
+        {
+          "id": "DOWNSTREAM-NO-REVERT",
+          "subject": "lineage",
+          "required_fields": [],
+          "predicate": "after a replacement activation, descendants cannot revert to the original decision identity",
+          "failure_code": "LINEAGE_DIVERGES"
+        },
+        {
+          "id": "MULTI-ROOT",
+          "subject": "lineage",
+          "required_fields": [],
+          "predicate": "multiple independent evaluation roots and interleaved streams are supported",
+          "failure_code": null
+        }
       ]
     },
     "golden_semantics": [
