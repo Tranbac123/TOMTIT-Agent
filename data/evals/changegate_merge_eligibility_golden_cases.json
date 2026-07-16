@@ -1,8 +1,8 @@
 {
   "suite_id": "changegate_merge_eligibility_golden_cases",
-  "schema_version": "changegate-merge-eligibility-golden.v7",
+  "schema_version": "changegate-merge-eligibility-golden.v8",
   "status": "DRAFT_FOR_OWNER_REVIEW",
-  "description": "Golden evaluation cases for the ChangeGate Slice 1 merge-eligibility policy (R6, Model B per accepted OD-S1A-009). Slice 1A defines deterministic evaluation only: the pure evaluator is the sole semantic producer of MergeEligibilityDecision and the PolicyEvaluationRecord payload; one replay key produces exactly one decision and one record; policy lineage is immutable; no replacement, override, exception, or authorization semantics exist in Slice 1A (all pending under OD-S1A-005 for a future governance slice). Policy evaluation semantics are byte-identical to v6. No production evaluator exists yet.",
+  "description": "Golden evaluation cases for the ChangeGate Slice 1 merge-eligibility policy (R7, bounded structural closure of the Model B deterministic boundary per accepted OD-S1A-009). Slice 1A defines deterministic structural policy contracts only: the pure evaluator is the sole semantic producer of MergeEligibilityDecision and the PolicyEvaluationRecord payload; one replay key produces exactly one decision and one record; policy lineage is immutable; no replacement, override, exception, authorization, or active override/exception classification semantics exist in Slice 1A (all pending under OD-S1A-005 for a future governance slice). Slice 1A validation is structural: STRUCTURALLY_VALIDATED / IDENTITY_RECOMPUTED / SEMANTIC_REPLAY_NOT_PERFORMED; SEMANTICALLY_REPLAY_VERIFIED is Slice 1B protocol. Policy evaluation semantics (dispositions, reasons, precedence, golden outcomes) are byte-identical to v6. No production evaluator exists yet.",
   "policy_spec": "docs/strategy/CHANGEGATE_VERTICAL_MVP_SLICE_1_POLICY_SPEC.md",
   "policy_version_ref": "changegate-merge-eligibility-policy.v7-draft",
   "event_schema": "data/schemas/changegate_evaluation_event_v1.schema.json",
@@ -22,7 +22,6 @@
       "category": "INTEGRITY",
       "kind": "FACTUAL",
       "default_disposition": "BLOCK",
-      "override_class": "NOT_OVERRIDEABLE",
       "owner_decision_pending": null
     },
     {
@@ -31,7 +30,6 @@
       "category": "CONTEXT",
       "kind": "FACTUAL",
       "default_disposition": "BLOCK",
-      "override_class": "NOT_OVERRIDEABLE",
       "owner_decision_pending": null
     },
     {
@@ -40,7 +38,6 @@
       "category": "INTEGRITY",
       "kind": "FACTUAL",
       "default_disposition": "BLOCK",
-      "override_class": "NOT_OVERRIDEABLE",
       "owner_decision_pending": null
     },
     {
@@ -49,7 +46,6 @@
       "category": "INTEGRITY",
       "kind": "FACTUAL",
       "default_disposition": "BLOCK",
-      "override_class": "NOT_OVERRIDEABLE",
       "owner_decision_pending": null
     },
     {
@@ -58,7 +54,6 @@
       "category": "INTEGRITY",
       "kind": "FACTUAL",
       "default_disposition": "BLOCK",
-      "override_class": "NOT_OVERRIDEABLE",
       "owner_decision_pending": null
     },
     {
@@ -67,7 +62,6 @@
       "category": "INTEGRITY",
       "kind": "FACTUAL",
       "default_disposition": "BLOCK",
-      "override_class": "NOT_OVERRIDEABLE",
       "owner_decision_pending": null
     },
     {
@@ -76,7 +70,6 @@
       "category": "INTEGRITY",
       "kind": "FACTUAL",
       "default_disposition": "BLOCK",
-      "override_class": "NOT_OVERRIDEABLE",
       "owner_decision_pending": null
     },
     {
@@ -85,7 +78,6 @@
       "category": "INTEGRITY",
       "kind": "FACTUAL",
       "default_disposition": "BLOCK",
-      "override_class": "NOT_OVERRIDEABLE",
       "owner_decision_pending": null
     },
     {
@@ -94,7 +86,6 @@
       "category": "EVIDENCE",
       "kind": "FACTUAL",
       "default_disposition": "BLOCK",
-      "override_class": "POLICY_EXCEPTION_REQUIRED",
       "owner_decision_pending": null
     },
     {
@@ -103,7 +94,6 @@
       "category": "FRESHNESS",
       "kind": "FACTUAL",
       "default_disposition": "BLOCK",
-      "override_class": "POLICY_EXCEPTION_REQUIRED",
       "owner_decision_pending": null
     },
     {
@@ -112,7 +102,6 @@
       "category": "FRESHNESS",
       "kind": "FACTUAL",
       "default_disposition": "BLOCK",
-      "override_class": "POLICY_EXCEPTION_REQUIRED",
       "owner_decision_pending": null
     },
     {
@@ -121,7 +110,6 @@
       "category": "FRESHNESS",
       "kind": "FACTUAL",
       "default_disposition": "BLOCK",
-      "override_class": "POLICY_EXCEPTION_REQUIRED",
       "owner_decision_pending": null
     },
     {
@@ -130,7 +118,6 @@
       "category": "EVIDENCE",
       "kind": "FACTUAL",
       "default_disposition": "BLOCK",
-      "override_class": "POLICY_EXCEPTION_REQUIRED",
       "owner_decision_pending": null
     },
     {
@@ -139,7 +126,6 @@
       "category": "REPO_STATE",
       "kind": "FACTUAL",
       "default_disposition": "BLOCK",
-      "override_class": "POLICY_EXCEPTION_REQUIRED",
       "owner_decision_pending": null
     },
     {
@@ -148,7 +134,6 @@
       "category": "SCOPE",
       "kind": "FACTUAL",
       "default_disposition": "BLOCK",
-      "override_class": "POLICY_EXCEPTION_REQUIRED",
       "owner_decision_pending": null
     },
     {
@@ -157,7 +142,6 @@
       "category": "APPROVAL",
       "kind": "FACTUAL",
       "default_disposition": "BLOCK",
-      "override_class": "HUMAN_REVIEW_RESOLVABLE",
       "owner_decision_pending": "OD-S1A-001"
     },
     {
@@ -166,7 +150,6 @@
       "category": "APPROVAL",
       "kind": "FACTUAL",
       "default_disposition": "BLOCK",
-      "override_class": "HUMAN_REVIEW_RESOLVABLE",
       "owner_decision_pending": "OD-S1A-002"
     },
     {
@@ -175,7 +158,6 @@
       "category": "INDEPENDENCE",
       "kind": "FACTUAL",
       "default_disposition": "BLOCK",
-      "override_class": "NOT_OVERRIDEABLE",
       "owner_decision_pending": null
     },
     {
@@ -184,7 +166,6 @@
       "category": "SCOPE",
       "kind": "SEMANTIC",
       "default_disposition": "REVIEW_REQUIRED",
-      "override_class": "HUMAN_REVIEW_RESOLVABLE",
       "owner_decision_pending": null
     },
     {
@@ -193,7 +174,6 @@
       "category": "INDEPENDENCE",
       "kind": "SEMANTIC",
       "default_disposition": "REVIEW_REQUIRED",
-      "override_class": "HUMAN_REVIEW_RESOLVABLE",
       "owner_decision_pending": "OD-S1A-003"
     }
   ],
@@ -429,7 +409,6 @@
       "expected_decision_authority": "AUTHORITATIVE",
       "expected_primary_reason": null,
       "expected_complete_reason_codes": [],
-      "override_class": "NOT_APPLICABLE",
       "expected_event_assertions": {
         "emits": [
           "CHANGEGATE_EVALUATION_COMPLETED"
@@ -509,7 +488,6 @@
       "expected_complete_reason_codes": [
         "REQUIRED_EVIDENCE_MISSING"
       ],
-      "override_class": "POLICY_EXCEPTION_REQUIRED",
       "expected_event_assertions": {
         "emits": [
           "CHANGEGATE_EVALUATION_COMPLETED"
@@ -590,7 +568,6 @@
       "expected_complete_reason_codes": [
         "REQUIRED_EVIDENCE_MISSING"
       ],
-      "override_class": "POLICY_EXCEPTION_REQUIRED",
       "expected_event_assertions": {
         "emits": [
           "CHANGEGATE_EVALUATION_COMPLETED"
@@ -673,7 +650,6 @@
         "EVIDENCE_TASK_MISMATCH",
         "REQUIRED_EVIDENCE_MISSING"
       ],
-      "override_class": "NOT_OVERRIDEABLE",
       "expected_event_assertions": {
         "emits": [
           "CHANGEGATE_EVALUATION_COMPLETED"
@@ -756,7 +732,6 @@
         "EVIDENCE_RUN_MISMATCH",
         "REQUIRED_EVIDENCE_MISSING"
       ],
-      "override_class": "NOT_OVERRIDEABLE",
       "expected_event_assertions": {
         "emits": [
           "CHANGEGATE_EVALUATION_COMPLETED"
@@ -839,7 +814,6 @@
         "EVIDENCE_CANDIDATE_MISMATCH",
         "REQUIRED_EVIDENCE_MISSING"
       ],
-      "override_class": "NOT_OVERRIDEABLE",
       "expected_event_assertions": {
         "emits": [
           "CHANGEGATE_EVALUATION_COMPLETED"
@@ -922,7 +896,6 @@
         "EVIDENCE_DUPLICATE_IDENTITY",
         "REQUIRED_EVIDENCE_MISSING"
       ],
-      "override_class": "NOT_OVERRIDEABLE",
       "expected_event_assertions": {
         "emits": [
           "CHANGEGATE_EVALUATION_COMPLETED"
@@ -1002,7 +975,6 @@
       "expected_complete_reason_codes": [
         "CANDIDATE_STALE"
       ],
-      "override_class": "POLICY_EXCEPTION_REQUIRED",
       "expected_event_assertions": {
         "emits": [
           "CHANGEGATE_EVALUATION_COMPLETED"
@@ -1082,7 +1054,6 @@
       "expected_complete_reason_codes": [
         "REPOSITORY_CONTEXT_MISMATCH"
       ],
-      "override_class": "NOT_OVERRIDEABLE",
       "expected_event_assertions": {
         "emits": [
           "CHANGEGATE_EVALUATION_COMPLETED"
@@ -1162,7 +1133,6 @@
       "expected_complete_reason_codes": [
         "RELEASE_STATE_NOT_CLEAN"
       ],
-      "override_class": "POLICY_EXCEPTION_REQUIRED",
       "expected_event_assertions": {
         "emits": [
           "CHANGEGATE_EVALUATION_COMPLETED"
@@ -1242,7 +1212,6 @@
       "expected_complete_reason_codes": [
         "SCOPE_VIOLATION"
       ],
-      "override_class": "POLICY_EXCEPTION_REQUIRED",
       "expected_event_assertions": {
         "emits": [
           "CHANGEGATE_EVALUATION_COMPLETED"
@@ -1322,7 +1291,6 @@
       "expected_complete_reason_codes": [
         "SCOPE_UNCERTAIN"
       ],
-      "override_class": "HUMAN_REVIEW_RESOLVABLE",
       "expected_event_assertions": {
         "emits": [
           "CHANGEGATE_EVALUATION_COMPLETED"
@@ -1402,7 +1370,6 @@
       "expected_complete_reason_codes": [
         "APPROVAL_MISSING"
       ],
-      "override_class": "HUMAN_REVIEW_RESOLVABLE",
       "expected_event_assertions": {
         "emits": [
           "CHANGEGATE_EVALUATION_COMPLETED"
@@ -1484,7 +1451,6 @@
       "expected_complete_reason_codes": [
         "APPROVAL_STALE"
       ],
-      "override_class": "HUMAN_REVIEW_RESOLVABLE",
       "expected_event_assertions": {
         "emits": [
           "CHANGEGATE_EVALUATION_COMPLETED"
@@ -1566,7 +1532,6 @@
       "expected_complete_reason_codes": [
         "AUTHORITY_INVALID"
       ],
-      "override_class": "NOT_OVERRIDEABLE",
       "expected_event_assertions": {
         "emits": [
           "CHANGEGATE_EVALUATION_COMPLETED"
@@ -1646,7 +1611,6 @@
       "expected_complete_reason_codes": [
         "VERIFIER_NOT_INDEPENDENT"
       ],
-      "override_class": "NOT_OVERRIDEABLE",
       "expected_event_assertions": {
         "emits": [
           "CHANGEGATE_EVALUATION_COMPLETED"
@@ -1726,7 +1690,6 @@
       "expected_complete_reason_codes": [
         "VERIFIER_INDEPENDENCE_UNKNOWN"
       ],
-      "override_class": "HUMAN_REVIEW_RESOLVABLE",
       "expected_event_assertions": {
         "emits": [
           "CHANGEGATE_EVALUATION_COMPLETED"
@@ -1808,7 +1771,6 @@
       "expected_complete_reason_codes": [
         "POLICY_CONTEXT_STALE"
       ],
-      "override_class": "POLICY_EXCEPTION_REQUIRED",
       "expected_event_assertions": {
         "emits": [
           "CHANGEGATE_EVALUATION_COMPLETED"
@@ -1889,7 +1851,6 @@
       "expected_complete_reason_codes": [
         "REQUIRED_CONTEXT_INCOMPLETE"
       ],
-      "override_class": "NOT_OVERRIDEABLE",
       "expected_event_assertions": {
         "emits": [
           "CHANGEGATE_EVALUATION_COMPLETED"
@@ -1961,7 +1922,6 @@
       "expected_decision_authority": "AUTHORITATIVE",
       "expected_primary_reason": null,
       "expected_complete_reason_codes": [],
-      "override_class": "NOT_APPLICABLE",
       "expected_event_assertions": {
         "emits": [
           "CHANGEGATE_EVALUATION_COMPLETED"
@@ -2047,7 +2007,6 @@
         "RELEASE_STATE_NOT_CLEAN",
         "REQUIRED_EVIDENCE_MISSING"
       ],
-      "override_class": "NOT_OVERRIDEABLE",
       "expected_event_assertions": {
         "emits": [
           "CHANGEGATE_EVALUATION_COMPLETED"
@@ -2131,7 +2090,6 @@
       "expected_complete_reason_codes": [
         "RELEASE_STATE_NOT_CLEAN"
       ],
-      "override_class": "POLICY_EXCEPTION_REQUIRED",
       "expected_event_assertions": {
         "emits": [
           "CHANGEGATE_EVALUATION_COMPLETED"
@@ -2212,7 +2170,6 @@
       "expected_complete_reason_codes": [
         "APPROVAL_STALE"
       ],
-      "override_class": "HUMAN_REVIEW_RESOLVABLE",
       "expected_event_assertions": {
         "emits": [
           "CHANGEGATE_EVALUATION_COMPLETED"
@@ -2295,7 +2252,6 @@
       "expected_complete_reason_codes": [
         "AUTHORITY_INVALID"
       ],
-      "override_class": "NOT_OVERRIDEABLE",
       "expected_event_assertions": {
         "emits": [
           "CHANGEGATE_EVALUATION_COMPLETED"
@@ -2376,7 +2332,6 @@
       "expected_complete_reason_codes": [
         "SCOPE_VIOLATION"
       ],
-      "override_class": "POLICY_EXCEPTION_REQUIRED",
       "expected_event_assertions": {
         "emits": [
           "CHANGEGATE_EVALUATION_COMPLETED",
@@ -2464,7 +2419,6 @@
       "expected_complete_reason_codes": [
         "REQUIRED_EVIDENCE_INVALID"
       ],
-      "override_class": "POLICY_EXCEPTION_REQUIRED",
       "expected_event_assertions": {
         "emits": [
           "CHANGEGATE_EVALUATION_COMPLETED"
@@ -2550,7 +2504,6 @@
         "EVIDENCE_PROVENANCE_INVALID",
         "REQUIRED_EVIDENCE_INVALID"
       ],
-      "override_class": "NOT_OVERRIDEABLE",
       "expected_event_assertions": {
         "emits": [
           "CHANGEGATE_EVALUATION_COMPLETED"
@@ -2630,7 +2583,6 @@
       "expected_complete_reason_codes": [
         "TASK_CONTEXT_STALE"
       ],
-      "override_class": "POLICY_EXCEPTION_REQUIRED",
       "expected_event_assertions": {
         "emits": [
           "CHANGEGATE_EVALUATION_COMPLETED"
@@ -2711,7 +2663,6 @@
       "expected_complete_reason_codes": [
         "REQUIRED_CONTEXT_INCOMPLETE"
       ],
-      "override_class": "NOT_OVERRIDEABLE",
       "expected_event_assertions": {
         "emits": [
           "CHANGEGATE_EVALUATION_COMPLETED"
@@ -2791,7 +2742,6 @@
       "expected_decision_authority": "AUTHORITATIVE",
       "expected_primary_reason": null,
       "expected_complete_reason_codes": [],
-      "override_class": "NOT_APPLICABLE",
       "expected_event_assertions": {
         "emits": [
           "CHANGEGATE_EVALUATION_COMPLETED"
@@ -2872,7 +2822,6 @@
       "expected_decision_authority": "ADVISORY_ONLY",
       "expected_primary_reason": null,
       "expected_complete_reason_codes": [],
-      "override_class": "NOT_APPLICABLE",
       "expected_event_assertions": {
         "emits": [
           "CHANGEGATE_EVALUATION_COMPLETED"
@@ -2953,7 +2902,6 @@
       "expected_complete_reason_codes": [
         "RELEASE_STATE_NOT_CLEAN"
       ],
-      "override_class": "POLICY_EXCEPTION_REQUIRED",
       "expected_event_assertions": {
         "emits": [
           "CHANGEGATE_EVALUATION_COMPLETED"
@@ -3034,7 +2982,6 @@
         "RELEASE_STATE_NOT_CLEAN",
         "SCOPE_UNCERTAIN"
       ],
-      "override_class": "POLICY_EXCEPTION_REQUIRED",
       "expected_event_assertions": {
         "emits": [
           "CHANGEGATE_EVALUATION_COMPLETED"
@@ -3114,7 +3061,6 @@
       "expected_decision_authority": "AUTHORITATIVE",
       "expected_primary_reason": null,
       "expected_complete_reason_codes": [],
-      "override_class": "NOT_APPLICABLE",
       "expected_event_assertions": {
         "emits": [
           "CHANGEGATE_EVALUATION_COMPLETED"
@@ -3199,7 +3145,6 @@
       "expected_complete_reason_codes": [
         "EVIDENCE_PROVENANCE_INVALID"
       ],
-      "override_class": "NOT_OVERRIDEABLE",
       "expected_event_assertions": {
         "emits": [
           "CHANGEGATE_EVALUATION_COMPLETED"
@@ -3280,7 +3225,6 @@
       "expected_complete_reason_codes": [
         "REQUIRED_CONTEXT_INCOMPLETE"
       ],
-      "override_class": "NOT_OVERRIDEABLE",
       "expected_event_assertions": {
         "emits": [
           "CHANGEGATE_EVALUATION_COMPLETED"
@@ -3362,7 +3306,6 @@
       "expected_complete_reason_codes": [
         "VERIFIER_INDEPENDENCE_UNKNOWN"
       ],
-      "override_class": "HUMAN_REVIEW_RESOLVABLE",
       "expected_event_assertions": {
         "emits": [
           "CHANGEGATE_EVALUATION_COMPLETED"
@@ -3442,7 +3385,6 @@
       "expected_decision_authority": "AUTHORITATIVE",
       "expected_primary_reason": null,
       "expected_complete_reason_codes": [],
-      "override_class": "NOT_APPLICABLE",
       "expected_event_assertions": {
         "emits": [
           "CHANGEGATE_EVALUATION_COMPLETED"
@@ -3526,7 +3468,6 @@
       "expected_complete_reason_codes": [
         "SCOPE_VIOLATION"
       ],
-      "override_class": "POLICY_EXCEPTION_REQUIRED",
       "expected_event_assertions": {
         "emits": [
           "CHANGEGATE_EVALUATION_COMPLETED"
@@ -3615,7 +3556,6 @@
         "EVIDENCE_TASK_MISMATCH",
         "REQUIRED_EVIDENCE_MISSING"
       ],
-      "override_class": "NOT_OVERRIDEABLE",
       "expected_event_assertions": {
         "emits": [
           "CHANGEGATE_EVALUATION_COMPLETED"
@@ -3696,7 +3636,6 @@
       "expected_decision_authority": "AUTHORITATIVE",
       "expected_primary_reason": null,
       "expected_complete_reason_codes": [],
-      "override_class": "NOT_APPLICABLE",
       "expected_event_assertions": {
         "emits": [
           "CHANGEGATE_EVALUATION_COMPLETED"
@@ -3747,7 +3686,8 @@
       "event_semantics",
       "authority_boundary",
       "causal_semantics",
-      "golden_semantics"
+      "golden_semantics",
+      "contract_to_test_coverage"
     ],
     "semantic_fingerprint_source": "slice_1a_semantic_manifest",
     "exact_artifact_hash_contract": {
@@ -3833,7 +3773,7 @@
     "note": "This record is COMPLETE as a pending decision: it enumerates every owner question and every pre-A3 declaration field. It does NOT choose any answer; A3 (Slice 1C-1) remains blocked until owner acceptance. No mapping is implemented."
   },
   "slice_1a_semantic_manifest": {
-    "manifest_version": "changegate.slice1a.semantic-manifest.v2",
+    "manifest_version": "changegate.slice1a.semantic-manifest.v3",
     "policy_semantics": {
       "reason_code_taxonomy": [
         {
@@ -3841,160 +3781,140 @@
           "precedence_rank": 10,
           "category": "INTEGRITY",
           "kind": "FACTUAL",
-          "default_disposition": "BLOCK",
-          "override_class": "NOT_OVERRIDEABLE"
+          "default_disposition": "BLOCK"
         },
         {
           "code": "REQUIRED_CONTEXT_INCOMPLETE",
           "precedence_rank": 20,
           "category": "CONTEXT",
           "kind": "FACTUAL",
-          "default_disposition": "BLOCK",
-          "override_class": "NOT_OVERRIDEABLE"
+          "default_disposition": "BLOCK"
         },
         {
           "code": "EVIDENCE_TASK_MISMATCH",
           "precedence_rank": 30,
           "category": "INTEGRITY",
           "kind": "FACTUAL",
-          "default_disposition": "BLOCK",
-          "override_class": "NOT_OVERRIDEABLE"
+          "default_disposition": "BLOCK"
         },
         {
           "code": "EVIDENCE_RUN_MISMATCH",
           "precedence_rank": 40,
           "category": "INTEGRITY",
           "kind": "FACTUAL",
-          "default_disposition": "BLOCK",
-          "override_class": "NOT_OVERRIDEABLE"
+          "default_disposition": "BLOCK"
         },
         {
           "code": "EVIDENCE_CANDIDATE_MISMATCH",
           "precedence_rank": 50,
           "category": "INTEGRITY",
           "kind": "FACTUAL",
-          "default_disposition": "BLOCK",
-          "override_class": "NOT_OVERRIDEABLE"
+          "default_disposition": "BLOCK"
         },
         {
           "code": "REPOSITORY_CONTEXT_MISMATCH",
           "precedence_rank": 60,
           "category": "INTEGRITY",
           "kind": "FACTUAL",
-          "default_disposition": "BLOCK",
-          "override_class": "NOT_OVERRIDEABLE"
+          "default_disposition": "BLOCK"
         },
         {
           "code": "EVIDENCE_PROVENANCE_INVALID",
           "precedence_rank": 70,
           "category": "INTEGRITY",
           "kind": "FACTUAL",
-          "default_disposition": "BLOCK",
-          "override_class": "NOT_OVERRIDEABLE"
+          "default_disposition": "BLOCK"
         },
         {
           "code": "EVIDENCE_DUPLICATE_IDENTITY",
           "precedence_rank": 80,
           "category": "INTEGRITY",
           "kind": "FACTUAL",
-          "default_disposition": "BLOCK",
-          "override_class": "NOT_OVERRIDEABLE"
+          "default_disposition": "BLOCK"
         },
         {
           "code": "REQUIRED_EVIDENCE_INVALID",
           "precedence_rank": 90,
           "category": "EVIDENCE",
           "kind": "FACTUAL",
-          "default_disposition": "BLOCK",
-          "override_class": "POLICY_EXCEPTION_REQUIRED"
+          "default_disposition": "BLOCK"
         },
         {
           "code": "TASK_CONTEXT_STALE",
           "precedence_rank": 95,
           "category": "FRESHNESS",
           "kind": "FACTUAL",
-          "default_disposition": "BLOCK",
-          "override_class": "POLICY_EXCEPTION_REQUIRED"
+          "default_disposition": "BLOCK"
         },
         {
           "code": "CANDIDATE_STALE",
           "precedence_rank": 100,
           "category": "FRESHNESS",
           "kind": "FACTUAL",
-          "default_disposition": "BLOCK",
-          "override_class": "POLICY_EXCEPTION_REQUIRED"
+          "default_disposition": "BLOCK"
         },
         {
           "code": "POLICY_CONTEXT_STALE",
           "precedence_rank": 110,
           "category": "FRESHNESS",
           "kind": "FACTUAL",
-          "default_disposition": "BLOCK",
-          "override_class": "POLICY_EXCEPTION_REQUIRED"
+          "default_disposition": "BLOCK"
         },
         {
           "code": "REQUIRED_EVIDENCE_MISSING",
           "precedence_rank": 120,
           "category": "EVIDENCE",
           "kind": "FACTUAL",
-          "default_disposition": "BLOCK",
-          "override_class": "POLICY_EXCEPTION_REQUIRED"
+          "default_disposition": "BLOCK"
         },
         {
           "code": "RELEASE_STATE_NOT_CLEAN",
           "precedence_rank": 130,
           "category": "REPO_STATE",
           "kind": "FACTUAL",
-          "default_disposition": "BLOCK",
-          "override_class": "POLICY_EXCEPTION_REQUIRED"
+          "default_disposition": "BLOCK"
         },
         {
           "code": "SCOPE_VIOLATION",
           "precedence_rank": 140,
           "category": "SCOPE",
           "kind": "FACTUAL",
-          "default_disposition": "BLOCK",
-          "override_class": "POLICY_EXCEPTION_REQUIRED"
+          "default_disposition": "BLOCK"
         },
         {
           "code": "APPROVAL_MISSING",
           "precedence_rank": 150,
           "category": "APPROVAL",
           "kind": "FACTUAL",
-          "default_disposition": "BLOCK",
-          "override_class": "HUMAN_REVIEW_RESOLVABLE"
+          "default_disposition": "BLOCK"
         },
         {
           "code": "APPROVAL_STALE",
           "precedence_rank": 160,
           "category": "APPROVAL",
           "kind": "FACTUAL",
-          "default_disposition": "BLOCK",
-          "override_class": "HUMAN_REVIEW_RESOLVABLE"
+          "default_disposition": "BLOCK"
         },
         {
           "code": "VERIFIER_NOT_INDEPENDENT",
           "precedence_rank": 170,
           "category": "INDEPENDENCE",
           "kind": "FACTUAL",
-          "default_disposition": "BLOCK",
-          "override_class": "NOT_OVERRIDEABLE"
+          "default_disposition": "BLOCK"
         },
         {
           "code": "SCOPE_UNCERTAIN",
           "precedence_rank": 180,
           "category": "SCOPE",
           "kind": "SEMANTIC",
-          "default_disposition": "REVIEW_REQUIRED",
-          "override_class": "HUMAN_REVIEW_RESOLVABLE"
+          "default_disposition": "REVIEW_REQUIRED"
         },
         {
           "code": "VERIFIER_INDEPENDENCE_UNKNOWN",
           "precedence_rank": 190,
           "category": "INDEPENDENCE",
           "kind": "SEMANTIC",
-          "default_disposition": "REVIEW_REQUIRED",
-          "override_class": "HUMAN_REVIEW_RESOLVABLE"
+          "default_disposition": "REVIEW_REQUIRED"
         }
       ],
       "precedence_ranks": {
@@ -4275,7 +4195,7 @@
       "approval_sentinel": "NO_APPROVAL_SUPPLIED",
       "set_normalization_rule": "each set is lexicographically sorted and deduplicated",
       "policy_record_schema_version": "changegate.policy-evaluation-record.v1",
-      "policy_record_schema_digest": "sha256:d7821e1e8c7563e55dcf18f74972a109170c7cc7c7fdc9f94378f8b2dfbff6eb",
+      "policy_record_schema_digest": "sha256:67977366599c131ff6c01b30fb345aca4b46b11784de350ec6f4d51fa3615722",
       "canonicalization_version": "tomtit.canonical.v1",
       "canonicalization_contract": {
         "kind": "changegate.canonicalization-contract.v1",
@@ -4415,9 +4335,13 @@
       },
       "field_order_status": "NON_SEMANTIC_DOCUMENTATION_ORDER",
       "validation_levels": {
-        "STRUCTURALLY_VALID": "exact typed field set + canonical collection form + self-derived decision digest + valid policy-record digest + no runtime/self-referential fields",
-        "REPLAY_VERIFIED": "STRUCTURALLY_VALID and record.input_digest == canonical_digest(normative MergeEligibilityPolicyInput payload); requires the canonical input or a verifiable immutable input reference; structural validity never implies replay verification"
-      }
+        "STRUCTURALLY_VALIDATED": "exact typed field set + typed values + canonical collection form + no runtime/self-referential fields, and, when the canonical input is supplied, equality of every binding already present in both artifacts (task identity, all eight source bindings, policy/evaluator versions, evaluation mode, record-schema version/digest, canonicalization version/digest) plus record.input_digest == canonical_digest(canonical input); binding equality proves the record is bound to that input, never that the disposition or reasons are the production evaluator's semantic result for it",
+        "IDENTITY_RECOMPUTED": "decision_digest recomputes from the record's own deterministic decision fields and policy_record_digest recomputes from the canonical payload; identity consistency only, never a semantic recomputation from facts",
+        "SEMANTIC_REPLAY_NOT_PERFORMED": "always, for every Slice 1A validation result: no Slice 1A artifact, helper, manifest control, or test replays a decision through a production evaluator, so none may prove or claim semantically correct disposition, reason selection, or precedence application; a semantically forged but internally consistent policy result can be STRUCTURALLY_VALIDATED and IDENTITY_RECOMPUTED and must never be reported as semantically replay verified",
+        "SEMANTICALLY_REPLAY_VERIFIED": "SLICE_1B_PROTOCOL_ONLY: requires re-executing the production pure evaluator over the canonical input and obtaining a byte-identical decision and record; no Slice 1A artifact or helper may return this status for a policy result"
+      },
+      "policy_record_schema_digest_derivation": "canonical_digest(deterministic_identity.typed_field_contract)",
+      "structural_validation_totality": "every artifact structural validator is total over malformed JSON-compatible values: it returns structured validation failures, never raises, and fails closed on invalid types, booleans in typed positions, malformed collections, malformed digests, unknown fields, runtime fields, self-digest fields, unsorted or duplicated canonical collections, invalid partitions, and source/schema/canonicalization binding disagreement"
     },
     "replay": {
       "replay_contract_version": "changegate.replay.v2",
@@ -4494,7 +4418,7 @@
       }
     },
     "event_semantics": {
-      "event_schema_digest": "sha256:b42438db9729210dd01638267ca715cbefb54a3f247f7f2a8c985287c9219ccc",
+      "event_schema_digest": "sha256:fb972ccd1528c8380f806bcedfde355babb188d3714abd8e0638dfd64494b231",
       "event_type_set": [
         "CHANGEGATE_EVALUATION_COMPLETED",
         "CHANGEGATE_MERGE_ATTEMPTED",
@@ -4529,7 +4453,33 @@
           "target_event_ref",
           "target_event_type"
         ]
-      }
+      },
+      "event_identity_equality_matrix": [
+        {
+          "identity": "task",
+          "event_path": "task_ref",
+          "reference_path": "decision_ref.task_ref",
+          "applies_to": "every event type",
+          "equality_required": true,
+          "failure_code": "TASK_IDENTITY_MISMATCH"
+        },
+        {
+          "identity": "candidate",
+          "event_path": "subject_ref.digest",
+          "reference_path": "decision_ref.candidate_digest",
+          "applies_to": "every event whose subject_ref.kind is git_candidate with a non-null digest",
+          "equality_required": true,
+          "failure_code": "CANDIDATE_IDENTITY_MISMATCH"
+        },
+        {
+          "identity": "input_digest",
+          "event_path": "context_digest",
+          "reference_path": "decision_ref.input_digest",
+          "applies_to": "CHANGEGATE_EVALUATION_COMPLETED",
+          "equality_required": true,
+          "failure_code": "INPUT_DIGEST_REFERENCE_MISMATCH"
+        }
+      ]
     },
     "causal_semantics": {
       "causal_contract_version": "changegate.causal.v4-immutable-lineage",
@@ -4613,15 +4563,6 @@
           "required_fields": [],
           "predicate": "the same valid object with different JSON key insertion order is accepted and has the same canonical identity",
           "failure_code": null
-        },
-        {
-          "id": "REC-VALIDATION-LEVELS",
-          "subject": "policy_record",
-          "required_fields": [
-            "input_digest"
-          ],
-          "predicate": "STRUCTURALLY_VALID never implies REPLAY_VERIFIED; REPLAY_VERIFIED additionally requires record.input_digest == canonical_digest(normative input payload) against the supplied canonical input",
-          "failure_code": "REPLAY_NOT_VERIFIED"
         },
         {
           "id": "AUTH-PURE-EVALUATOR-ONLY",
@@ -4712,6 +4653,76 @@
           ],
           "predicate": "a changed candidate requires a new evaluation root",
           "failure_code": "LINEAGE_DIVERGES"
+        },
+        {
+          "id": "REPLAY-BOUNDARY",
+          "subject": "policy_record",
+          "required_fields": [
+            "input_digest"
+          ],
+          "predicate": "Slice 1A structural validation returns at most STRUCTURALLY_VALIDATED, IDENTITY_RECOMPUTED, and SEMANTIC_REPLAY_NOT_PERFORMED; input-digest and binding equality are structural binding checks, never semantic replay; SEMANTICALLY_REPLAY_VERIFIED is a Slice 1B protocol status that no Slice 1A artifact may return for a policy result",
+          "failure_code": "SEMANTIC_REPLAY_FALSELY_CLAIMED"
+        },
+        {
+          "id": "REC-SCHEMA-DIGEST-DERIVATION",
+          "subject": "deterministic_identity",
+          "required_fields": [
+            "policy_record_schema_digest",
+            "typed_field_contract"
+          ],
+          "predicate": "policy_record_schema_digest == canonical_digest(deterministic_identity.typed_field_contract); the published digest is executably derived from the exact typed contract object the validators and tests use, never hand-maintained",
+          "failure_code": "SCHEMA_DIGEST_NOT_DERIVED"
+        },
+        {
+          "id": "REC-TOTAL-FAIL-CLOSED",
+          "subject": "policy_record",
+          "required_fields": [],
+          "predicate": "every structural validator is total over malformed JSON-compatible values and fails closed with structured errors; a validator crash on user-controlled input is a contract violation",
+          "failure_code": "VALIDATOR_NOT_TOTAL"
+        },
+        {
+          "id": "REC-BINDING-CONSISTENCY",
+          "subject": "policy_record",
+          "required_fields": [
+            "input_digest",
+            "schema_version"
+          ],
+          "predicate": "when both the canonical input and the record are presented, every binding already present in both is equal: task identity, all eight source bindings, policy/evaluator versions, evaluation mode, record-schema version/digest, canonicalization version/digest, and record.input_digest == canonical_digest(canonical input); no new binding is added",
+          "failure_code": "BINDING_MISMATCH"
+        },
+        {
+          "id": "AUTH-NO-ACTIVE-OVERRIDE-CLASSIFICATION",
+          "subject": "authority_boundary",
+          "required_fields": [],
+          "predicate": "no active Slice 1A machine semantic (reason taxonomy, golden case, manifest object, validator, or fingerprint input) carries an override or exception classification, including any renamed equivalent describing exception eligibility, human resolvability, override permission, or post-verdict authority action; OD-S1A-005 remains pending",
+          "failure_code": "OD_S1A_005_LEAKAGE"
+        },
+        {
+          "id": "EVENT-TASK-IDENTITY-EQUALITY",
+          "subject": "event_identity",
+          "required_fields": [
+            "task_ref"
+          ],
+          "predicate": "for every event, event.task_ref == event.decision_ref.task_ref",
+          "failure_code": "TASK_IDENTITY_MISMATCH"
+        },
+        {
+          "id": "EVENT-CANDIDATE-IDENTITY-EQUALITY",
+          "subject": "event_identity",
+          "required_fields": [
+            "subject_ref"
+          ],
+          "predicate": "for every event whose subject_ref.kind is git_candidate with a non-null digest, event.subject_ref.digest == event.decision_ref.candidate_digest",
+          "failure_code": "CANDIDATE_IDENTITY_MISMATCH"
+        },
+        {
+          "id": "EVENT-INPUT-DIGEST-REFERENCE-EQUALITY",
+          "subject": "event_identity",
+          "required_fields": [
+            "context_digest"
+          ],
+          "predicate": "for every CHANGEGATE_EVALUATION_COMPLETED event, event.context_digest == event.decision_ref.input_digest",
+          "failure_code": "INPUT_DIGEST_REFERENCE_MISMATCH"
         }
       ],
       "immutable_lineage_rule": "a root's six-field policy lineage is immutable; no event may mutate, replace, or switch it"
@@ -5321,8 +5332,403 @@
       "override_semantics_in_slice_1a": "ABSENT",
       "exception_semantics_in_slice_1a": "ABSENT",
       "review_event_in_slice_1a": "DELETED (Path B) — review/approval events belong to the future governance slice",
-      "od_s1a_005_dependency": "PENDING_OWNER_DECISION — gates the future governance slice; does not block Slice 1A or Slice 1B"
-    }
+      "od_s1a_005_dependency": "PENDING_OWNER_DECISION — gates the future governance slice; does not block Slice 1A or Slice 1B",
+      "active_override_exception_classification": "ABSENT — no reason-taxonomy entry, golden case, or manifest object carries an override or exception classification field; the removed machine values (overrideability, exception-required, human-resolvability classes) may not be reintroduced under any name while OD-S1A-005 is pending; reintroduction is a semantic change requiring fresh verification"
+    },
+    "contract_to_test_coverage": [
+      {
+        "invariant_id": "reason-taxonomy-completeness",
+        "normative_source": "spec §9; fixture reason_codes",
+        "disposition": "REWRITE",
+        "positive_oracle": "exactly 20 closed grammatical codes with unique ranks and a closed entry field set",
+        "negative_oracle": "an entry with an extra classification field, bad grammar, or duplicate rank fails",
+        "mutation_or_reintroduction_oracle": "mutation: adding any classification field to a taxonomy entry fails the closed-shape check and changes the fingerprint",
+        "test_references": [
+          "test_reason_taxonomy_is_closed_grammatical_and_classification_free",
+          "test_every_reason_code_is_covered_by_a_golden_case"
+        ]
+      },
+      {
+        "invariant_id": "disposition-coverage",
+        "normative_source": "spec §8; fixture cases",
+        "disposition": "REWRITE",
+        "positive_oracle": "an independently pinned code-to-disposition table matches the fixture and manifest; all three dispositions and both authorities appear across golden cases",
+        "negative_oracle": "a disposition drift between the pinned table and fixture fails",
+        "mutation_or_reintroduction_oracle": "mutation: changing any default disposition diverges from the pinned table",
+        "test_references": [
+          "test_independent_disposition_table_and_coverage"
+        ]
+      },
+      {
+        "invariant_id": "independent-precedence-protection",
+        "normative_source": "spec §10; OD-S1A-007 pending",
+        "disposition": "REWRITE",
+        "positive_oracle": "an independently pinned rank table matches fixture and manifest; every case's expected primary reason equals the pinned minimum-rank derivation",
+        "negative_oracle": "coordinated rank drift in fixture and manifest alone fails against the pinned table",
+        "mutation_or_reintroduction_oracle": "mutation: any precedence change alters the semantic fingerprint",
+        "test_references": [
+          "test_independent_precedence_table_protects_ranks",
+          "test_semantic_fingerprint_changes_for_required_mutations"
+        ]
+      },
+      {
+        "invariant_id": "fact-state-totality",
+        "normative_source": "spec §6.4, §15",
+        "disposition": "REWRITE",
+        "positive_oracle": "a pinned test-only oracle maps every declared fact state and reproduces all 41 golden expectations from facts alone; the verifier rule is total over 12 combinations",
+        "negative_oracle": "an unmapped fact state or an expectation the oracle cannot reproduce fails",
+        "mutation_or_reintroduction_oracle": "mutation: single-fact deviations change the oracle-derived outcome",
+        "test_references": [
+          "test_fact_state_mapping_is_total_and_matches_pinned_oracle",
+          "test_independent_oracle_reproduces_every_golden_expectation",
+          "test_independent_oracle_detects_fact_mutations"
+        ]
+      },
+      {
+        "invariant_id": "evidence-accounting-partition",
+        "normative_source": "spec §6.1, §11; ADR-001 §8",
+        "disposition": "REWRITE",
+        "positive_oracle": "required == satisfied ∪ invalid ∪ missing, pairwise disjoint, for every case; empty-bundle cases pinned in both directions",
+        "negative_oracle": "an overlapping or non-exhaustive partition in a record fails validation",
+        "mutation_or_reintroduction_oracle": "mutation: moving a requirement id between partitions without updating the union fails",
+        "test_references": [
+          "test_evidence_accounting_partition_and_disjointness_hold_per_case",
+          "test_collection_normalization_and_partitions_fail_closed"
+        ]
+      },
+      {
+        "invariant_id": "requirement-evidence-namespace-separation",
+        "normative_source": "spec §6.2",
+        "disposition": "REWRITE",
+        "positive_oracle": "requirement and evidence universes are disjoint per case and per record",
+        "negative_oracle": "a requirement id inside an evidence set (and vice versa) fails validation",
+        "mutation_or_reintroduction_oracle": "mutation: namespace swap after full rederivation still fails",
+        "test_references": [
+          "test_identifier_namespace_swap_is_rejected",
+          "test_evidence_accounting_partition_and_disjointness_hold_per_case"
+        ]
+      },
+      {
+        "invariant_id": "canonical-digest-grammar",
+        "normative_source": "spec §7.1",
+        "disposition": "REWRITE",
+        "positive_oracle": "production canonical_digest output is accepted by every digest field in record and schema",
+        "negative_oracle": "bare hex, uppercase, wrong algorithm, wrong length, and whitespace forms are rejected by both validators",
+        "mutation_or_reintroduction_oracle": "mutation: replacing any digest with a malformed form fails after rehash",
+        "test_references": [
+          "test_canonical_digest_grammar_is_enforced_everywhere"
+        ]
+      },
+      {
+        "invariant_id": "privacy-raw-content-exclusion",
+        "normative_source": "spec §21",
+        "disposition": "REWRITE",
+        "positive_oracle": "no raw-content field exists in the schema and no credential shape exists in the fixture",
+        "negative_oracle": "content-bearing reference values are rejected by the schema grammar",
+        "mutation_or_reintroduction_oracle": "mutation: a credential-shaped or content-bearing reference value fails schema validation",
+        "test_references": [
+          "test_no_artifact_contains_secret_material_or_raw_content_fields"
+        ]
+      },
+      {
+        "invariant_id": "deterministic-identity-key",
+        "normative_source": "spec §18.5",
+        "disposition": "RETAIN",
+        "positive_oracle": "the complete replay key is exact and every key component change changes input identity",
+        "negative_oracle": "a mutated binding that leaves input_digest unchanged would fail",
+        "mutation_or_reintroduction_oracle": "mutation: all 16 binding/fact mutations change the canonical input digest",
+        "test_references": [
+          "test_complete_replay_key_binding_mutations_change_input_identity"
+        ]
+      },
+      {
+        "invariant_id": "schema-digest-derivation",
+        "normative_source": "spec §7.3, §18.5",
+        "disposition": "REWRITE",
+        "positive_oracle": "the published policy_record_schema_digest equals the independent canonical digest of the typed field contract",
+        "negative_oracle": "a stale or hand-written digest value fails the derivation equality",
+        "mutation_or_reintroduction_oracle": "mutation: field rename, type change, and collection-semantics change each change the derived digest; metadata outside the typed contract does not",
+        "test_references": [
+          "test_policy_record_schema_digest_derives_from_the_typed_contract",
+          "test_schema_digest_mutations_track_contract_changes"
+        ]
+      },
+      {
+        "invariant_id": "canonicalization-binding",
+        "normative_source": "spec §18.5",
+        "disposition": "REWRITE",
+        "positive_oracle": "canonicalization_contract_digest equals the canonical digest of the canonicalization contract and is bound into the canonical input",
+        "negative_oracle": "a canonicalization version or digest drift between input and manifest fails binding consistency",
+        "mutation_or_reintroduction_oracle": "mutation: canonicalization binding changes change input identity and the fingerprint",
+        "test_references": [
+          "test_policy_record_schema_digest_derives_from_the_typed_contract",
+          "test_record_input_binding_consistency_is_enforced"
+        ]
+      },
+      {
+        "invariant_id": "source-binding-consistency",
+        "normative_source": "spec §7.3; R6 verifier H-R6V-03",
+        "disposition": "REWRITE",
+        "positive_oracle": "every binding present in both record and canonical input is equal",
+        "negative_oracle": "drift in any of the eight source bindings, versions, mode, or schema binding is rejected even after full rederivation",
+        "mutation_or_reintroduction_oracle": "mutation: each binding drifted independently fails with a structured mismatch error",
+        "test_references": [
+          "test_record_input_binding_consistency_is_enforced"
+        ]
+      },
+      {
+        "invariant_id": "decision-identity-recomputation",
+        "normative_source": "spec §7.3 check 4",
+        "disposition": "REWRITE",
+        "positive_oracle": "decision_digest recomputes from the record's own deterministic decision fields",
+        "negative_oracle": "every decision-field mutation followed only by outer rehash fails DECISION_DIGEST_NOT_DERIVED",
+        "mutation_or_reintroduction_oracle": "mutation: ten semantic decision mutations are each rejected",
+        "test_references": [
+          "test_decision_identity_recomputation_rejects_semantic_mutations"
+        ]
+      },
+      {
+        "invariant_id": "policy-record-identity-recomputation",
+        "normative_source": "spec §7.3 check 5",
+        "disposition": "REWRITE",
+        "positive_oracle": "policy_record_digest recomputes from the canonical payload; key order is not identity",
+        "negative_oracle": "an outer mutation without rehash fails RECORD_DIGEST_MISMATCH",
+        "mutation_or_reintroduction_oracle": "mutation: arbitrary record digests and stale payloads are rejected",
+        "test_references": [
+          "test_policy_record_identity_recomputation_rejects_outer_mutations",
+          "test_key_order_is_not_identity"
+        ]
+      },
+      {
+        "invariant_id": "total-fail-closed-validation",
+        "normative_source": "spec §7.3; R6 verifier H-R6V-03",
+        "disposition": "REWRITE",
+        "positive_oracle": "the structural validator accepts any JSON-compatible value and returns structured errors",
+        "negative_oracle": "malformed scalars, collections, digests, unknown/runtime fields never crash and never classify",
+        "mutation_or_reintroduction_oracle": "mutation: every malformed-value class yields errors and empty classifications",
+        "test_references": [
+          "test_record_validator_is_total_and_fail_closed",
+          "test_valid_records_classify_structurally_for_every_case"
+        ]
+      },
+      {
+        "invariant_id": "semantic-replay-boundary",
+        "normative_source": "spec §7.3 validation levels; OD-S1A-009",
+        "disposition": "REWRITE",
+        "positive_oracle": "valid results carry exactly STRUCTURALLY_VALIDATED, IDENTITY_RECOMPUTED, SEMANTIC_REPLAY_NOT_PERFORMED",
+        "negative_oracle": "a semantically forged but internally consistent record is structurally valid yet never reported as semantically replay verified",
+        "mutation_or_reintroduction_oracle": "mutation: claiming SEMANTICALLY_REPLAY_VERIFIED in Slice 1A changes the fingerprint and fails the boundary test",
+        "test_references": [
+          "test_semantic_replay_is_never_claimed_in_slice_1a",
+          "test_spec_pins_replay_boundary_and_forbidden_terms"
+        ]
+      },
+      {
+        "invariant_id": "task-identity-equality",
+        "normative_source": "spec §19.5",
+        "disposition": "REWRITE",
+        "positive_oracle": "event.task_ref equals decision_ref.task_ref for every event",
+        "negative_oracle": "an envelope task mismatch is rejected as TASK_IDENTITY_MISMATCH",
+        "mutation_or_reintroduction_oracle": "mutation: envelope task mutated independently of the decision reference is rejected",
+        "test_references": [
+          "test_event_identity_equality_matrix_is_enforced"
+        ]
+      },
+      {
+        "invariant_id": "candidate-identity-equality",
+        "normative_source": "spec §19.5",
+        "disposition": "REWRITE",
+        "positive_oracle": "subject_ref.digest equals decision_ref.candidate_digest for candidate subjects",
+        "negative_oracle": "a subject candidate mismatch is rejected as CANDIDATE_IDENTITY_MISMATCH",
+        "mutation_or_reintroduction_oracle": "mutation: subject digest mutated independently of the decision reference is rejected",
+        "test_references": [
+          "test_event_identity_equality_matrix_is_enforced"
+        ]
+      },
+      {
+        "invariant_id": "input-digest-reference-equality",
+        "normative_source": "spec §19.1",
+        "disposition": "REWRITE",
+        "positive_oracle": "context_digest equals decision_ref.input_digest for evaluation events",
+        "negative_oracle": "a context-digest mismatch is rejected as INPUT_DIGEST_REFERENCE_MISMATCH",
+        "mutation_or_reintroduction_oracle": "mutation: context digest mutated independently of the decision reference is rejected",
+        "test_references": [
+          "test_event_identity_equality_matrix_is_enforced"
+        ]
+      },
+      {
+        "invariant_id": "evaluation-id-uniqueness-and-no-drift",
+        "normative_source": "spec §19.3",
+        "disposition": "RETAIN",
+        "positive_oracle": "each root registers a unique evaluation id and downstream events preserve it",
+        "negative_oracle": "duplicate root evaluation ids and downstream evaluation-id drift are rejected",
+        "mutation_or_reintroduction_oracle": "mutation: duplicated and drifted evaluation ids each produce their exact failure code",
+        "test_references": [
+          "test_causal_graph_negative_controls_are_rejected"
+        ]
+      },
+      {
+        "invariant_id": "immutable-root-identity",
+        "normative_source": "spec §19.3, §19.6",
+        "disposition": "RETAIN",
+        "positive_oracle": "a root's six-field lineage is immutable and repeated exactly by every descendant",
+        "negative_oracle": "lineage divergence on any of the six fields is rejected",
+        "mutation_or_reintroduction_oracle": "mutation: a changed candidate continuing an existing chain is rejected; a new root is required",
+        "test_references": [
+          "test_causal_graph_negative_controls_are_rejected",
+          "test_multiroot_multiparent_graph_positives_validate"
+        ]
+      },
+      {
+        "invariant_id": "multi-parent-equality",
+        "normative_source": "spec §19.6",
+        "disposition": "REWRITE",
+        "positive_oracle": "an event with multiple explicit predecessors validates every predecessor and requires one shared lineage",
+        "negative_oracle": "conflicting predecessor lineages are rejected as AMBIGUOUS_PREDECESSOR_LINEAGE",
+        "mutation_or_reintroduction_oracle": "mutation: a rollback citing a merge from one root and a validation from another is rejected",
+        "test_references": [
+          "test_multiroot_multiparent_graph_positives_validate",
+          "test_causal_graph_negative_controls_are_rejected"
+        ]
+      },
+      {
+        "invariant_id": "cycle-rejection",
+        "normative_source": "spec §19.3 rule 19",
+        "disposition": "RETAIN",
+        "positive_oracle": "acyclic chains validate",
+        "negative_oracle": "a causal reference cycle is rejected as CAUSAL_CYCLE",
+        "mutation_or_reintroduction_oracle": "mutation: a two-event reference cycle is rejected",
+        "test_references": [
+          "test_causal_graph_negative_controls_are_rejected"
+        ]
+      },
+      {
+        "invariant_id": "owner-decision-status-coverage",
+        "normative_source": "spec §25; fixture owner_decision_statuses",
+        "disposition": "RETAIN",
+        "positive_oracle": "OD-S1A-009 is ACCEPTED, OD-S1A-001…008 remain pending, and every pending decision has at least one marked golden case",
+        "negative_oracle": "a silently resolved owner decision fails the status check",
+        "mutation_or_reintroduction_oracle": "mutation: resolving OD-S1A-005 in the manifest boundary changes the fingerprint",
+        "test_references": [
+          "test_owner_decision_statuses_and_records_are_pending_except_009"
+        ]
+      },
+      {
+        "invariant_id": "exact-artifact-governance",
+        "normative_source": "spec §27.4",
+        "disposition": "REWRITE",
+        "positive_oracle": "the exact-artifact hash contract names both executable artifacts without hard-coding hashes",
+        "negative_oracle": "a governance contract missing either compared file fails",
+        "mutation_or_reintroduction_oracle": "mutation: removing the comparison contract changes the fingerprint",
+        "test_references": [
+          "test_exact_artifact_governance_is_declared"
+        ]
+      },
+      {
+        "invariant_id": "metadata-only-fingerprint-stability",
+        "normative_source": "spec §27.1, §27.3",
+        "disposition": "RETAIN",
+        "positive_oracle": "metadata-only acceptance changes preserve the semantic fingerprint",
+        "negative_oracle": "a semantic change necessarily alters the fingerprint",
+        "mutation_or_reintroduction_oracle": "mutation: eighteen required semantic mutations each change the fingerprint while metadata does not",
+        "test_references": [
+          "test_metadata_only_changes_preserve_fingerprint",
+          "test_semantic_fingerprint_changes_for_required_mutations"
+        ]
+      },
+      {
+        "invariant_id": "event-local-contracts",
+        "normative_source": "spec §19.1",
+        "disposition": "RETAIN",
+        "positive_oracle": "every event type validates with its full local contract",
+        "negative_oracle": "a minimal common-envelope-only instance is invalid for every event type",
+        "mutation_or_reintroduction_oracle": "mutation: removing any per-event required field fails schema validation",
+        "test_references": [
+          "test_each_event_type_requires_its_local_contract",
+          "test_minimal_envelope_only_instance_is_rejected_for_every_event_type"
+        ]
+      },
+      {
+        "invariant_id": "manifest-and-fingerprint-coverage",
+        "normative_source": "spec §27.3",
+        "disposition": "REWRITE",
+        "positive_oracle": "the manifest binds exactly the accepted Slice 1A control set and the fingerprint hashes it",
+        "negative_oracle": "a missing required control or an unexpected control fails the closed-set check",
+        "mutation_or_reintroduction_oracle": "mutation: removing or altering any named control changes the fingerprint",
+        "test_references": [
+          "test_manifest_binds_required_controls_and_only_accepted_semantics",
+          "test_semantic_fingerprint_changes_for_required_mutations"
+        ]
+      },
+      {
+        "invariant_id": "replacement-policy-record",
+        "normative_source": "R5 §19.4 (deleted by Model B; OD-S1A-009)",
+        "disposition": "DELETE_BY_MODEL_B",
+        "positive_oracle": "no replacement record path exists in any artifact",
+        "negative_oracle": "no helper can fabricate a second policy record for the same input",
+        "mutation_or_reintroduction_oracle": "reintroduction attack: a replacement object or helper is rejected by the schema and the closed manifest control set",
+        "test_references": [
+          "test_removed_model_b_surfaces_cannot_be_reintroduced"
+        ]
+      },
+      {
+        "invariant_id": "replacement-registry",
+        "normative_source": "R5 record registry (deleted by Model B)",
+        "disposition": "DELETE_BY_MODEL_B",
+        "positive_oracle": "no registry helper or fixture path exists",
+        "negative_oracle": "no lookup can serve a replacement record",
+        "mutation_or_reintroduction_oracle": "reintroduction attack: registry helper names are absent from the artifact test module",
+        "test_references": [
+          "test_removed_model_b_surfaces_cannot_be_reintroduced"
+        ]
+      },
+      {
+        "invariant_id": "replacement-decision-reference",
+        "normative_source": "R5 schema replacement_decision_ref (deleted by Model B)",
+        "disposition": "DELETE_BY_MODEL_B",
+        "positive_oracle": "the schema has no replacement reference object",
+        "negative_oracle": "an event carrying replacement_decision_ref fails schema validation",
+        "mutation_or_reintroduction_oracle": "reintroduction attack: adding replacement_decision_ref to a valid event is rejected by additionalProperties",
+        "test_references": [
+          "test_removed_model_b_surfaces_cannot_be_reintroduced"
+        ]
+      },
+      {
+        "invariant_id": "review-override-event",
+        "normative_source": "R5 CHANGEGATE_REVIEW_OVERRIDDEN (deleted by Model B, Path B)",
+        "disposition": "DELETE_BY_MODEL_B",
+        "positive_oracle": "the closed six-type event vocabulary contains no review event",
+        "negative_oracle": "a review/override event type fails the enum",
+        "mutation_or_reintroduction_oracle": "reintroduction attack: CHANGEGATE_REVIEW_OVERRIDDEN and CHANGEGATE_REVIEW_RECORDED instances are schema-rejected",
+        "test_references": [
+          "test_removed_model_b_surfaces_cannot_be_reintroduced"
+        ]
+      },
+      {
+        "invariant_id": "policy-lineage-switch",
+        "normative_source": "R5 override lineage switch (deleted by Model B)",
+        "disposition": "DELETE_BY_MODEL_B",
+        "positive_oracle": "policy lineage is immutable per root; no switch branch exists",
+        "negative_oracle": "any lineage divergence from the referenced root is rejected",
+        "mutation_or_reintroduction_oracle": "reintroduction attack: an event switching to a second decision identity is rejected as lineage divergence",
+        "test_references": [
+          "test_removed_model_b_surfaces_cannot_be_reintroduced",
+          "test_causal_graph_negative_controls_are_rejected"
+        ]
+      },
+      {
+        "invariant_id": "active-exception-override-classification",
+        "normative_source": "R6 classification-field residue (removed by R7 under OD-S1A-009)",
+        "disposition": "DELETE_BY_MODEL_B",
+        "positive_oracle": "no artifact carries the removed classification field or its removed machine values",
+        "negative_oracle": "closed entry/case field sets reject any classification field under any name",
+        "mutation_or_reintroduction_oracle": "reintroduction attack: reintroducing the field or values fails the closed-shape checks and changes the fingerprint",
+        "test_references": [
+          "test_no_active_override_or_exception_classification_remains",
+          "test_semantic_fingerprint_changes_for_required_mutations"
+        ]
+      }
+    ]
   },
   "owner_decision_statuses": {
     "OD-S1A-001": "PENDING_OWNER_DECISION",

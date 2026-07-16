@@ -171,7 +171,7 @@
     "project_ref": { "$ref": "#/$defs/nullableOpaqueRef" },
     "task_ref": {
       "$ref": "#/$defs/taskRef",
-      "description": "Task identifier (the one shared taskRef grammar; current TOMTIT task ids stay representable)."
+      "description": "Task identifier (the one shared taskRef grammar; current TOMTIT task ids stay representable). Identity equality rule (spec §19.5): for every event, event.task_ref MUST equal event.decision_ref.task_ref. JSON Schema cannot express cross-field equality, so the artifact causal validator enforces it and rejects any mismatch."
     },
     "run_ref": { "$ref": "#/$defs/nullableOpaqueRef" },
     "subject_ref": {
@@ -198,12 +198,15 @@
             { "type": "null" }
           ]
         },
-        "digest": { "$ref": "#/$defs/nullableCanonicalDigest" }
+        "digest": {
+          "$ref": "#/$defs/nullableCanonicalDigest",
+          "description": "Identity equality rule (spec §19.5): when kind is git_candidate and this digest is non-null it MUST equal event.decision_ref.candidate_digest; the artifact causal validator enforces the equality."
+        }
       }
     },
     "context_digest": {
       "$ref": "#/$defs/nullableCanonicalDigest",
-      "description": "Canonical digest of the deterministic policy input (A2 input_digest) for evaluation events."
+      "description": "Canonical digest of the deterministic policy input (A2 input_digest) for evaluation events. Identity equality rule (spec §19.1): for CHANGEGATE_EVALUATION_COMPLETED it MUST equal event.decision_ref.input_digest; the artifact causal validator enforces the equality."
     },
     "policy_version": {
       "anyOf": [
