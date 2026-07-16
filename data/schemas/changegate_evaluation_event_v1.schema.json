@@ -119,7 +119,7 @@
       ]
     },
     "taskRef": {
-      "description": "The ONE task-reference grammar (existing TaskContract.task_id grammar) reused by event.task_ref AND event.decision_ref.task_ref AND replacement_decision_ref.task_ref, so no weaker nested grammar can admit whitespace/newlines a top-level field rejects.",
+      "description": "The ONE task-reference grammar (existing TaskContract.task_id grammar) reused by event.task_ref AND event.decision_ref.task_ref, so no weaker nested grammar can admit whitespace/newlines a top-level field rejects.",
       "allOf": [
         {
           "type": "string",
@@ -148,10 +148,9 @@
     },
     "event_type": {
       "type": "string",
-      "description": "Closed v1 event vocabulary linking evaluation to user/reviewer action, merge/CI outcome, rollback/rework, and feedback.",
+      "description": "Closed v1 event vocabulary linking evaluation to merge/CI outcome, rollback/rework, and feedback. Review/approval/exception events are NOT part of Slice 1A: per accepted OD-S1A-009 they belong to a future governance slice gated on OD-S1A-005, and no event may carry a second policy-decision identity.",
       "enum": [
         "CHANGEGATE_EVALUATION_COMPLETED",
-        "CHANGEGATE_REVIEW_OVERRIDDEN",
         "CHANGEGATE_MERGE_ATTEMPTED",
         "CHANGEGATE_MERGE_COMPLETED",
         "CHANGEGATE_POST_MERGE_VALIDATION",
@@ -285,10 +284,9 @@
     },
     "target_event_type": {
       "type": ["string", "null"],
-      "description": "For feedback: which kind of thing the human is judging (eligibility decision, override, merge outcome, validation, rollback).",
+      "description": "For feedback: which kind of thing the human is judging (eligibility decision, merge outcome, validation, rollback).",
       "enum": [
         "CHANGEGATE_EVALUATION_COMPLETED",
-        "CHANGEGATE_REVIEW_OVERRIDDEN",
         "CHANGEGATE_MERGE_ATTEMPTED",
         "CHANGEGATE_MERGE_COMPLETED",
         "CHANGEGATE_POST_MERGE_VALIDATION",
@@ -358,68 +356,9 @@
         }
       }
     },
-    "override": {
-      "type": ["object", "null"],
-      "description": "Review-override / policy-exception record for CHANGEGATE_REVIEW_OVERRIDDEN. The original decision stays immutable (decision_ref); this object references the replacement decision and/or the authorizing exception. A replacement decision is one ATOMIC object, replacement_decision_ref, carrying its OWN COMPLETE identity (evaluation_id, task_ref, candidate_digest, decision_digest, input_digest, policy_record_digest) — there is no loose new_* field, so an event can never mix the original decision digest with a replacement input/record digest. Cross-digest integrity (replacement != original where required, replacement task/candidate == root) is enforced by the causal validator, which JSON Schema cannot express. An exception reference requires an expiry (the exception AUTHORITY value remains PENDING_OWNER_DECISION OD-S1A-005).",
-      "additionalProperties": false,
-      "required": ["actor_ref", "reason_code"],
-      "properties": {
-        "actor_ref": { "$ref": "#/$defs/opaqueRef" },
-        "reason_code": { "$ref": "#/$defs/machineCode" },
-        "replacement_decision_ref": {
-          "type": ["object", "null"],
-          "description": "The complete replacement decision identity. All six fields are required when a replacement exists; no partial replacement is valid.",
-          "additionalProperties": false,
-          "required": [
-            "evaluation_id", "task_ref", "candidate_digest",
-            "decision_digest", "input_digest", "policy_record_digest"
-          ],
-          "properties": {
-            "evaluation_id": { "$ref": "#/$defs/opaqueRef" },
-            "task_ref": { "$ref": "#/$defs/taskRef" },
-            "candidate_digest": { "$ref": "#/$defs/canonicalDigest" },
-            "decision_digest": { "$ref": "#/$defs/canonicalDigest" },
-            "input_digest": { "$ref": "#/$defs/canonicalDigest" },
-            "policy_record_digest": { "$ref": "#/$defs/canonicalDigest" }
-          }
-        },
-        "exception_ref": { "$ref": "#/$defs/nullableOpaqueRef" },
-        "expires_at": {
-          "anyOf": [
-            { "$ref": "#/$defs/rfc3339utc" },
-            { "type": "null" }
-          ]
-        }
-      },
-      "allOf": [
-        {
-          "if": {
-            "required": ["exception_ref"],
-            "properties": { "exception_ref": { "type": "string" } }
-          },
-          "then": {
-            "required": ["expires_at"],
-            "properties": { "expires_at": { "$ref": "#/$defs/rfc3339utc" } }
-          }
-        },
-        {
-          "comment": "An override must carry either a complete replacement decision or an authorizing exception (or both).",
-          "anyOf": [
-            {
-              "required": ["replacement_decision_ref"],
-              "properties": { "replacement_decision_ref": { "type": "object" } }
-            },
-            {
-              "required": ["exception_ref"],
-              "properties": { "exception_ref": { "type": "string" } }
-            }
-          ]
-        }
-      ]
-    },
     "provenance": {
       "type": "object",
-      "description": "Who EMITTED this event (the application), and from which trace context. This is never the human/source identity of a feedback or override actor.",
+      "description": "Who EMITTED this event (the application), and from which trace context. This is never the human/source identity of a feedback actor.",
       "additionalProperties": false,
       "required": ["emitter", "emitter_version"],
       "properties": {
@@ -466,22 +405,6 @@
           "policy_version": { "type": "string" },
           "evaluator_version": { "type": "string" },
           "outcome": { "type": "object" }
-        }
-      }
-    },
-    {
-      "if": {
-        "required": ["event_type"],
-        "properties": {
-          "event_type": { "const": "CHANGEGATE_REVIEW_OVERRIDDEN" }
-        }
-      },
-      "then": {
-        "required": ["decision_ref", "evaluation_event_ref", "override"],
-        "properties": {
-          "decision_ref": { "type": "object" },
-          "evaluation_event_ref": { "type": "string" },
-          "override": { "type": "object" }
         }
       }
     },

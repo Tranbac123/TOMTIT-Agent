@@ -1,10 +1,10 @@
 {
   "suite_id": "changegate_merge_eligibility_golden_cases",
-  "schema_version": "changegate-merge-eligibility-golden.v6",
+  "schema_version": "changegate-merge-eligibility-golden.v7",
   "status": "DRAFT_FOR_OWNER_REVIEW",
-  "description": "Golden evaluation cases for the ChangeGate Slice 1 merge-eligibility policy (R5-hardened). The active lineage is a six-field tuple including evaluation_id. slice_1a_semantic_manifest.causal_semantics.semantic_controls names every load-bearing causal/record predicate (id, subject, required_fields, predicate, failure_code); the artifact tests bind each to an executable validator check. Policy semantics are byte-identical to v5. No production evaluator exists yet.",
+  "description": "Golden evaluation cases for the ChangeGate Slice 1 merge-eligibility policy (R6, Model B per accepted OD-S1A-009). Slice 1A defines deterministic evaluation only: the pure evaluator is the sole semantic producer of MergeEligibilityDecision and the PolicyEvaluationRecord payload; one replay key produces exactly one decision and one record; policy lineage is immutable; no replacement, override, exception, or authorization semantics exist in Slice 1A (all pending under OD-S1A-005 for a future governance slice). Policy evaluation semantics are byte-identical to v6. No production evaluator exists yet.",
   "policy_spec": "docs/strategy/CHANGEGATE_VERTICAL_MVP_SLICE_1_POLICY_SPEC.md",
-  "policy_version_ref": "changegate-merge-eligibility-policy.v6-draft",
+  "policy_version_ref": "changegate-merge-eligibility-policy.v7-draft",
   "event_schema": "data/schemas/changegate_evaluation_event_v1.schema.json",
   "dispositions": [
     "ELIGIBLE_TO_MERGE_UNDER_POLICY",
@@ -359,7 +359,8 @@
     "OD-S1A-005",
     "OD-S1A-006",
     "OD-S1A-007",
-    "OD-S1A-008"
+    "OD-S1A-008",
+    "OD-S1A-009"
   ],
   "cases": [
     {
@@ -3458,9 +3459,10 @@
     },
     {
       "case_id": "GC-S1-039",
-      "summary": "Policy exception lifecycle: a SCOPE_VIOLATION block whose only sanctioned relief is a separately authorized, versioned, attributable, time-bounded policy exception recorded as CHANGEGATE_REVIEW_OVERRIDDEN with a mandatory expiry. Exception authority and expiry policy are PENDING_OWNER_DECISION OD-S1A-005.",
+      "summary": "A SCOPE_VIOLATION block whose only future relief is a separately authorized policy exception. Under accepted OD-S1A-009, Slice 1A defines NO exception or override semantics: the block stands, only the evaluation event is emitted, and every exception mechanism (authority, expiry, consumption) remains PENDING_OWNER_DECISION OD-S1A-005 for the future governance slice.",
       "tags": [
-        "policy_exception_lifecycle"
+        "no_override_semantics_in_1a",
+        "policy_exception_pending"
       ],
       "identifier_universes": {
         "requirement_id_universe": [
@@ -3527,19 +3529,19 @@
       "override_class": "POLICY_EXCEPTION_REQUIRED",
       "expected_event_assertions": {
         "emits": [
-          "CHANGEGATE_EVALUATION_COMPLETED",
-          "CHANGEGATE_REVIEW_OVERRIDDEN"
+          "CHANGEGATE_EVALUATION_COMPLETED"
         ],
         "decision_ref_disposition": "BLOCK",
         "decision_ref_primary_reason_code": "SCOPE_VIOLATION",
         "decision_authority": "AUTHORITATIVE",
         "active_policy_mutated": false,
-        "override_requires_exception_ref_and_expiry": true,
-        "exception_authority": "PENDING_OWNER_DECISION"
+        "override_semantics_in_slice_1a": "ABSENT",
+        "exception_semantics_in_slice_1a": "ABSENT_PENDING_OD_S1A_005"
       },
       "owner_decisions_pending": [
         "OD-S1A-005"
-      ]
+      ],
+      "notes": "Model B (OD-S1A-009): no event may carry a second policy-decision identity; review/approval events belong to the future governance slice."
     },
     {
       "case_id": "GC-S1-040",
@@ -3743,6 +3745,7 @@
       "deterministic_identity",
       "replay",
       "event_semantics",
+      "authority_boundary",
       "causal_semantics",
       "golden_semantics"
     ],
@@ -3830,7 +3833,7 @@
     "note": "This record is COMPLETE as a pending decision: it enumerates every owner question and every pre-A3 declaration field. It does NOT choose any answer; A3 (Slice 1C-1) remains blocked until owner acceptance. No mapping is implemented."
   },
   "slice_1a_semantic_manifest": {
-    "manifest_version": "changegate.slice1a.semantic-manifest.v1",
+    "manifest_version": "changegate.slice1a.semantic-manifest.v2",
     "policy_semantics": {
       "reason_code_taxonomy": [
         {
@@ -4231,6 +4234,10 @@
         "policy_version",
         "evaluator_version",
         "evaluation_mode",
+        "policy_record_schema_version",
+        "policy_record_schema_digest",
+        "canonicalization_version",
+        "canonicalization_contract_digest",
         "facts"
       ],
       "policy_record_payload_field_order": [
@@ -4266,10 +4273,154 @@
       "decision_payload_contract_id": "changegate.merge-eligibility-decision.test-oracle.v1",
       "record_payload_contract_id": "changegate.policy-evaluation-record.v1",
       "approval_sentinel": "NO_APPROVAL_SUPPLIED",
-      "set_normalization_rule": "each set is lexicographically sorted and deduplicated"
+      "set_normalization_rule": "each set is lexicographically sorted and deduplicated",
+      "policy_record_schema_version": "changegate.policy-evaluation-record.v1",
+      "policy_record_schema_digest": "sha256:d7821e1e8c7563e55dcf18f74972a109170c7cc7c7fdc9f94378f8b2dfbff6eb",
+      "canonicalization_version": "tomtit.canonical.v1",
+      "canonicalization_contract": {
+        "kind": "changegate.canonicalization-contract.v1",
+        "encoding": "UTF-8",
+        "unicode_normalization": "NFC",
+        "object_keys": "lexicographically sorted by the serializer; JSON insertion order is NOT semantic",
+        "separators": "compact (',', ':')",
+        "non_finite_numbers": "rejected (no NaN/Infinity)",
+        "digest": "'sha256:' + 64 lowercase hex over the canonical JSON bytes",
+        "implementation": "agent_core.build_harness.canonical.canonical_json_bytes/canonical_digest"
+      },
+      "canonicalization_contract_digest": "sha256:51c997b52626d447ced7f89c4721ebe668179c563848ee81cb535506e1944fc6",
+      "typed_field_contract": {
+        "schema_version": {
+          "type": "const",
+          "value": "changegate.policy-evaluation-record.v1"
+        },
+        "task_id": {
+          "type": "string",
+          "grammar": "task_id"
+        },
+        "task_contract_digest": {
+          "type": "string",
+          "grammar": "canonical_digest"
+        },
+        "candidate_digest": {
+          "type": "string",
+          "grammar": "canonical_digest"
+        },
+        "repository_snapshot_digest": {
+          "type": "string",
+          "grammar": "canonical_digest"
+        },
+        "verification_bundle_digest": {
+          "type": "string",
+          "grammar": "canonical_digest"
+        },
+        "approval_digest_or_sentinel": {
+          "type": "string",
+          "grammar": "canonical_digest_or_sentinel",
+          "sentinel": "NO_APPROVAL_SUPPLIED"
+        },
+        "authority_binding_digest": {
+          "type": "string",
+          "grammar": "canonical_digest"
+        },
+        "verifier_binding_digest": {
+          "type": "string",
+          "grammar": "canonical_digest"
+        },
+        "policy_digest": {
+          "type": "string",
+          "grammar": "canonical_digest"
+        },
+        "policy_version": {
+          "type": "string",
+          "grammar": "version"
+        },
+        "evaluator_version": {
+          "type": "string",
+          "grammar": "version"
+        },
+        "evaluation_mode": {
+          "type": "enum",
+          "values": [
+            "ENFORCE",
+            "SHADOW"
+          ]
+        },
+        "input_digest": {
+          "type": "string",
+          "grammar": "canonical_digest"
+        },
+        "disposition": {
+          "type": "enum",
+          "values": [
+            "ELIGIBLE_TO_MERGE_UNDER_POLICY",
+            "REVIEW_REQUIRED",
+            "BLOCK"
+          ]
+        },
+        "decision_authority": {
+          "type": "enum",
+          "values": [
+            "AUTHORITATIVE",
+            "ADVISORY_ONLY"
+          ]
+        },
+        "primary_reason_code": {
+          "type": "nullable_enum",
+          "values_from": "reason_taxonomy"
+        },
+        "complete_reason_codes": {
+          "type": "sorted_unique_list",
+          "items_from": "reason_taxonomy"
+        },
+        "blocking_reason_codes": {
+          "type": "sorted_unique_list",
+          "items_from": "reason_taxonomy"
+        },
+        "review_reason_codes": {
+          "type": "sorted_unique_list",
+          "items_from": "reason_taxonomy"
+        },
+        "required_requirement_ids": {
+          "type": "sorted_unique_list",
+          "items_from": "requirement_id_universe"
+        },
+        "satisfied_requirement_ids": {
+          "type": "sorted_unique_list",
+          "items_from": "requirement_id_universe"
+        },
+        "invalid_requirement_ids": {
+          "type": "sorted_unique_list",
+          "items_from": "requirement_id_universe"
+        },
+        "missing_requirement_ids": {
+          "type": "sorted_unique_list",
+          "items_from": "requirement_id_universe"
+        },
+        "rejected_evidence_ids": {
+          "type": "sorted_unique_list",
+          "items_from": "evidence_record_id_universe"
+        },
+        "invalid_provenance_evidence_ids": {
+          "type": "sorted_unique_list",
+          "items_from": "evidence_record_id_universe"
+        },
+        "unexpected_evidence_ids": {
+          "type": "sorted_unique_list",
+          "items_from": "evidence_record_id_universe"
+        },
+        "decision_digest": {
+          "type": "string",
+          "grammar": "canonical_digest"
+        }
+      },
+      "field_order_status": "NON_SEMANTIC_DOCUMENTATION_ORDER",
+      "validation_levels": {
+        "STRUCTURALLY_VALID": "exact typed field set + canonical collection form + self-derived decision digest + valid policy-record digest + no runtime/self-referential fields",
+        "REPLAY_VERIFIED": "STRUCTURALLY_VALID and record.input_digest == canonical_digest(normative MergeEligibilityPolicyInput payload); requires the canonical input or a verifiable immutable input reference; structural validity never implies replay verification"
+      }
     },
     "replay": {
-      "replay_contract_version": "changegate.replay.v1",
+      "replay_contract_version": "changegate.replay.v2",
       "replay_invariant_ids": [
         "R1",
         "R2",
@@ -4324,13 +4475,28 @@
         "trace.policy_record_digest == canonical_digest(trace.policy_record payload)",
         "trace.input_digest == trace.policy_record.input_digest",
         "trace.decision_digest == trace.policy_record.decision_digest"
-      ]
+      ],
+      "complete_replay_key": [
+        "canonical MergeEligibilityPolicyInput",
+        "policy_version",
+        "evaluator_version",
+        "evaluation_mode",
+        "policy_record_schema_version",
+        "policy_record_schema_digest",
+        "canonicalization_version",
+        "canonicalization_contract_digest"
+      ],
+      "version_bump_rules": {
+        "policy_semantic_change": "requires policy_version or policy_digest change",
+        "evaluator_semantic_change": "requires evaluator_version change",
+        "record_schema_change": "requires policy_record_schema_version change",
+        "canonicalization_change": "requires canonicalization_version and canonicalization_contract_digest change"
+      }
     },
     "event_semantics": {
-      "event_schema_digest": "sha256:8a748f1fd6770f610ecb944265ba0ec65016c337fc023efdf34fa2c994168971",
+      "event_schema_digest": "sha256:b42438db9729210dd01638267ca715cbefb54a3f247f7f2a8c985287c9219ccc",
       "event_type_set": [
         "CHANGEGATE_EVALUATION_COMPLETED",
-        "CHANGEGATE_REVIEW_OVERRIDDEN",
         "CHANGEGATE_MERGE_ATTEMPTED",
         "CHANGEGATE_MERGE_COMPLETED",
         "CHANGEGATE_POST_MERGE_VALIDATION",
@@ -4345,19 +4511,8 @@
         "task_ref",
         "candidate_digest"
       ],
-      "override_replacement_required_fields": [
-        "evaluation_id",
-        "task_ref",
-        "candidate_digest",
-        "decision_digest",
-        "input_digest",
-        "policy_record_digest"
-      ],
       "causal_reference_requirements": {
         "CHANGEGATE_EVALUATION_COMPLETED": [],
-        "CHANGEGATE_REVIEW_OVERRIDDEN": [
-          "evaluation_event_ref"
-        ],
         "CHANGEGATE_MERGE_ATTEMPTED": [
           "evaluation_event_ref"
         ],
@@ -4377,7 +4532,7 @@
       }
     },
     "causal_semantics": {
-      "causal_contract_version": "changegate.causal.v3-evaluation-lineage",
+      "causal_contract_version": "changegate.causal.v4-immutable-lineage",
       "lineage_field_set": [
         "evaluation_id",
         "task_ref",
@@ -4387,19 +4542,54 @@
         "policy_record_digest"
       ],
       "root_creation_rule": "each CHANGEGATE_EVALUATION_COMPLETED establishes an independent root keyed by its evaluation event id",
-      "override_lineage_switch_rule": "a complete replacement_decision_ref switches the active decision lineage for descendants of that override, preserving root task/candidate",
-      "changed_candidate_new_root_rule": "a changed candidate requires a new evaluation root; it can never continue the old chain or use an override",
+      "changed_candidate_new_root_rule": "a changed candidate requires a new evaluation root; it can never continue an existing chain",
       "multi_root_support": true,
       "semantic_controls": [
         {
-          "id": "REC-EXACT-KEYS",
+          "id": "REC-EXACT-FIELD-SET",
           "subject": "policy_record",
           "required_fields": [
             "<POLICY_RECORD_PAYLOAD_FIELDS>",
             "policy_record_digest"
           ],
-          "predicate": "tuple(record.keys()) == POLICY_RECORD_PAYLOAD_FIELDS + (policy_record_digest,)",
+          "predicate": "record field SET == typed contract field set (+ policy_record_digest); no unknown, missing, or duplicate-under-another-key field; JSON key insertion order is NOT semantic",
           "failure_code": "RECORD_SHAPE_DRIFT"
+        },
+        {
+          "id": "REC-TYPED-VALUES",
+          "subject": "policy_record",
+          "required_fields": [
+            "<all payload fields>"
+          ],
+          "predicate": "every field satisfies its typed_field_contract descriptor (type, grammar, enum membership, taxonomy/universe membership)",
+          "failure_code": "RECORD_TYPE_INVALID"
+        },
+        {
+          "id": "REC-DIGEST-GRAMMAR",
+          "subject": "policy_record",
+          "required_fields": [
+            "<all digest fields>"
+          ],
+          "predicate": "every digest field matches sha256:<64 lowercase hex> (or the exact sentinel for approval_digest_or_sentinel)",
+          "failure_code": "RECORD_TYPE_INVALID"
+        },
+        {
+          "id": "REC-COLLECTION-NORMALIZATION",
+          "subject": "policy_record",
+          "required_fields": [
+            "<all set-like lists>"
+          ],
+          "predicate": "set-like lists are sorted and deduplicated; blocking ∪ review == complete with blocking ∩ review == ∅; required == satisfied ∪ invalid ∪ missing pairwise disjoint; validators reject non-normalized issued records and never silently normalize",
+          "failure_code": "RECORD_NOT_NORMALIZED"
+        },
+        {
+          "id": "REC-DECISION-SELF-DERIVATION",
+          "subject": "policy_record",
+          "required_fields": [
+            "decision_digest"
+          ],
+          "predicate": "record.decision_digest == canonical_digest(normative decision payload derived from the record's own fields); an arbitrary rehashed payload can never satisfy this",
+          "failure_code": "DECISION_DIGEST_NOT_DERIVED"
         },
         {
           "id": "REC-DIGEST-RECOMPUTE",
@@ -4418,134 +4608,41 @@
           "failure_code": "RECORD_RUNTIME_FIELD"
         },
         {
-          "id": "RPL-REGISTERED-RECORD",
-          "subject": "replacement_decision_ref",
-          "required_fields": [
-            "policy_record_digest"
-          ],
-          "predicate": "the replacement PolicyEvaluationRecord is present in the record registry",
-          "failure_code": "REPLACEMENT_RECORD_MISSING"
-        },
-        {
-          "id": "RPL-RECORD-DIGEST-EQ",
-          "subject": "replacement_decision_ref",
-          "required_fields": [
-            "policy_record_digest"
-          ],
-          "predicate": "replacement.policy_record_digest == canonical_digest(replacement.policy_record payload)",
-          "failure_code": "REPLACEMENT_RECORD_DIGEST_MISMATCH"
-        },
-        {
-          "id": "RPL-DECISION-EQ",
-          "subject": "replacement_decision_ref",
-          "required_fields": [
-            "decision_digest"
-          ],
-          "predicate": "replacement.decision_digest == replacement.policy_record.decision_digest",
-          "failure_code": "REPLACEMENT_DECISION_MISMATCH"
-        },
-        {
-          "id": "RPL-INPUT-EQ",
-          "subject": "replacement_decision_ref",
-          "required_fields": [
-            "input_digest"
-          ],
-          "predicate": "replacement.input_digest == replacement.policy_record.input_digest",
-          "failure_code": "REPLACEMENT_INPUT_MISMATCH"
-        },
-        {
-          "id": "RPL-TASK-EQ",
-          "subject": "replacement_decision_ref",
-          "required_fields": [
-            "task_ref"
-          ],
-          "predicate": "replacement.task_ref == replacement.policy_record.task_id",
-          "failure_code": "REPLACEMENT_TASK_MISMATCH"
-        },
-        {
-          "id": "RPL-CANDIDATE-EQ",
-          "subject": "replacement_decision_ref",
-          "required_fields": [
-            "candidate_digest"
-          ],
-          "predicate": "replacement.candidate_digest == replacement.policy_record.candidate_digest",
-          "failure_code": "REPLACEMENT_CANDIDATE_MISMATCH"
-        },
-        {
-          "id": "RPL-DECISION-DIFFERS",
-          "subject": "replacement_decision_ref",
-          "required_fields": [
-            "decision_digest"
-          ],
-          "predicate": "replacement.decision_digest != original.decision_digest",
-          "failure_code": "REPLACEMENT_DECISION_NOT_CHANGED"
-        },
-        {
-          "id": "RPL-RECORD-DIFFERS",
-          "subject": "replacement_decision_ref",
-          "required_fields": [
-            "policy_record_digest"
-          ],
-          "predicate": "replacement.policy_record_digest != original.policy_record_digest",
-          "failure_code": "REPLACEMENT_RECORD_NOT_CHANGED"
-        },
-        {
-          "id": "RPL-SAME-INPUT-OK",
-          "subject": "replacement_decision_ref",
-          "required_fields": [
-            "input_digest"
-          ],
-          "predicate": "same input_digest is PERMITTED when the replacement record recomputes and decision/record digests differ",
+          "id": "REC-KEY-ORDER-NEUTRAL",
+          "subject": "policy_record",
+          "required_fields": [],
+          "predicate": "the same valid object with different JSON key insertion order is accepted and has the same canonical identity",
           "failure_code": null
         },
         {
-          "id": "RPL-EVAL-UNIQUE",
-          "subject": "replacement_decision_ref",
+          "id": "REC-VALIDATION-LEVELS",
+          "subject": "policy_record",
           "required_fields": [
-            "evaluation_id"
+            "input_digest"
           ],
-          "predicate": "replacement.evaluation_id is new and globally unique in the event graph",
-          "failure_code": "REPLACEMENT_EVALUATION_NOT_UNIQUE"
+          "predicate": "STRUCTURALLY_VALID never implies REPLAY_VERIFIED; REPLAY_VERIFIED additionally requires record.input_digest == canonical_digest(normative input payload) against the supplied canonical input",
+          "failure_code": "REPLAY_NOT_VERIFIED"
         },
         {
-          "id": "RPL-ROOT-OWNERSHIP",
-          "subject": "replacement_decision_ref",
-          "required_fields": [
-            "task_ref",
-            "candidate_digest"
-          ],
-          "predicate": "replacement task/candidate == the root's task/candidate",
-          "failure_code": "REPLACEMENT_ROOT_MISMATCH"
-        },
-        {
-          "id": "RPL-NO-OP",
-          "subject": "replacement_decision_ref",
+          "id": "AUTH-PURE-EVALUATOR-ONLY",
+          "subject": "authority_boundary",
           "required_fields": [],
-          "predicate": "the replacement identity is not identical to the original (no-op)",
-          "failure_code": "REPLACEMENT_NO_OP"
+          "predicate": "the pure evaluator is the sole semantic producer of the decision and record payload; the same complete replay key yields exactly one decision and one record; no mechanism can produce a second policy record for the same replay key",
+          "failure_code": "SECOND_POLICY_RESULT"
         },
         {
-          "id": "RPL-CANDIDATE-NEW-ROOT",
-          "subject": "replacement_decision_ref",
-          "required_fields": [
-            "candidate_digest"
-          ],
-          "predicate": "a changed candidate cannot use an override; it requires a new evaluation root",
-          "failure_code": "REPLACEMENT_CANDIDATE_CHANGED"
+          "id": "AUTH-NO-OVERRIDE-IN-1A",
+          "subject": "authority_boundary",
+          "required_fields": [],
+          "predicate": "Slice 1A contains no replacement, override, exception, expiry, authorization, or authority-binding semantics (OD-S1A-009); all such semantics remain pending under OD-S1A-005",
+          "failure_code": "OD_S1A_005_LEAKAGE"
         },
         {
-          "id": "RPL-PARTIAL-OBJECT",
-          "subject": "replacement_decision_ref",
-          "required_fields": [
-            "evaluation_id",
-            "task_ref",
-            "candidate_digest",
-            "decision_digest",
-            "input_digest",
-            "policy_record_digest"
-          ],
-          "predicate": "a replacement object missing any of the six fields is invalid (schema)",
-          "failure_code": "REPLACEMENT_PARTIAL"
+          "id": "AUTH-WRITER-NO-MUTATION",
+          "subject": "authority_boundary",
+          "required_fields": [],
+          "predicate": "only the designated evaluation-record writer persists the payload and persistence never alters a semantic field",
+          "failure_code": "WRITER_SEMANTIC_MUTATION"
         },
         {
           "id": "EVAL-ID-UNIQUE",
@@ -4553,7 +4650,7 @@
           "required_fields": [
             "evaluation_id"
           ],
-          "predicate": "every evaluation_id (root or replacement) is globally unique and maps to one lineage",
+          "predicate": "every evaluation_id is globally unique and maps to one lineage",
           "failure_code": "EVALUATION_ID_DUPLICATE"
         },
         {
@@ -4562,7 +4659,7 @@
           "required_fields": [
             "evaluation_id"
           ],
-          "predicate": "a downstream event preserves the active evaluation_id (no drift without a replacement/new root)",
+          "predicate": "a downstream event preserves its root's evaluation_id",
           "failure_code": "EVALUATION_ID_DRIFT"
         },
         {
@@ -4576,22 +4673,22 @@
             "input_digest",
             "policy_record_digest"
           ],
-          "predicate": "the active lineage is the six-field tuple including evaluation_id",
+          "predicate": "the policy lineage is the six-field tuple including evaluation_id",
+          "failure_code": "LINEAGE_DIVERGES"
+        },
+        {
+          "id": "LINEAGE-IMMUTABLE",
+          "subject": "lineage",
+          "required_fields": [],
+          "predicate": "a root's lineage never changes; there is no replacement lineage and no lineage switch",
           "failure_code": "LINEAGE_DIVERGES"
         },
         {
           "id": "MULTI-PARENT-LINEAGE",
           "subject": "lineage",
           "required_fields": [],
-          "predicate": "every explicit predecessor of an event shares one identical lineage; disagreement is ambiguous",
+          "predicate": "every explicit predecessor of an event shares one identical lineage; disagreement is ambiguous and rejected",
           "failure_code": "AMBIGUOUS_PREDECESSOR_LINEAGE"
-        },
-        {
-          "id": "DOWNSTREAM-NO-REVERT",
-          "subject": "lineage",
-          "required_fields": [],
-          "predicate": "after a replacement activation, descendants cannot revert to the original decision identity",
-          "failure_code": "LINEAGE_DIVERGES"
         },
         {
           "id": "MULTI-ROOT",
@@ -4599,8 +4696,25 @@
           "required_fields": [],
           "predicate": "multiple independent evaluation roots and interleaved streams are supported",
           "failure_code": null
+        },
+        {
+          "id": "CAUSAL-CYCLE",
+          "subject": "lineage",
+          "required_fields": [],
+          "predicate": "a causal reference cycle is rejected",
+          "failure_code": "CAUSAL_CYCLE"
+        },
+        {
+          "id": "CANDIDATE-NEW-ROOT",
+          "subject": "lineage",
+          "required_fields": [
+            "candidate_digest"
+          ],
+          "predicate": "a changed candidate requires a new evaluation root",
+          "failure_code": "LINEAGE_DIVERGES"
         }
-      ]
+      ],
+      "immutable_lineage_rule": "a root's six-field policy lineage is immutable; no event may mutate, replace, or switch it"
     },
     "golden_semantics": [
       {
@@ -5197,6 +5311,66 @@
           "OD-S1A-008"
         ]
       }
-    ]
+    ],
+    "authority_boundary": {
+      "od_s1a_009_status": "ACCEPTED",
+      "policy_semantic_producer": "PURE_EVALUATOR_ONLY",
+      "persistence_writer": "designated ChangeGate evaluation-record writer; must not alter, replace, supplement, or reinterpret any semantic field",
+      "audit_journal": "append-only; non-authoritative; references immutable policy results",
+      "human_actors": "cannot produce or persist a policy decision payload",
+      "override_semantics_in_slice_1a": "ABSENT",
+      "exception_semantics_in_slice_1a": "ABSENT",
+      "review_event_in_slice_1a": "DELETED (Path B) — review/approval events belong to the future governance slice",
+      "od_s1a_005_dependency": "PENDING_OWNER_DECISION — gates the future governance slice; does not block Slice 1A or Slice 1B"
+    }
+  },
+  "owner_decision_statuses": {
+    "OD-S1A-001": "PENDING_OWNER_DECISION",
+    "OD-S1A-002": "PENDING_OWNER_DECISION",
+    "OD-S1A-003": "PENDING_OWNER_DECISION",
+    "OD-S1A-004": "PENDING_OWNER_DECISION",
+    "OD-S1A-005": "PENDING_OWNER_DECISION",
+    "OD-S1A-006": "PENDING_OWNER_DECISION",
+    "OD-S1A-007": "PENDING_OWNER_DECISION",
+    "OD-S1A-008": "PENDING_OWNER_DECISION",
+    "OD-S1A-009": "ACCEPTED"
+  },
+  "od_s1a_009_decision_record": {
+    "id": "OD-S1A-009",
+    "title": "Slice 1A Deterministic Evaluation Boundary",
+    "status": "ACCEPTED",
+    "decision_owner": "TranBac",
+    "decision_date": "2026-07-16",
+    "decision": [
+      "ChangeGate Slice 1A defines deterministic policy-evaluation contracts only.",
+      "The pure evaluator is the sole semantic producer of MergeEligibilityDecision and the deterministic PolicyEvaluationRecord payload.",
+      "Only the designated ChangeGate evaluation-record writer may persist the evaluator-produced payload; persistence must not alter any semantic field, must not author a second decision, and must not convert human review metadata into a policy result.",
+      "Same canonical MergeEligibilityPolicyInput + policy version + evaluator version + evaluation mode + policy-record schema version + canonicalization version and contract → same semantic decision, same canonical PolicyEvaluationRecord, same decision digest, same policy-record digest.",
+      "A policy decision and its policy record are immutable."
+    ],
+    "must_not_define_or_permit": [
+      "replacement PolicyEvaluationRecord",
+      "same-input/different-decision policy results",
+      "changed-input replacement policy results",
+      "human-authored policy decisions",
+      "mutation or replacement of a policy verdict",
+      "replacement policy lineage",
+      "policy-lineage switching",
+      "exception claims",
+      "exception authorization",
+      "exception expiry",
+      "exception revocation or consumption semantics",
+      "authority-binding semantics for exceptions",
+      "a policy-record registry whose purpose is replacement or override"
+    ],
+    "review_recording_rule": "Human review activity may be recorded only as non-authoritative audit metadata referencing the immutable policy result; a review record must not change disposition, change decision identity, authorize an action, establish an exception, or switch policy lineage.",
+    "future_direction": "Approval, exception and bounded action-authorization semantics remain pending under OD-S1A-005 and belong to a separate future governance slice, using a separate authority artifact referencing the immutable policy verdict. OD-S1A-009 does not decide that artifact's name, schema, issuer, scope, expiry, revocation, supersession, consumption, or replay-protection rules.",
+    "slice_impact": {
+      "slice_1a": "deterministic contracts only",
+      "slice_1b": "typed facts and pure deterministic evaluator; not blocked by OD-S1A-005",
+      "slice_1c": "evidence-to-facts adapter and application vertical; blocked by OD-S1A-008",
+      "governance_slice": "approval, exception and bounded action authorization; blocked by OD-S1A-005"
+    },
+    "non_decisions": "OD-S1A-001 through OD-S1A-008 otherwise remain pending."
   }
 }
