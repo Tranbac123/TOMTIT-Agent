@@ -456,6 +456,13 @@ def _valid_string(value: object, pattern: re.Pattern[str]) -> bool:
     return isinstance(value, str) and bool(pattern.fullmatch(value))
 
 
+def _valid_enum(value: object, allowed: set[str]) -> bool:
+    # Type-gate before set membership: an unhashable JSON-compatible value
+    # (dict/list) must never reach `value in allowed`, which would raise
+    # TypeError instead of failing closed.
+    return isinstance(value, str) and value in allowed
+
+
 def _valid_string_list(value: object) -> bool:
     return isinstance(value, list) and all(
         isinstance(item, str) for item in value
@@ -500,11 +507,16 @@ def validate_record_structure(
         approval != APPROVAL_SENTINEL and not DIGEST.fullmatch(approval)
     ):
         errors.append("RECORD_TYPE_INVALID")
-    if (
-        record["evaluation_mode"] not in {"ENFORCE", "SHADOW"}
-        or record["disposition"]
-        not in {"ELIGIBLE_TO_MERGE_UNDER_POLICY", "REVIEW_REQUIRED", "BLOCK"}
-        or record["decision_authority"] not in {"AUTHORITATIVE", "ADVISORY_ONLY"}
+    enum_specs = (
+        ("evaluation_mode", {"ENFORCE", "SHADOW"}),
+        (
+            "disposition",
+            {"ELIGIBLE_TO_MERGE_UNDER_POLICY", "REVIEW_REQUIRED", "BLOCK"},
+        ),
+        ("decision_authority", {"AUTHORITATIVE", "ADVISORY_ONLY"}),
+    )
+    if any(
+        not _valid_enum(record[field], allowed) for field, allowed in enum_specs
     ):
         errors.append("RECORD_TYPE_INVALID")
     taxonomy = {entry["code"] for entry in fixture()["reason_codes"]}
@@ -515,7 +527,7 @@ def validate_record_structure(
         elif value != sorted(value) or len(value) != len(set(value)):
             errors.append("RECORD_NOT_NORMALIZED")
     primary = record["primary_reason_code"]
-    if primary is not None and primary not in taxonomy:
+    if primary is not None and not _valid_enum(primary, taxonomy):
         errors.append("RECORD_TYPE_INVALID")
     for field in REASON_LIST_FIELDS:
         value = record[field]
@@ -1236,6 +1248,15 @@ def test_record_validator_is_total_and_fail_closed(label: str, value: object):
         "null disposition": {"disposition": None},
         "unknown reason": {"complete_reason_codes": ["UNKNOWN_REASON"]},
         "foreign namespace": {"required_requirement_ids": ["ev-pytest-1"]},
+        # Unhashable JSON-compatible values on the enum/taxonomy fields must
+        # fail closed, never raise TypeError from set membership (H-R7V-01).
+        "object mode": {"evaluation_mode": {}},
+        "list disposition": {"disposition": []},
+        "object authority": {"decision_authority": {"bad": True}},
+        "nested mode": {"evaluation_mode": {"a": {"b": [1, 2]}}},
+        "object primary": {"primary_reason_code": {}},
+        "list primary": {"primary_reason_code": []},
+        "nested primary": {"primary_reason_code": {"bad": True}},
     }
     for name, change in scalar_mutations.items():
         result = validate_record_structure(rehash({**record, **change}))
@@ -1262,6 +1283,83 @@ def test_valid_records_classify_structurally_for_every_case():
         bound = validate_record_structure(record, source)
         assert bound["errors"] == [], item["case_id"]
         assert bound["classifications"] == list(SLICE_1A_CLASSIFICATIONS)
+
+
+# Every enum/taxonomy field whose validation used to test set membership on a
+# possibly-unhashable value (H-R7V-01). primary_reason_code is nullable.
+ENUM_TAXONOMY_FIELDS = (
+    "evaluation_mode",
+    "disposition",
+    "decision_authority",
+    "primary_reason_code",
+)
+# Unhashable JSON-compatible values: these previously raised TypeError when they
+# reached `value in {...}`. They must now fail closed with structured errors.
+UNHASHABLE_JSON_VALUES = (
+    ("empty-object", {}),
+    ("empty-list", []),
+    ("deeply-nested-object", {"nested": {"more": []}}),
+    ("nested-object-in-list", [{"nested": True}]),
+    ("nested-list-in-list", [["x"]]),
+)
+
+
+@pytest.mark.parametrize("field", ENUM_TAXONOMY_FIELDS)
+@pytest.mark.parametrize("label,value", UNHASHABLE_JSON_VALUES)
+def test_enum_and_taxonomy_fields_are_total_over_unhashable_values(
+    field: str, label: str, value: object
+):
+    record, source = record_for("GC-S1-010")
+    # Mutate WITHOUT rehashing so the stale policy_record_digest would mismatch
+    # if control ever reached digest recomputation; proving it does not.
+    probe = {**record, field: value}
+    result = validate_record_structure(probe)  # must not raise
+    assert "RECORD_TYPE_INVALID" in result["errors"], (field, label)
+    assert result["classifications"] == [], (field, label)
+    assert "RECORD_DIGEST_MISMATCH" not in result["errors"], (field, label)
+    assert "DECISION_DIGEST_NOT_DERIVED" not in result["errors"], (field, label)
+    bound = validate_record_structure(probe, source)  # must not raise
+    assert bound["errors"], (field, label)
+    assert bound["classifications"] == [], (field, label)
+
+
+def test_enum_and_taxonomy_totality_sweep_preserves_accepted_values():
+    record, source = record_for("GC-S1-010")
+    assert record["primary_reason_code"] is not None
+    assert validate_record_structure(record)["errors"] == []
+    assert validate_record_structure(record, source)["errors"] == []
+    # An unknown but correctly typed string yields a membership error, never a
+    # crash, for every enum/taxonomy field.
+    typed_unknowns = {
+        "evaluation_mode": "AUDIT",
+        "disposition": "MAYBE_MERGE",
+        "decision_authority": "SUPREME",
+        "primary_reason_code": "NO_SUCH_REASON",
+    }
+    for field, unknown in typed_unknowns.items():
+        result = validate_record_structure({**record, field: unknown})
+        assert "RECORD_TYPE_INVALID" in result["errors"], field
+        assert result["classifications"] == [], field
+    # primary_reason_code = None is an accepted value (empty complete set).
+    eligible, eligible_source = record_for("GC-S1-001")
+    assert eligible["primary_reason_code"] is None
+    assert validate_record_structure(eligible)["errors"] == []
+    assert validate_record_structure(eligible, eligible_source)["errors"] == []
+    # Totality sweep: no enum/taxonomy field raises on any unhashable value,
+    # including a hashable non-string batch, and none reaches digest recompute.
+    hashable_non_strings = (None, True, False, 0, 1, 3.14)
+    for field in ENUM_TAXONOMY_FIELDS:
+        for _, value in UNHASHABLE_JSON_VALUES:
+            result = validate_record_structure({**record, field: value})
+            assert result["errors"], (field, value)
+            assert result["classifications"] == []
+            assert "RECORD_DIGEST_MISMATCH" not in result["errors"]
+        for value in hashable_non_strings:
+            if field == "primary_reason_code" and value is None:
+                continue  # None is a valid primary_reason_code
+            result = validate_record_structure({**record, field: value})
+            assert result["errors"], (field, value)
+            assert result["classifications"] == []
 
 
 def test_key_order_is_not_identity():
