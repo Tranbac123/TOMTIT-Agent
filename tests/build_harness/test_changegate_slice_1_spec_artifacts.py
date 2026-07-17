@@ -693,61 +693,68 @@ def _string_key(value: object) -> str | None:
     return value if isinstance(value, str) else None
 
 
-def _graph_ref_validator(def_name: str) -> Draft202012Validator:
-    # Reuse the event schema's own identifier grammar so no new regular
-    # expression is introduced. eventRef/opaqueRef already reject empty
-    # strings, whitespace, traversal, credential shapes, and non-strings.
-    document = schema()
-    return Draft202012Validator(
-        {"$ref": f"#/$defs/{def_name}", "$defs": document["$defs"]}
-    )
+# One validator built from the authoritative committed event schema. It is the
+# sole source of local event eligibility: a single event object is valid iff it
+# satisfies the schema (envelope shape, required fields, identifier/reference
+# grammar, decision_ref shape, decision_ref.evaluation_id grammar, and the
+# per-event-type conditional that makes required references non-null strings and
+# leaves optional references schema-permitted null). No requirement list is
+# recreated here.
+_EVENT_SCHEMA_VALIDATOR = Draft202012Validator(schema())
+
+# Deterministic mapping of a schema-validation error to a test-local structured
+# code, by the field it points at. The codes are only diagnostics; any code
+# means the event is schema-ineligible and must be quarantined.
+_REFERENCE_FIELDS = frozenset(
+    {
+        "evaluation_event_ref",
+        "attempt_event_ref",
+        "merge_event_ref",
+        "validation_event_ref",
+        "target_event_ref",
+    }
+)
+_LOCAL_ERROR_ORDER = (
+    "EVENT_MALFORMED",
+    "DECISION_REF_MALFORMED",
+    "EVALUATION_ID_MALFORMED",
+    "REFERENCE_MALFORMED",
+    "EVENT_SCHEMA_INVALID",
+)
 
 
-_EVENT_REF_GRAMMAR = _graph_ref_validator("eventRef")
-_OPAQUE_REF_GRAMMAR = _graph_ref_validator("opaqueRef")
-
-
-def _valid_event_ref(value: object) -> bool:
-    return isinstance(value, str) and _EVENT_REF_GRAMMAR.is_valid(value)
-
-
-def _valid_opaque_ref(value: object) -> bool:
-    return isinstance(value, str) and _OPAQUE_REF_GRAMMAR.is_valid(value)
+def _schema_error_code(path: list[object]) -> str:
+    if not path:
+        return "EVENT_MALFORMED"
+    head = path[0]
+    if head in ("event_id", "event_type"):
+        return "EVENT_MALFORMED"
+    if head == "decision_ref":
+        if len(path) >= 2 and path[1] == "evaluation_id":
+            return "EVALUATION_ID_MALFORMED"
+        return "DECISION_REF_MALFORMED"
+    if head in _REFERENCE_FIELDS:
+        return "REFERENCE_MALFORMED"
+    return "EVENT_SCHEMA_INVALID"
 
 
 def _local_graph_errors(item: object) -> list[str]:
-    """Local structural eligibility of one event's graph-relevant fields.
+    """Schema-first local eligibility of one event (H-R7M1D-V-01 / R7-OC1).
 
-    Only the fields validate_graph actually uses are checked (not the full
-    event schema). An event with any error here is quarantined: it must not
-    enter by_id, evaluations, lineages, edges, or the cycle walk. Identifiers
-    and references are validated against the event schema's existing
-    eventRef/opaqueRef grammar, which rejects empty and malformed values.
+    The authoritative event schema is the sole source of local shape,
+    identifier, reference, decision_ref and evaluation_id requirements — for
+    every event type, root and downstream alike. An event that fails schema
+    validation is quarantined: it must not enter by_id, evaluations, lineages,
+    edges, or the cycle walk. Codes are deterministic and derived from the
+    failing field path, never from a recreated requirement table.
     """
     if not isinstance(item, dict):
         return ["EVENT_MALFORMED"]
-    if not _valid_event_ref(item.get("event_id")):
-        return ["EVENT_MALFORMED"]
-    etype = item.get("event_type")
-    if not isinstance(etype, str) or etype not in PARENTS:
-        return ["EVENT_MALFORMED"]
-    errors: list[str] = []
-    decision_ref = item.get("decision_ref")
-    if not isinstance(decision_ref, dict):
-        errors.append("DECISION_REF_MALFORMED")
-    if etype == "CHANGEGATE_EVALUATION_COMPLETED":
-        evaluation_id = (
-            decision_ref.get("evaluation_id")
-            if isinstance(decision_ref, dict)
-            else None
-        )
-        if not _valid_opaque_ref(evaluation_id):
-            errors.append("EVALUATION_ID_MALFORMED")
-    for field, _required_type, _required in PARENTS[etype]:
-        value = item.get(field)
-        if value is not None and not _valid_event_ref(value):
-            errors.append("REFERENCE_MALFORMED")
-    return errors
+    found = {
+        _schema_error_code(list(error.absolute_path))
+        for error in _EVENT_SCHEMA_VALIDATOR.iter_errors(item)
+    }
+    return [code for code in _LOCAL_ERROR_ORDER if code in found]
 
 
 def validate_graph(events: list[dict]) -> list[str]:
@@ -2153,6 +2160,224 @@ def test_malformed_events_are_quarantined_from_graph_state():
     # Valid positives remain unchanged after all quarantine logic.
     assert validate_graph([evaluation_event("root", ref)]) == []
     assert validate_graph(chain_for(ref, "one")) == []
+
+
+# --- Schema-first graph eligibility (H-R7M1D-V-01 / R7-OC1) ---------------------
+
+
+def _schema_then_required(event_type: str) -> set[str]:
+    # Derive an event type's required-field set from the committed schema's
+    # per-type conditional (allOf if/then), never from a recreated table.
+    for clause in schema()["allOf"]:
+        const = (
+            clause.get("if", {})
+            .get("properties", {})
+            .get("event_type", {})
+            .get("const")
+        )
+        if const == event_type:
+            return set(clause["then"]["required"])
+    return set()
+
+
+def _valid_event_extras(event_type: str, ref: dict, prefix: str) -> dict:
+    ok = {"status": "SUCCESS", "detail_code": "OK"}
+    extras = {
+        "CHANGEGATE_EVALUATION_COMPLETED": {
+            "decision_ref": ref, "context_digest": ref["input_digest"],
+            "policy_version": "policy.v7", "evaluator_version": "1.0", "outcome": ok,
+        },
+        "CHANGEGATE_MERGE_ATTEMPTED": {
+            "decision_ref": ref, "evaluation_event_ref": f"{prefix}-root", "outcome": ok,
+        },
+        "CHANGEGATE_MERGE_COMPLETED": {
+            "decision_ref": ref, "attempt_event_ref": f"{prefix}-attempt",
+            "outcome": {**ok, "resulting_commit_sha": "b" * 40},
+        },
+        "CHANGEGATE_POST_MERGE_VALIDATION": {
+            "decision_ref": ref, "merge_event_ref": f"{prefix}-merge", "outcome": ok,
+        },
+        "CHANGEGATE_ROLLBACK_RECORDED": {
+            "decision_ref": ref, "merge_event_ref": f"{prefix}-merge", "outcome": ok,
+        },
+        "CHANGEGATE_USER_FEEDBACK_RECORDED": {
+            "decision_ref": ref, "target_event_ref": f"{prefix}-root",
+            "target_event_type": "CHANGEGATE_EVALUATION_COMPLETED",
+            "feedback": {"actor_ref": "p", "verdict": "AGREE", "category_code": "T",
+                         "reason_code": None, "comment_digest": None},
+        },
+    }
+    return extras[event_type]
+
+
+def test_event_type_schema_eligibility_matrix_covers_all_types():
+    doc = schema()
+    enum = set(doc["properties"]["event_type"]["enum"])
+    assert enum == EVENT_TYPES
+    # decision_ref and its evaluation_id are required for every event type.
+    assert "evaluation_id" in set(doc["properties"]["decision_ref"]["required"])
+    ref = dref("one")
+    covered = set()
+    for event_type in sorted(enum):
+        assert "decision_ref" in _schema_then_required(event_type), event_type
+        # A schema-valid instance of this type is locally eligible ([] errors).
+        base = event("evt", event_type, ref,
+                     **_valid_event_extras(event_type, ref, "evt"))
+        assert _local_graph_errors(base) == [], event_type
+        # Empty decision_ref.evaluation_id is rejected for EVERY event type,
+        # root and downstream alike (the core H-R7M1D-V-01 field-completeness).
+        empty_eval = copy.deepcopy(base)
+        empty_eval["decision_ref"] = {**ref, "evaluation_id": ""}
+        assert "EVALUATION_ID_MALFORMED" in _local_graph_errors(empty_eval), event_type
+        # PARENTS names the causal references for the type; the SCHEMA decides
+        # null behavior: required references reject null, optional references
+        # keep schema-permitted null.
+        required_refs = {f for f, _t, req in PARENTS[event_type] if req}
+        optional_refs = {f for f, _t, req in PARENTS[event_type] if not req}
+        for field in required_refs:
+            null_required = copy.deepcopy(base)
+            null_required[field] = None
+            assert "REFERENCE_MALFORMED" in _local_graph_errors(null_required), (
+                event_type, field,
+            )
+        for field in optional_refs:
+            null_optional = copy.deepcopy(base)
+            null_optional[field] = None
+            assert _local_graph_errors(null_optional) == [], (event_type, field)
+        covered.add(event_type)
+    assert covered == EVENT_TYPES
+    # ROLLBACK is the only type carrying an optional nullable causal reference.
+    assert {f for f, _t, req in PARENTS["CHANGEGATE_ROLLBACK_RECORDED"] if not req} == {
+        "validation_event_ref"
+    }
+
+
+def test_downstream_evaluation_id_schema_validation_is_complete():
+    ref = dref("one")
+    ok = {"status": "SUCCESS", "detail_code": "OK"}
+    root = evaluation_event("root", ref)
+
+    def graph_for(evaluation_id: object) -> list[str]:
+        attempt = event("attempt", "CHANGEGATE_MERGE_ATTEMPTED", ref,
+                        decision_ref={**ref, "evaluation_id": evaluation_id},
+                        evaluation_event_ref="root", outcome=ok)
+        return validate_graph([root, attempt])
+
+    # Schema-invalid downstream evaluation ids quarantine before relational logic.
+    for malformed in ("", {}, [], "bad id!", None):
+        errors = graph_for(malformed)
+        assert "EVALUATION_ID_MALFORMED" in errors, malformed
+        assert "EVALUATION_ID_DRIFT" not in errors, malformed
+    # A schema-valid but different evaluation id is eligible, then relationally
+    # drifts — the schema is not redefined to reject a valid-but-wrong id.
+    different = graph_for("evaluation-different")
+    assert "EVALUATION_ID_MALFORMED" not in different
+    assert "EVALUATION_ID_DRIFT" in different
+    # A schema-valid matching evaluation id validates cleanly.
+    assert graph_for(ref["evaluation_id"]) == []
+
+
+def test_required_and_optional_references_null_and_unknown_behavior():
+    ref = dref("one")
+    ok = {"status": "SUCCESS", "detail_code": "OK"}
+    root = evaluation_event("root", ref)
+    # Required reference = null is rejected before registration (quarantine):
+    # a second event with the same id does not collide because the first never
+    # registered.
+    null_required = event("attempt", "CHANGEGATE_MERGE_ATTEMPTED", ref,
+                          decision_ref=ref, evaluation_event_ref=None, outcome=ok)
+    twin = event("attempt", "CHANGEGATE_MERGE_ATTEMPTED", ref,
+                 decision_ref=ref, evaluation_event_ref="root", outcome=ok)
+    combined = validate_graph([root, null_required, twin])
+    assert "REFERENCE_MALFORMED" in combined
+    assert "EVENT_ID_DUPLICATE" not in combined
+    # Optional reference = null preserves schema-permitted null (rollback).
+    rollback_null_optional = [
+        *chain_for(ref, "short")[:3],
+        event("short-rollback", "CHANGEGATE_ROLLBACK_RECORDED", ref,
+              decision_ref=ref, merge_event_ref="short-merge",
+              validation_event_ref=None, outcome=ok),
+    ]
+    assert validate_graph(rollback_null_optional) == []
+    # A valid but unknown reference passes local schema, then gets the existing
+    # relational missing-predecessor behavior.
+    unknown = event("attempt", "CHANGEGATE_MERGE_ATTEMPTED", ref,
+                    decision_ref=ref, evaluation_event_ref="no-such-root", outcome=ok)
+    unknown_errors = validate_graph([unknown])
+    assert "PREDECESSOR_MISSING" in unknown_errors
+    assert "REFERENCE_MALFORMED" not in unknown_errors
+
+
+def test_schema_first_quarantine_prevents_downstream_state_contamination():
+    ref = dref("one")
+    ok = {"status": "SUCCESS", "detail_code": "OK"}
+    root = evaluation_event("root", ref)
+    # Downstream empty evaluation id: not registered, no lineage, no edge, not
+    # resolvable by a later event, no cycle node.
+    dn_empty = event("attempt", "CHANGEGATE_MERGE_ATTEMPTED", ref,
+                     decision_ref={**ref, "evaluation_id": ""},
+                     evaluation_event_ref="root", outcome=ok)
+    merge = event("merge", "CHANGEGATE_MERGE_COMPLETED", ref, decision_ref=ref,
+                  attempt_event_ref="attempt",
+                  outcome={**ok, "resulting_commit_sha": "b" * 40})
+    errors = validate_graph([root, dn_empty, merge])
+    assert "EVALUATION_ID_MALFORMED" in errors
+    assert "PREDECESSOR_MISSING" in errors  # merge cannot resolve the quarantined attempt
+    # Two malformed downstream events referencing each other: no CAUSAL_CYCLE.
+    a = event("a", "CHANGEGATE_MERGE_ATTEMPTED", ref,
+              decision_ref={**ref, "evaluation_id": ""}, evaluation_event_ref="b", outcome=ok)
+    b = event("b", "CHANGEGATE_MERGE_ATTEMPTED", ref,
+              decision_ref={**ref, "evaluation_id": ""}, evaluation_event_ref="a", outcome=ok)
+    cycle_errors = validate_graph([a, b])
+    assert cycle_errors
+    assert "CAUSAL_CYCLE" not in cycle_errors
+    # Valid root + malformed middle + valid tail: middle quarantined, tail sees
+    # missing predecessor, valid root preserved.
+    tail = event("merge", "CHANGEGATE_MERGE_COMPLETED", ref, decision_ref=ref,
+                 attempt_event_ref="attempt",
+                 outcome={**ok, "resulting_commit_sha": "b" * 40})
+    mixed = validate_graph([root, dn_empty, tail])
+    assert "EVALUATION_ID_MALFORMED" in mixed
+    assert "PREDECESSOR_MISSING" in mixed
+    assert validate_graph([root]) == []
+
+
+def test_local_eligibility_matches_authoritative_schema():
+    # The helper is schema-ineligible for an event iff the authoritative schema
+    # validator reports it invalid — for root and downstream fields alike.
+    ref = dref("one")
+    ok = {"status": "SUCCESS", "detail_code": "OK"}
+    validator = _EVENT_SCHEMA_VALIDATOR
+    root = evaluation_event("root", ref)
+    attempt = event("attempt", "CHANGEGATE_MERGE_ATTEMPTED", ref, decision_ref=ref,
+                    evaluation_event_ref="root", outcome=ok)
+    probes: list[dict] = [root, attempt]
+    for base in (root, attempt):
+        for field, value in (
+            ("event_id", ""),
+            ("event_id", "bad id!"),
+            ("event_type", "CHANGEGATE_UNKNOWN"),
+        ):
+            mutated = copy.deepcopy(base)
+            mutated[field] = value
+            probes.append(mutated)
+        for evaluation_id in ("", None, {}, [], "bad!", "evaluation-different"):
+            mutated = copy.deepcopy(base)
+            mutated["decision_ref"] = {**ref, "evaluation_id": evaluation_id}
+            probes.append(mutated)
+        mutated = copy.deepcopy(base)
+        mutated["decision_ref"] = ["not", "a", "dict"]
+        probes.append(mutated)
+    attempt_null = copy.deepcopy(attempt)
+    attempt_null["evaluation_event_ref"] = None
+    probes.append(attempt_null)
+    for event_obj in probes:
+        helper_ineligible = bool(_local_graph_errors(event_obj))
+        schema_invalid = not validator.is_valid(event_obj)
+        assert helper_ineligible == schema_invalid, event_obj.get("event_type")
+    # A non-dict event is helper-ineligible without invoking the schema.
+    assert _local_graph_errors("not-an-event") == ["EVENT_MALFORMED"]
+    assert _local_graph_errors(["x"]) == ["EVENT_MALFORMED"]
 
 
 # --- Owner decisions, manifest, fingerprint, and governance --------------------
