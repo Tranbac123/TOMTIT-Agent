@@ -7,11 +7,13 @@ Technical Author: Claude Code Fable 5
 Independent Verification: PENDING
 Baseline: 3e72e93bfac8da2ecdb7960a55ae0357135eb61e
 Production Implementation: NOT_STARTED
-Revision: R7 (bounded structural-contract closure: removes the override-class
-authority leakage, derives the record-schema digest from the typed contract, replaces
-replay claims with the Slice 1A structural-validation boundary, and restores retained
-invariant protections; supersedes R6 → R5 → R4 → R3 → R2 → R1 →
-07bc5b7be43a275c8484cdc633579ecfda657ffd)
+Revision: R7-NC1 (narrow normative runtime and authority-boundary clarification under
+owner decision OWNER-SCOPE-R7-03: adds §7.5 runtime/authority boundary, portable RFC 8259
+input domain, current Python implementation profile, representation-guard permission,
+expected-invalid-versus-internal-fault distinction, diagnostic scope, and abstract
+audit-history/re-review rules; fingerprint changes, validator and event-schema behavior
+unchanged; supersedes R7 bounded structural-contract closure → R6 → R5 → R4 → R3 → R2 →
+R1 → 07bc5b7be43a275c8484cdc633579ecfda657ffd)
 
 > This document is a specification-and-contract artifact only. It defines the deterministic
 > merge-eligibility policy contract for ChangeGate Slice 1. It implements nothing. It remains
@@ -536,6 +538,100 @@ must recompute and verify `decision_digest` and reject a decision that fails, ex
 `validate_change_gate_decision` refuses a hand-constructed PASS today (golden case
 GC-S1-024). A caller-authored "eligible" object without a verifying digest is
 `AUTHORITY_INVALID`.
+
+### 7.5 Runtime and authority boundary (normative, R7-NC1 / OD OWNER-SCOPE-R7-03)
+
+This section is normative. It is a narrow clarification (owner decision
+`OWNER_SCOPE_R7_03: NARROW_NORMATIVE_RUNTIME-BOUNDARY CLARIFICATION — ACCEPTED`),
+not final Slice 1A acceptance. Its machine-readable form is
+`slice_1a_semantic_manifest.runtime_authority_boundary`, which is
+fingerprint-bearing; the concrete candidate audit data and owner disposition
+live separately in the fingerprint-neutral `acceptance_governance` container.
+
+**Authority separation (three layers).**
+
+- **Local structural eligibility** is owned solely by the committed event
+  schema (`LOCAL_STRUCTURAL_AUTHORITY=EVENT_SCHEMA`): envelope shape, field
+  shape/types, requiredness, nullability, event-type-specific applicability,
+  additional-property restrictions, local identifier/reference grammar, and
+  `decision_ref` structure. The schema does **not** own cross-event evaluation
+  identity, lineage, reachability, multi-parent, or cycle semantics.
+- **Cross-event and causal eligibility** is owned solely by the relational and
+  causal contract and its test-level validator
+  (`CROSS_EVENT_CAUSAL_AUTHORITY=RELATIONAL_CAUSAL_CONTRACT`): duplicate event
+  and evaluation identity, evaluation-identity consistency and drift,
+  predecessor existence and type, reachability, task/candidate lineage,
+  multi-root and multi-parent consistency, cross-root references, cycle
+  detection, and feedback-target consistency.
+- A runtime **representation guard** is authoritative for neither layer
+  (`REPRESENTATION_GUARD_AUTHORITY=NONE`).
+
+**Portable admitted runtime domain (RFC 8259 JSON value model).** The portable,
+cross-language normative input domain is the RFC 8259 JSON value model — object,
+array, string, finite number, boolean, and null — with these controls: object
+member names must be strings; JSON numbers must be finite (NaN, +∞, and −∞ are
+not admitted); boolean is a distinct JSON type and is never a number; non-JSON
+application objects must be normalized before this boundary; custom-model or
+proxy semantics are not implicitly admitted.
+
+**Current Python implementation profile (implementation-bound, not portable
+policy).** The current implementation represents JSON object → built-in `dict`
+with string keys, array → `list`, string → `str`, number → finite `int`/`float`
+excluding `bool`, boolean → `bool`, null → `None`. Non-built-in
+`collections.abc.Mapping`s, Pydantic models, dataclasses, proxy objects, custom
+domain objects, and partially adapted objects are **not** admitted directly and
+must be normalized first. This Python profile is fingerprint-bearing for the
+current implementation, lives in a separate manifest namespace from the portable
+RFC 8259 domain, and is **not** portable ChangeGate policy semantics; changing
+it triggers fresh equivalence review.
+
+**Representation-guard permission.** A guard may run before full local
+event-schema validation only if it is rejection-only, can never mark a value
+eligible, performs representation-safety checks only, rejects only values the
+authoritative schema rejects within the current implementation profile, and
+contains no field, grammar, requiredness/nullability, event-type, identity,
+policy, or relational/causal semantics; schema validation remains the sole
+source of local structural eligibility for admitted event objects, and the
+relational/causal validator remains the sole source of cross-event eligibility;
+executable guard/schema equivalence checks protect the representation
+assumption, and any divergence must fail closed and block acceptance. The
+current `if not isinstance(item, dict): return ["EVENT_MALFORMED"]` guard is
+permitted under the current Python profile; `isinstance(item, dict)` is not a
+portable ChangeGate semantic rule.
+
+**Expected invalid input versus unexpected internal validator fault.** For every
+value in the admitted runtime domain, an expected validation failure returns a
+structured invalid result, fails closed, quarantines the invalid event, prevents
+graph-state mutation, and does not escape as an uncaught expected-validation
+exception. An unexpected internal validator fault (corrupted validator state,
+missing/broken dependency, invalid schema compilation, programming defect,
+impossible internal invariant) must fail closed, remain observable through normal
+internal-failure/test-failure mechanisms, prevent event entry into graph state,
+and must **not** be silently converted into a malformed-input diagnostic or
+misclassified as `EVENT_MALFORMED` (or any user-caused result) merely to keep
+execution green. This clarifies the contract only; it does not add broad
+`try/except`, a new exception framework, or any validator-logic change.
+
+**Diagnostic contract.** Normative diagnostics are: reject structurally invalid
+input, return a structured failure for expected invalidity, quarantine invalid
+events, prevent graph-state mutation, pass schema-valid events to relational and
+causal validation, and keep unexpected internal faults fail-closed and
+observable. The exact diagnostic code, native JSON Schema message, keyword,
+schema error path, and diagnostic ordering are non-normative implementation
+diagnostics.
+
+**Audit-history governance (abstract, fingerprint-bound).** Verifier findings and
+their original severities are immutable audit history; owner disposition must be
+recorded separately; acceptance must not rewrite, erase, or retroactively reduce
+verifier history. Concrete candidate audit data (finding ids, counts, report
+paths, candidate SHAs, timestamps, owner dispositions, detailed reopen-trigger
+examples) is fingerprint-neutral and is recorded only in the existing designated
+`acceptance_governance` container, never in the semantic manifest.
+
+**Boundary re-review (abstract, fingerprint-bound).** The representation boundary
+must be reviewed when an assumption required for representation-guard and schema
+equivalence ceases to hold. Detailed operational reopen examples are
+fingerprint-neutral governance metadata.
 
 ## 8. Disposition Semantics
 
@@ -1616,12 +1712,18 @@ lineage, changed-candidate-new-root, every-predecessor-same-lineage,
 duplicate-evaluation-ID rejection, downstream-evaluation-drift rejection, multi-root, and
 cycle rejection. The manifest additionally embeds the machine-readable
 `contract_to_test_coverage` matrix binding every retained invariant to its independent
-test oracles and every Model-B-removed surface to a reintroduction attack. The artifact
-tests assert every named predicate has an executable check and that removing or changing
-any predicate changes the fingerprint.
+test oracles and every Model-B-removed surface to a reintroduction attack, and the
+`runtime_authority_boundary` block (§7.5) binding the three-layer authority separation,
+the portable RFC 8259 input domain, the current Python implementation profile, the
+representation-guard permission, the expected-invalid-versus-internal-fault distinction,
+the diagnostic scope, and the abstract audit-history and boundary re-review rules. The
+artifact tests assert every named predicate has an executable check and that removing or
+changing any predicate changes the fingerprint.
 
 The manifest **excludes** all metadata (document status, acceptance record,
-verification-report path, accepted candidate SHA, audit notes), so an allowed metadata
+verification-report path, accepted candidate SHA, audit notes) — including the concrete
+candidate audit history and detailed reopen-trigger examples recorded in the
+`acceptance_governance` container (§7.5) — so an allowed metadata
 change preserves the fingerprint.
 
 The artifact tests cross-bind the manifest to the executable artifacts — the schema digest,

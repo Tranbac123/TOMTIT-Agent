@@ -13,6 +13,7 @@ protocol status that no Slice 1A artifact may return.
 from __future__ import annotations
 
 import copy
+import inspect
 import json
 import re
 from pathlib import Path
@@ -2569,6 +2570,337 @@ def test_metadata_only_changes_preserve_fingerprint():
     metadata["description"] = "owner acceptance metadata patch"
     metadata["owner_decision_statuses"]["OD-S1A-004"] = "ACCEPTED"
     assert canonical_digest(metadata["slice_1a_semantic_manifest"]) == baseline
+
+
+# --- R7-NC1 runtime and authority boundary clarification -----------------------
+
+OLD_SEMANTIC_FINGERPRINT = (
+    "sha256:3bc91277b529282d1a627ca9b8a5b7eed1ceca195a176b7b8c9d70dbf18ba7c8"
+)
+
+
+def runtime_authority() -> dict:
+    return manifest()["runtime_authority_boundary"]
+
+
+def test_runtime_authority_separation_is_declared():
+    boundary = runtime_authority()
+    assert boundary["local_structural_authority"] == "EVENT_SCHEMA"
+    assert boundary["cross_event_causal_authority"] == "RELATIONAL_CAUSAL_CONTRACT"
+    assert boundary["representation_guard_authority"] == "NONE"
+
+
+def test_portable_rfc8259_json_domain_is_declared():
+    domain = runtime_authority()["portable_json_value_domain"]
+    assert domain["model"] == "RFC8259_JSON_VALUE_MODEL"
+    assert domain["classification"] == "PORTABLE_CROSS_LANGUAGE_POLICY_SEMANTICS"
+    assert set(domain["admitted_values"]) == {
+        "object", "array", "string", "finite_number", "boolean", "null",
+    }
+    controls = domain["controls"]
+    assert controls["object_member_names_must_be_strings"] is True
+    assert controls["numbers_must_be_finite"] is True
+    assert controls["nan_admitted"] is False
+    assert controls["positive_infinity_admitted"] is False
+    assert controls["negative_infinity_admitted"] is False
+    assert controls["boolean_is_distinct_from_number"] is True
+
+
+def test_current_python_profile_is_implementation_bound_and_separate():
+    profile = runtime_authority()["current_implementation_runtime_profile"]
+    assert profile["profile"] == "PYTHON_BUILTIN_JSON_VALUES"
+    assert profile["classification"] == "IMPLEMENTATION_BOUND_RUNTIME_CONTRACT"
+    assert profile["is_portable_policy_semantics"] is False
+    assert profile["namespace"] == "SEPARATE_FROM_PORTABLE_JSON_DOMAIN"
+    # Portable and implementation profiles are distinct manifest namespaces.
+    portable = runtime_authority()["portable_json_value_domain"]
+    assert profile["profile"] != portable["model"]
+    for direct in ("pydantic models", "dataclasses", "proxy objects"):
+        assert direct in profile["not_admitted_directly"]
+
+
+def test_representation_guard_permission_is_rejection_only():
+    guard = runtime_authority()["representation_guard_permission"]
+    assert guard["permission"] == "REJECTION_ONLY_REPRESENTATION_SAFETY"
+    assert guard["rejection_only"] is True
+    assert guard["can_mark_value_eligible"] is False
+    assert guard["representation_safety_checks_only"] is True
+    assert guard["rejects_only_what_schema_rejects_within_current_profile"] is True
+    for forbidden in (
+        "contains_field_semantics",
+        "contains_identifier_or_reference_grammar",
+        "contains_requiredness_or_nullability_rules",
+        "contains_event_type_applicability_rules",
+        "contains_identity_semantics",
+        "contains_policy_semantics",
+        "contains_relational_or_causal_semantics",
+    ):
+        assert guard[forbidden] is False, forbidden
+    assert guard["schema_is_sole_local_eligibility_for_admitted_objects"] is True
+    assert guard["relational_validator_is_sole_cross_event_eligibility"] is True
+    assert guard["guard_schema_equivalence_checks_required"] is True
+    assert guard["divergence_fails_closed_and_blocks_acceptance"] is True
+    # The actual guard is rejection-only: it can only return errors, never [].
+    assert _local_graph_errors("not-an-event") == ["EVENT_MALFORMED"]
+    assert _local_graph_errors(42) == ["EVENT_MALFORMED"]
+    # An admitted (dict) object is decided by the schema, not the guard.
+    ref = dref("one")
+    assert _local_graph_errors(evaluation_event("root", ref)) == []
+
+
+def test_guard_schema_rejection_equivalence_holds_for_representations():
+    # The rejection-only guard rejects exactly the non-object representations the
+    # authoritative schema rejects, within the current Python profile.
+    validator = _EVENT_SCHEMA_VALIDATOR
+    for non_object in ("s", 42, 3.14, True, None):
+        guard_rejects = bool(_local_graph_errors(non_object))
+        schema_rejects = not validator.is_valid(non_object)
+        assert guard_rejects == schema_rejects is True, non_object
+    # An admitted built-in dict is decided by the schema, not the guard.
+    ref = dref("one")
+    assert validator.is_valid(evaluation_event("root", ref))
+    assert _local_graph_errors(evaluation_event("root", ref)) == []
+
+
+def test_expected_invalid_and_internal_fault_contracts_are_bound():
+    expected = runtime_authority()["expected_invalid_input_contract"]
+    assert expected["returns_structured_rejection"] is True
+    assert expected["fails_closed"] is True
+    assert expected["quarantines_invalid_event"] is True
+    assert expected["prevents_graph_state_mutation"] is True
+    assert expected["escapes_as_uncaught_expected_validation_exception"] is False
+    fault = runtime_authority()["unexpected_internal_validator_fault_contract"]
+    assert fault["fails_closed"] is True
+    assert fault["remains_observable"] is True
+    assert fault["prevents_event_entry_into_graph_state"] is True
+    assert fault["silently_converted_to_malformed_input_diagnostic"] is False
+    assert fault["misclassified_as_user_caused_result"] is False
+    # Behavioral: expected invalidity returns structured rejection, never mutates
+    # graph state (a malformed event cannot become a resolvable predecessor).
+    ref = dref("one")
+    malformed = event("attempt", "CHANGEGATE_MERGE_ATTEMPTED", ref,
+                      decision_ref={**ref, "evaluation_id": ""},
+                      evaluation_event_ref="root",
+                      outcome={"status": "SUCCESS", "detail_code": "OK"})
+    merge = event("merge", "CHANGEGATE_MERGE_COMPLETED", ref, decision_ref=ref,
+                  attempt_event_ref="attempt",
+                  outcome={"status": "SUCCESS", "detail_code": "OK",
+                           "resulting_commit_sha": "b" * 40})
+    errors = validate_graph([evaluation_event("root", ref), malformed, merge])
+    assert "EVALUATION_ID_MALFORMED" in errors
+    assert "PREDECESSOR_MISSING" in errors  # quarantined attempt not resolvable
+
+
+def test_diagnostic_contract_scopes_are_distinct():
+    scope = runtime_authority()["diagnostic_contract_scope"]
+    assert scope["normative"] == (
+        "REJECTION_STRUCTURED_FAILURE_QUARANTINE_AND_INTERNAL_FAULT_OBSERVABILITY"
+    )
+    assert scope["non_normative"] == "EXACT_CODE_PATH_KEYWORD_MESSAGE_ORDER"
+    assert scope["normative"] != scope["non_normative"]
+
+
+def test_audit_history_rule_bound_and_concrete_data_is_neutral():
+    boundary = runtime_authority()
+    assert "immutable audit history" in boundary["audit_history_preservation_rule"]
+    assert "recorded separately" in boundary["audit_history_preservation_rule"]
+    # Concrete candidate audit data is NOT in the semantic manifest.
+    manifest_blob = json.dumps(manifest(), sort_keys=True)
+    assert "H-R7OC1-V-01" not in manifest_blob
+    assert "88c07d8b8edb54a876a70e7fc7dec89080de6948" not in manifest_blob
+    assert "verifier_high_findings" not in manifest_blob
+    # Concrete audit data lives only in the existing designated neutral container.
+    audit = fixture()["acceptance_governance"]["audit_metadata"]
+    history = audit["verifier_history"][0]
+    assert history["verifier_finding_id"] == "H-R7OC1-V-01"
+    assert history["verifier_high_findings"] == 1
+    assert history["unresolved_functional_high_findings"] == 0
+    assert history["candidate_sha"] == "88c07d8b8edb54a876a70e7fc7dec89080de6948"
+    # Owner disposition is recorded separately from the immutable verifier finding.
+    record = fixture()["acceptance_governance"]["owner_clarification_records"][0]
+    assert record["owner_decision"] == "OWNER_SCOPE_R7_03"
+    assert record["owner_disposition"] == "NORMATIVE_BOUNDARY_CLARIFIED"
+
+
+def test_owner_decision_is_separate_from_final_acceptance():
+    suite = fixture()
+    record = suite["acceptance_governance"]["owner_clarification_records"][0]
+    assert record["is_final_acceptance"] is False
+    assert record["clarification_status"] == (
+        "OWNER_CLARIFICATION_IMPLEMENTED_PENDING_FRESH_VERIFICATION"
+    )
+    # Final Slice 1A acceptance metadata remains unset.
+    assert suite["status"] == "DRAFT_FOR_OWNER_REVIEW"
+    governance = suite["acceptance_governance"]
+    assert "accepted_candidate_sha" not in governance
+    assert "acceptance_record" not in governance
+    assert "final_acceptance_status" not in governance
+    # No owner-decision status was flipped to accepted beyond OD-S1A-009.
+    accepted = [k for k, v in suite["owner_decision_statuses"].items()
+                if v != "PENDING_OWNER_DECISION"]
+    assert accepted == ["OD-S1A-009"]
+
+
+def test_boundary_re_review_rule_bound_and_triggers_neutral():
+    boundary = runtime_authority()
+    assert "reviewed when an assumption" in boundary["boundary_re_review_rule"]
+    # Detailed operational trigger examples are fingerprint-neutral.
+    manifest_blob = json.dumps(manifest(), sort_keys=True)
+    assert "detailed_boundary_reopen_triggers" not in manifest_blob
+    triggers = fixture()["acceptance_governance"]["audit_metadata"][
+        "detailed_boundary_reopen_triggers"
+    ]
+    assert isinstance(triggers, list) and len(triggers) >= 5
+
+
+def test_new_runtime_boundary_mutations_change_fingerprint():
+    baseline_manifest = manifest()
+    baseline = canonical_digest(baseline_manifest)
+
+    def mutated(apply) -> str:
+        changed = copy.deepcopy(baseline_manifest)
+        apply(changed)
+        return canonical_digest(changed)
+
+    b = "runtime_authority_boundary"
+    mutations = {
+        "local structural authority": lambda m: m[b].__setitem__(
+            "local_structural_authority", "GUARD"),
+        "cross-event causal authority": lambda m: m[b].__setitem__(
+            "cross_event_causal_authority", "EVENT_SCHEMA"),
+        "representation-guard authority": lambda m: m[b].__setitem__(
+            "representation_guard_authority", "LOCAL"),
+        "portable RFC 8259 domain": lambda m: m[b]["portable_json_value_domain"]
+        .__setitem__("model", "PYTHON_OBJECT_MODEL"),
+        "finite-number requirement": lambda m: m[b]["portable_json_value_domain"]
+        ["controls"].__setitem__("numbers_must_be_finite", False),
+        "NaN admission": lambda m: m[b]["portable_json_value_domain"]["controls"]
+        .__setitem__("nan_admitted", True),
+        "positive infinity admission": lambda m: m[b]["portable_json_value_domain"]
+        ["controls"].__setitem__("positive_infinity_admitted", True),
+        "negative infinity admission": lambda m: m[b]["portable_json_value_domain"]
+        ["controls"].__setitem__("negative_infinity_admitted", True),
+        "boolean-vs-number distinction": lambda m: m[b]["portable_json_value_domain"]
+        ["controls"].__setitem__("boolean_is_distinct_from_number", False),
+        "object-string-key requirement": lambda m: m[b]["portable_json_value_domain"]
+        ["controls"].__setitem__("object_member_names_must_be_strings", False),
+        "current Python profile": lambda m: m[b][
+            "current_implementation_runtime_profile"].__setitem__(
+            "profile", "ARBITRARY_PYTHON_OBJECTS"),
+        "implementation-profile classification": lambda m: m[b][
+            "current_implementation_runtime_profile"].__setitem__(
+            "classification", "PORTABLE"),
+        "profile portability flag": lambda m: m[b][
+            "current_implementation_runtime_profile"].__setitem__(
+            "is_portable_policy_semantics", True),
+        "representation-guard permission": lambda m: m[b][
+            "representation_guard_permission"].__setitem__(
+            "permission", "MAY_MARK_ELIGIBLE"),
+        "rejection-only restriction": lambda m: m[b][
+            "representation_guard_permission"].__setitem__("rejection_only", False),
+        "guard eligibility creation": lambda m: m[b][
+            "representation_guard_permission"].__setitem__(
+            "can_mark_value_eligible", True),
+        "expected invalid-input handling": lambda m: m[b][
+            "expected_invalid_input_contract"].__setitem__(
+            "returns_structured_rejection", False),
+        "unexpected internal-fault handling": lambda m: m[b][
+            "unexpected_internal_validator_fault_contract"].__setitem__(
+            "fails_closed", False),
+        "internal-fault observability": lambda m: m[b][
+            "unexpected_internal_validator_fault_contract"].__setitem__(
+            "remains_observable", False),
+        "internal-fault misclassification": lambda m: m[b][
+            "unexpected_internal_validator_fault_contract"].__setitem__(
+            "silently_converted_to_malformed_input_diagnostic", True),
+        "diagnostic normative scope": lambda m: m[b]["diagnostic_contract_scope"]
+        .__setitem__("normative", "EXACT_CODE_REQUIRED"),
+        "audit-history preservation rule": lambda m: m[b].__setitem__(
+            "audit_history_preservation_rule", "history may be reduced"),
+        "abstract boundary re-review rule": lambda m: m[b].__setitem__(
+            "boundary_re_review_rule", "never review"),
+    }
+    assert len(mutations) == 23
+    for label, apply in mutations.items():
+        assert mutated(apply) != baseline, label
+
+
+def test_designated_governance_mutations_preserve_fingerprint():
+    suite = fixture()
+    baseline = canonical_digest(suite["slice_1a_semantic_manifest"])
+
+    def mutated(apply) -> str:
+        changed = copy.deepcopy(suite)
+        apply(changed)
+        return canonical_digest(changed["slice_1a_semantic_manifest"])
+
+    audit = lambda s: s["acceptance_governance"]["audit_metadata"]["verifier_history"][0]  # noqa: E731
+    mutations = {
+        "finding id": lambda s: audit(s).__setitem__("verifier_finding_id", "X-1"),
+        "finding count": lambda s: audit(s).__setitem__("verifier_high_findings", 9),
+        "report path": lambda s: audit(s).__setitem__("verifier_report_path", "OTHER.md"),
+        "candidate sha": lambda s: audit(s).__setitem__("candidate_sha", "0" * 40),
+        "verification timestamp": lambda s: audit(s).__setitem__(
+            "verification_timestamp", "2030-01-01"),
+        "owner disposition": lambda s: audit(s).__setitem__(
+            "owner_disposition", "CHANGED"),
+        "unresolved functional count": lambda s: audit(s).__setitem__(
+            "unresolved_functional_high_findings", 5),
+        "reopen trigger examples": lambda s: s["acceptance_governance"]
+        ["audit_metadata"]["detailed_boundary_reopen_triggers"].append("new one"),
+        "owner clarification record": lambda s: s["acceptance_governance"]
+        ["owner_clarification_records"][0].__setitem__("owner_disposition", "X"),
+        "document status": lambda s: s.__setitem__("status", "ACCEPTED_BY_OWNER"),
+    }
+    for label, apply in mutations.items():
+        assert mutated(apply) == baseline, label
+
+
+def test_old_fingerprint_is_stale_and_new_recomputes_deterministically():
+    current = canonical_digest(manifest())
+    assert current != OLD_SEMANTIC_FINGERPRINT
+    assert canonical_digest(fixture()["slice_1a_semantic_manifest"]) == current
+    assert manifest()["manifest_version"] == "changegate.slice1a.semantic-manifest.v4"
+
+
+def test_validator_helper_bodies_are_unchanged():
+    # The runtime clarification changes no validator behavior. The rejection-only
+    # representation guard and the schema-first eligibility body are intact.
+    local_src = inspect.getsource(_local_graph_errors)
+    assert 'if not isinstance(item, dict):' in local_src
+    assert 'return ["EVENT_MALFORMED"]' in local_src
+    assert "_EVENT_SCHEMA_VALIDATOR.iter_errors(item)" in local_src
+    assert inspect.getsource(_string_key).strip().endswith(
+        "return value if isinstance(value, str) else None"
+    )
+    graph_src = inspect.getsource(validate_graph)
+    assert "local = _local_graph_errors(item)" in graph_src
+    assert "if local:" in graph_src and "continue" in graph_src
+    validator_src = inspect.getsource(validate_record_structure)
+    assert 'return {"errors": ["RECORD_NOT_AN_OBJECT"], "classifications": []}' in (
+        validator_src
+    )
+
+
+def test_event_schema_bytes_and_golden_outcomes_unchanged():
+    # Event schema still meta-validates; behavior unchanged (bytes checked in
+    # scope audit / probe). Golden expected outcomes are byte-identical.
+    Draft202012Validator.check_schema(schema())
+    for item in fixture()["cases"]:
+        outcome = oracle_outcome(
+            item["policy_input_facts"],
+            item["policy_input_bindings"]["evaluation_mode"],
+        )
+        assert outcome["disposition"] == item["expected_disposition"], item["case_id"]
+        assert outcome["complete_reason_codes"] == (
+            item["expected_complete_reason_codes"]
+        ), item["case_id"]
+    # Record classifications unchanged.
+    for item in fixture()["cases"]:
+        record, source = record_for(item["case_id"])
+        assert validate_record_structure(record, source)["classifications"] == list(
+            SLICE_1A_CLASSIFICATIONS
+        ), item["case_id"]
 
 
 def test_exact_artifact_governance_is_declared():

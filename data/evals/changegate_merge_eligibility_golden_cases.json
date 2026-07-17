@@ -3687,7 +3687,8 @@
       "authority_boundary",
       "causal_semantics",
       "golden_semantics",
-      "contract_to_test_coverage"
+      "contract_to_test_coverage",
+      "runtime_authority_boundary"
     ],
     "semantic_fingerprint_source": "slice_1a_semantic_manifest",
     "exact_artifact_hash_contract": {
@@ -3698,6 +3699,43 @@
       "rule": "the fresh independent verifier records these two file hashes at the accepted candidate; a metadata-only acceptance patch must preserve them exactly, and must preserve the semantic fingerprint for spec and fixture",
       "future_hashes_hard_coded": false,
       "note": "this defines the comparison contract only, not any future hash value"
+    },
+    "owner_clarification_records": [
+      {
+        "owner_decision": "OWNER_SCOPE_R7_03",
+        "title": "NARROW_NORMATIVE_RUNTIME-BOUNDARY CLARIFICATION",
+        "status": "ACCEPTED",
+        "owner_disposition": "NORMATIVE_BOUNDARY_CLARIFIED",
+        "decision_date": "2026-07-18",
+        "scope": "Clarifies runtime representation domain, authority separation, representation-guard permission, expected-vs-internal-fault distinction, and diagnostic scope. Not final Slice 1A acceptance.",
+        "clarification_status": "OWNER_CLARIFICATION_IMPLEMENTED_PENDING_FRESH_VERIFICATION",
+        "is_final_acceptance": false
+      }
+    ],
+    "audit_metadata": {
+      "verifier_history": [
+        {
+          "verifier_finding_id": "H-R7OC1-V-01",
+          "verifier_high_findings": 1,
+          "verifier_classification": "OWNER_BOUNDARY_VIOLATION",
+          "verifier_report_path": "REPORT_SOL_HIGH_FINAL_OWNER_ACCEPTANCE_VERIFY_CHANGEGATE_SLICE_1A_R7_OC1.md",
+          "candidate_sha": "88c07d8b8edb54a876a70e7fc7dec89080de6948",
+          "verification_timestamp": "2026-07-17",
+          "owner_decision": "OWNER_SCOPE_R7_03",
+          "owner_disposition": "NORMATIVE_BOUNDARY_CLARIFIED",
+          "unresolved_functional_high_findings": 0
+        }
+      ],
+      "immutability_note": "Verifier findings and original severities are immutable audit history; the owner disposition here does not rewrite, erase, or reduce the recorded verifier finding.",
+      "detailed_boundary_reopen_triggers": [
+        "current implementation profile expands beyond built-in JSON values",
+        "adapter or normalization changes admitting non-JSON runtime objects",
+        "validator object type-checker is customized",
+        "guard/schema representation-equivalence test diverges",
+        "guard expands into field-level, grammar, or event-type checks",
+        "exact diagnostic code/path/keyword/message/order becomes externally normative",
+        "direct admission of models, proxies, dataclasses, or custom mappings"
+      ]
     }
   },
   "od_s1a_008_decision_record": {
@@ -3773,7 +3811,7 @@
     "note": "This record is COMPLETE as a pending decision: it enumerates every owner question and every pre-A3 declaration field. It does NOT choose any answer; A3 (Slice 1C-1) remains blocked until owner acceptance. No mapping is implemented."
   },
   "slice_1a_semantic_manifest": {
-    "manifest_version": "changegate.slice1a.semantic-manifest.v3",
+    "manifest_version": "changegate.slice1a.semantic-manifest.v4",
     "policy_semantics": {
       "reason_code_taxonomy": [
         {
@@ -5728,7 +5766,95 @@
           "test_semantic_fingerprint_changes_for_required_mutations"
         ]
       }
-    ]
+    ],
+    "runtime_authority_boundary": {
+      "boundary_version": "changegate.slice1a.runtime-authority.v1",
+      "local_structural_authority": "EVENT_SCHEMA",
+      "cross_event_causal_authority": "RELATIONAL_CAUSAL_CONTRACT",
+      "representation_guard_authority": "NONE",
+      "portable_json_value_domain": {
+        "model": "RFC8259_JSON_VALUE_MODEL",
+        "classification": "PORTABLE_CROSS_LANGUAGE_POLICY_SEMANTICS",
+        "admitted_values": [
+          "array",
+          "boolean",
+          "finite_number",
+          "null",
+          "object",
+          "string"
+        ],
+        "controls": {
+          "object_member_names_must_be_strings": true,
+          "numbers_must_be_finite": true,
+          "nan_admitted": false,
+          "positive_infinity_admitted": false,
+          "negative_infinity_admitted": false,
+          "boolean_is_distinct_from_number": true,
+          "non_json_application_objects_normalized_before_boundary": true,
+          "custom_model_or_proxy_semantics_implicitly_admitted": false
+        }
+      },
+      "current_implementation_runtime_profile": {
+        "profile": "PYTHON_BUILTIN_JSON_VALUES",
+        "classification": "IMPLEMENTATION_BOUND_RUNTIME_CONTRACT",
+        "is_portable_policy_semantics": false,
+        "namespace": "SEPARATE_FROM_PORTABLE_JSON_DOMAIN",
+        "representation": {
+          "json_array": "builtin list",
+          "json_boolean": "bool",
+          "json_null": "None",
+          "json_number": "finite int or float, excluding bool",
+          "json_object": "builtin dict with string keys",
+          "json_string": "str"
+        },
+        "not_admitted_directly": [
+          "collections.abc.Mapping implementations that are not builtin dict",
+          "custom domain objects",
+          "dataclasses",
+          "partially adapted objects",
+          "proxy objects",
+          "pydantic models"
+        ]
+      },
+      "representation_guard_permission": {
+        "permission": "REJECTION_ONLY_REPRESENTATION_SAFETY",
+        "rejection_only": true,
+        "can_mark_value_eligible": false,
+        "representation_safety_checks_only": true,
+        "rejects_only_what_schema_rejects_within_current_profile": true,
+        "contains_field_semantics": false,
+        "contains_identifier_or_reference_grammar": false,
+        "contains_requiredness_or_nullability_rules": false,
+        "contains_event_type_applicability_rules": false,
+        "contains_identity_semantics": false,
+        "contains_policy_semantics": false,
+        "contains_relational_or_causal_semantics": false,
+        "schema_is_sole_local_eligibility_for_admitted_objects": true,
+        "relational_validator_is_sole_cross_event_eligibility": true,
+        "guard_schema_equivalence_checks_required": true,
+        "divergence_fails_closed_and_blocks_acceptance": true
+      },
+      "expected_invalid_input_contract": {
+        "returns_structured_rejection": true,
+        "fails_closed": true,
+        "quarantines_invalid_event": true,
+        "prevents_graph_state_mutation": true,
+        "escapes_as_uncaught_expected_validation_exception": false
+      },
+      "unexpected_internal_validator_fault_contract": {
+        "fails_closed": true,
+        "remains_observable": true,
+        "prevents_event_entry_into_graph_state": true,
+        "silently_converted_to_malformed_input_diagnostic": false,
+        "misclassified_as_user_caused_result": false
+      },
+      "diagnostic_contract_scope": {
+        "normative": "REJECTION_STRUCTURED_FAILURE_QUARANTINE_AND_INTERNAL_FAULT_OBSERVABILITY",
+        "non_normative": "EXACT_CODE_PATH_KEYWORD_MESSAGE_ORDER"
+      },
+      "audit_history_preservation_rule": "Verifier findings and original severities are immutable audit history. Owner disposition must be recorded separately. Acceptance must not rewrite, erase, or retroactively reduce verifier history.",
+      "boundary_re_review_rule": "The representation boundary must be reviewed when an assumption required for representation-guard and schema equivalence ceases to hold."
+    }
   },
   "owner_decision_statuses": {
     "OD-S1A-001": "PENDING_OWNER_DECISION",
