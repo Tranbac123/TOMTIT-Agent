@@ -693,6 +693,63 @@ def _string_key(value: object) -> str | None:
     return value if isinstance(value, str) else None
 
 
+def _graph_ref_validator(def_name: str) -> Draft202012Validator:
+    # Reuse the event schema's own identifier grammar so no new regular
+    # expression is introduced. eventRef/opaqueRef already reject empty
+    # strings, whitespace, traversal, credential shapes, and non-strings.
+    document = schema()
+    return Draft202012Validator(
+        {"$ref": f"#/$defs/{def_name}", "$defs": document["$defs"]}
+    )
+
+
+_EVENT_REF_GRAMMAR = _graph_ref_validator("eventRef")
+_OPAQUE_REF_GRAMMAR = _graph_ref_validator("opaqueRef")
+
+
+def _valid_event_ref(value: object) -> bool:
+    return isinstance(value, str) and _EVENT_REF_GRAMMAR.is_valid(value)
+
+
+def _valid_opaque_ref(value: object) -> bool:
+    return isinstance(value, str) and _OPAQUE_REF_GRAMMAR.is_valid(value)
+
+
+def _local_graph_errors(item: object) -> list[str]:
+    """Local structural eligibility of one event's graph-relevant fields.
+
+    Only the fields validate_graph actually uses are checked (not the full
+    event schema). An event with any error here is quarantined: it must not
+    enter by_id, evaluations, lineages, edges, or the cycle walk. Identifiers
+    and references are validated against the event schema's existing
+    eventRef/opaqueRef grammar, which rejects empty and malformed values.
+    """
+    if not isinstance(item, dict):
+        return ["EVENT_MALFORMED"]
+    if not _valid_event_ref(item.get("event_id")):
+        return ["EVENT_MALFORMED"]
+    etype = item.get("event_type")
+    if not isinstance(etype, str) or etype not in PARENTS:
+        return ["EVENT_MALFORMED"]
+    errors: list[str] = []
+    decision_ref = item.get("decision_ref")
+    if not isinstance(decision_ref, dict):
+        errors.append("DECISION_REF_MALFORMED")
+    if etype == "CHANGEGATE_EVALUATION_COMPLETED":
+        evaluation_id = (
+            decision_ref.get("evaluation_id")
+            if isinstance(decision_ref, dict)
+            else None
+        )
+        if not _valid_opaque_ref(evaluation_id):
+            errors.append("EVALUATION_ID_MALFORMED")
+    for field, _required_type, _required in PARENTS[etype]:
+        value = item.get(field)
+        if value is not None and not _valid_event_ref(value):
+            errors.append("REFERENCE_MALFORMED")
+    return errors
+
+
 def validate_graph(events: list[dict]) -> list[str]:
     """Local causal validation over the contract's declared invariants.
 
@@ -705,26 +762,25 @@ def validate_graph(events: list[dict]) -> list[str]:
     value is hashed or used as a dictionary/set key before its string type is
     proven, so an object/list identity or reference fails closed with a
     structured error instead of raising TypeError/AttributeError.
+
+    Fail closed: an event whose graph-relevant shape or identifiers are
+    malformed (per _local_graph_errors) is quarantined — it never enters
+    by_id, evaluations, lineages, edges, or the cycle walk — so a malformed
+    event cannot become a predecessor, create a root, or produce a cycle.
     """
     errors: list[str] = []
     by_id: dict[str, dict] = {}
     lineages: dict[str, dict | None] = {}
     evaluations: dict[str, dict] = {}
+    edges: dict[str, list[str]] = {}
     for item in events:
-        if not isinstance(item, dict):
-            errors.append("EVENT_MALFORMED")
+        local = _local_graph_errors(item)
+        if local:
+            errors.extend(local)
             continue
-        eid, etype = item.get("event_id"), item.get("event_type")
-        ref = item.get("decision_ref")
-        if not isinstance(ref, dict):
-            ref = {}
-        if (
-            not isinstance(eid, str)
-            or not isinstance(etype, str)
-            or etype not in PARENTS
-        ):
-            errors.append("EVENT_MALFORMED")
-            continue
+        eid = item["event_id"]
+        etype = item["event_type"]
+        ref = item["decision_ref"]
         if eid in by_id:
             errors.append("EVENT_ID_DUPLICATE")
         # Explicit event identity equality matrix (duplicated identity values
@@ -763,17 +819,12 @@ def validate_graph(events: list[dict]) -> list[str]:
                 ):
                     errors.append("FEEDBACK_TARGET_TYPE_MISMATCH")
         if etype == "CHANGEGATE_EVALUATION_COMPLETED":
-            evaluation_id = _string_key(ref.get("evaluation_id"))
-            if evaluation_id is None:
-                # Malformed root identity: never hashed, never used as a key,
-                # and no root is constructed from it.
-                errors.append("EVALUATION_ID_MALFORMED")
-                lineage = None
-            else:
-                lineage = {field: ref.get(field) for field in LINEAGE}
-                if evaluation_id in evaluations:
-                    errors.append("EVALUATION_ID_DUPLICATE")
-                evaluations[evaluation_id] = lineage
+            # evaluation_id passed the opaqueRef grammar in local eligibility.
+            evaluation_id = ref["evaluation_id"]
+            lineage = {field: ref.get(field) for field in LINEAGE}
+            if evaluation_id in evaluations:
+                errors.append("EVALUATION_ID_DUPLICATE")
+            evaluations[evaluation_id] = lineage
         elif not parents or any(parent is None for parent in parents):
             lineage = None
             errors.append("ORPHAN")
@@ -792,18 +843,14 @@ def validate_graph(events: list[dict]) -> list[str]:
         if lineage is not None:
             lineages[eid] = lineage
         by_id[eid] = item
-    edges = {
-        item["event_id"]: [
-            item[field]
-            for field, _, _ in PARENTS[item["event_type"]]
-            if _string_key(item.get(field))
+        # Edges are built only from graph-eligible events; every reference here
+        # already satisfies the eventRef grammar (validated in local
+        # eligibility), so a malformed event never contributes a cycle edge.
+        edges[eid] = [
+            target
+            for field, _, _ in PARENTS[etype]
+            if (target := _string_key(item.get(field))) is not None
         ]
-        for item in events
-        if isinstance(item, dict)
-        and isinstance(item.get("event_id"), str)
-        and isinstance(item.get("event_type"), str)
-        and item.get("event_type") in PARENTS
-    }
     visiting: set[str] = set()
     visited: set[str] = set()
 
@@ -2003,6 +2050,109 @@ def test_graph_membership_totality_sweep_and_valid_behavior_preserved():
         outcome={"status": "SUCCESS", "detail_code": "OK"},
     )
     assert validate_graph([evaluation_event("root", ref), attempt_bad])
+
+
+# --- Graph fail-closed conformance (H-R7M1C-V-01 / H-R7M1C-V-02) ----------------
+
+
+def test_empty_graph_identifiers_are_rejected_by_existing_grammar():
+    # The event schema's eventRef/opaqueRef grammar rejects the empty string;
+    # validate_graph must reuse it, not accept empty identifiers/references.
+    ref = dref("one")
+    empty_event_id = evaluation_event("", ref)
+    assert validate_graph([empty_event_id]) == ["EVENT_MALFORMED"]
+    empty_eval_id = evaluation_event("root", ref)
+    empty_eval_id["decision_ref"] = {**ref, "evaluation_id": ""}
+    assert "EVALUATION_ID_MALFORMED" in validate_graph([empty_eval_id])
+    for field, event_type, extra in (
+        ("evaluation_event_ref", "CHANGEGATE_MERGE_ATTEMPTED", {}),
+        ("attempt_event_ref", "CHANGEGATE_MERGE_COMPLETED",
+         {"outcome": {"status": "SUCCESS", "detail_code": "OK",
+                      "resulting_commit_sha": "b" * 40}}),
+        ("merge_event_ref", "CHANGEGATE_POST_MERGE_VALIDATION", {}),
+        ("target_event_ref", "CHANGEGATE_USER_FEEDBACK_RECORDED",
+         {"target_event_type": "CHANGEGATE_EVALUATION_COMPLETED",
+          "feedback": {"actor_ref": "person", "verdict": "AGREE",
+                       "category_code": "TEST", "reason_code": None,
+                       "comment_digest": None}}),
+    ):
+        payload = {
+            "decision_ref": ref,
+            field: "",
+            "outcome": {"status": "SUCCESS", "detail_code": "OK"},
+            **extra,
+        }
+        empty_ref_event = event("evt", event_type, ref, **payload)
+        assert "REFERENCE_MALFORMED" in validate_graph([empty_ref_event]), field
+    # An optional reference remains valid as null exactly where the schema
+    # permits null (rollback without validation_event_ref).
+    ok = {"status": "SUCCESS", "detail_code": "OK"}
+    rollback_null_optional = [
+        *chain_for(ref, "short")[:3],
+        event(
+            "short-rollback",
+            "CHANGEGATE_ROLLBACK_RECORDED",
+            ref,
+            decision_ref=ref,
+            merge_event_ref="short-merge",
+            validation_event_ref=None,
+            outcome=ok,
+        ),
+    ]
+    assert validate_graph(rollback_null_optional) == []
+
+
+def test_malformed_events_are_quarantined_from_graph_state():
+    ref = dref("one")
+    ok = {"status": "SUCCESS", "detail_code": "OK"}
+    # A malformed root is not registered: a well-formed child referencing its
+    # id gets missing-predecessor/orphan, not a resolved predecessor.
+    malformed_root = evaluation_event("root-bad", ref)
+    malformed_root["decision_ref"] = {**ref, "evaluation_id": {"bad": True}}
+    child = event(
+        "child", "CHANGEGATE_MERGE_ATTEMPTED", ref,
+        decision_ref=ref, evaluation_event_ref="root-bad", outcome=ok,
+    )
+    child_errors = validate_graph([malformed_root, child])
+    assert "EVALUATION_ID_MALFORMED" in child_errors
+    assert "PREDECESSOR_MISSING" in child_errors
+    assert "ORPHAN" in child_errors
+    # A malformed root does not register an evaluation id: a later valid root
+    # with the same evaluation id is not a false duplicate.
+    reused = evaluation_event("root-good", ref)
+    combined = validate_graph([malformed_root, reused])
+    assert "EVALUATION_ID_MALFORMED" in combined
+    assert "EVALUATION_ID_DUPLICATE" not in combined
+    # Two malformed mutually-referencing events (non-dict decision_ref) do not
+    # build edges and cannot produce CAUSAL_CYCLE.
+    a = event("a", "CHANGEGATE_MERGE_ATTEMPTED", ref,
+              decision_ref=["not", "a", "dict"], evaluation_event_ref="b", outcome=ok)
+    b = event("b", "CHANGEGATE_MERGE_ATTEMPTED", ref,
+              decision_ref=["also", "not", "dict"], evaluation_event_ref="a", outcome=ok)
+    cycle_errors = validate_graph([a, b])
+    assert cycle_errors
+    assert "CAUSAL_CYCLE" not in cycle_errors
+    # A malformed event mixed into an otherwise valid chain is quarantined while
+    # the valid events still validate against each other.
+    chain = chain_for(ref, "mix")
+    chain[1]["event_id"] = ""  # malformed attempt id
+    mixed = validate_graph(chain)
+    assert "EVENT_MALFORMED" in mixed
+    # The merge (which referenced the now-quarantined attempt) is orphaned, not
+    # resolved to a malformed predecessor.
+    assert "PREDECESSOR_MISSING" in mixed
+    # A malformed feedback target reference is quarantined.
+    bad_feedback = event(
+        "fb", "CHANGEGATE_USER_FEEDBACK_RECORDED", ref,
+        decision_ref=ref, target_event_ref={"bad": True},
+        target_event_type="CHANGEGATE_EVALUATION_COMPLETED",
+        feedback={"actor_ref": "p", "verdict": "AGREE", "category_code": "T",
+                  "reason_code": None, "comment_digest": None},
+    )
+    assert "REFERENCE_MALFORMED" in validate_graph([bad_feedback])
+    # Valid positives remain unchanged after all quarantine logic.
+    assert validate_graph([evaluation_event("root", ref)]) == []
+    assert validate_graph(chain_for(ref, "one")) == []
 
 
 # --- Owner decisions, manifest, fingerprint, and governance --------------------
