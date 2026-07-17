@@ -686,6 +686,13 @@ PARENTS = {
 }
 
 
+def _string_key(value: object) -> str | None:
+    # A graph identity/reference may be used as a dict/set key only when it is
+    # a string. Any other JSON-compatible value (dict/list/number/bool/None) is
+    # rejected rather than hashed, keeping validate_graph total and fail-closed.
+    return value if isinstance(value, str) else None
+
+
 def validate_graph(events: list[dict]) -> list[str]:
     """Local causal validation over the contract's declared invariants.
 
@@ -693,15 +700,29 @@ def validate_graph(events: list[dict]) -> list[str]:
     root identity, predecessor existence/type, orphan and cycle rejection,
     multi-parent same-lineage, changed-candidate-new-root, and the explicit
     event identity equality matrix (task, candidate, input digest).
+
+    Total over malformed JSON-compatible event objects: no user-controlled
+    value is hashed or used as a dictionary/set key before its string type is
+    proven, so an object/list identity or reference fails closed with a
+    structured error instead of raising TypeError/AttributeError.
     """
     errors: list[str] = []
     by_id: dict[str, dict] = {}
     lineages: dict[str, dict | None] = {}
     evaluations: dict[str, dict] = {}
     for item in events:
+        if not isinstance(item, dict):
+            errors.append("EVENT_MALFORMED")
+            continue
         eid, etype = item.get("event_id"), item.get("event_type")
-        ref = item.get("decision_ref") or {}
-        if not isinstance(eid, str) or etype not in PARENTS:
+        ref = item.get("decision_ref")
+        if not isinstance(ref, dict):
+            ref = {}
+        if (
+            not isinstance(eid, str)
+            or not isinstance(etype, str)
+            or etype not in PARENTS
+        ):
             errors.append("EVENT_MALFORMED")
             continue
         if eid in by_id:
@@ -727,7 +748,9 @@ def validate_graph(events: list[dict]) -> list[str]:
             target = item.get(field)
             if target is None and not required:
                 continue
-            parent = by_id.get(target)
+            # _string_key rejects unhashable/non-string references; a non-string
+            # reference resolves to no predecessor (fail closed, never hashed).
+            parent = by_id.get(_string_key(target))
             if parent is None:
                 errors.append("PREDECESSOR_MISSING")
             elif required_type and parent["event_type"] != required_type:
@@ -740,10 +763,17 @@ def validate_graph(events: list[dict]) -> list[str]:
                 ):
                     errors.append("FEEDBACK_TARGET_TYPE_MISMATCH")
         if etype == "CHANGEGATE_EVALUATION_COMPLETED":
-            lineage = {field: ref.get(field) for field in LINEAGE}
-            if ref.get("evaluation_id") in evaluations:
-                errors.append("EVALUATION_ID_DUPLICATE")
-            evaluations[ref.get("evaluation_id")] = lineage
+            evaluation_id = _string_key(ref.get("evaluation_id"))
+            if evaluation_id is None:
+                # Malformed root identity: never hashed, never used as a key,
+                # and no root is constructed from it.
+                errors.append("EVALUATION_ID_MALFORMED")
+                lineage = None
+            else:
+                lineage = {field: ref.get(field) for field in LINEAGE}
+                if evaluation_id in evaluations:
+                    errors.append("EVALUATION_ID_DUPLICATE")
+                evaluations[evaluation_id] = lineage
         elif not parents or any(parent is None for parent in parents):
             lineage = None
             errors.append("ORPHAN")
@@ -766,10 +796,13 @@ def validate_graph(events: list[dict]) -> list[str]:
         item["event_id"]: [
             item[field]
             for field, _, _ in PARENTS[item["event_type"]]
-            if item.get(field)
+            if _string_key(item.get(field))
         ]
         for item in events
-        if isinstance(item.get("event_id"), str) and item.get("event_type") in PARENTS
+        if isinstance(item, dict)
+        and isinstance(item.get("event_id"), str)
+        and isinstance(item.get("event_type"), str)
+        and item.get("event_type") in PARENTS
     }
     visiting: set[str] = set()
     visited: set[str] = set()
@@ -1841,6 +1874,135 @@ def test_causal_graph_negative_controls_are_rejected():
     )
     malformed = validate_graph([{"event_id": 1, "event_type": "UNKNOWN"}])
     assert "EVENT_MALFORMED" in malformed
+
+
+# --- Graph validation totality (H-R7M1-V-01) -----------------------------------
+
+# User-controlled event values that reach dict/set membership or a lookup key
+# inside validate_graph. Each must fail closed, never raise (TypeError from
+# hashing an unhashable value, or AttributeError from a non-dict event).
+GRAPH_MEMBERSHIP_KEY_FIELDS = (
+    "event_type",
+    "event_id",
+    "evaluation_id",
+    "evaluation_event_ref",
+    "attempt_event_ref",
+    "merge_event_ref",
+    "validation_event_ref",
+    "target_event_ref",
+)
+# The full malformed JSON-compatible set (task §9). "" is a valid string for
+# id-like fields, so the sweep asserts only no-raise for it; the unhashable
+# subset (UNHASHABLE_JSON_VALUES) is invalid everywhere and must also error.
+MALFORMED_GRAPH_VALUES = (
+    *UNHASHABLE_JSON_VALUES,
+    ("triple-nested-list", [[[]]]),
+    ("null", None),
+    ("true", True),
+    ("false", False),
+    ("zero", 0),
+    ("one", 1),
+    ("neg-one", -1),
+    ("float", 3.14),
+    ("empty-string", ""),
+)
+_CHAIN_REF_INDEX = {
+    "evaluation_event_ref": 1,
+    "attempt_event_ref": 2,
+    "merge_event_ref": 3,
+    "validation_event_ref": 4,
+    "target_event_ref": 5,
+}
+
+
+def _graph_with_malformed(field: str, value: object) -> list[dict]:
+    ref = dref("one")
+    if field == "event_type":
+        root = evaluation_event("root", ref)
+        root["event_type"] = value
+        return [root]
+    if field == "event_id":
+        root = evaluation_event("root", ref)
+        root["event_id"] = value
+        return [root]
+    if field == "evaluation_id":
+        root = evaluation_event("root", ref)
+        root["decision_ref"] = {**ref, "evaluation_id": value}
+        return [root]
+    chain = chain_for(ref, "one")
+    chain[_CHAIN_REF_INDEX[field]][field] = value
+    return chain
+
+
+@pytest.mark.parametrize("field", GRAPH_MEMBERSHIP_KEY_FIELDS)
+@pytest.mark.parametrize("label,value", UNHASHABLE_JSON_VALUES)
+def test_graph_is_total_over_unhashable_event_values(
+    field: str, label: str, value: object
+):
+    # An unhashable value is never a valid identity/reference: validate_graph
+    # must fail closed with a structured error and never raise.
+    errors = validate_graph(_graph_with_malformed(field, value))
+    assert isinstance(errors, list), (field, label)
+    assert errors, (field, label)
+
+
+def test_graph_membership_totality_sweep_and_valid_behavior_preserved():
+    ref = dref("one")
+    # Valid positives are unchanged (no false errors introduced).
+    assert validate_graph([evaluation_event("root", ref)]) == []
+    assert validate_graph(chain_for(ref, "one")) == []
+    # Every membership-key field is total over every malformed JSON value:
+    # no raise, for both root and downstream positions.
+    for field in GRAPH_MEMBERSHIP_KEY_FIELDS:
+        for _, value in MALFORMED_GRAPH_VALUES:
+            errors = validate_graph(_graph_with_malformed(field, value))
+            assert isinstance(errors, list), (field, value)
+            # Unhashable values are invalid everywhere and must be rejected.
+            if not isinstance(value, (str, int, float, bool, type(None))):
+                assert errors, (field, value)
+    # Non-dict top-level events fail closed, never AttributeError.
+    assert validate_graph(["not-an-event"]) == ["EVENT_MALFORMED"]
+    assert validate_graph([["x"]]) == ["EVENT_MALFORMED"]
+    assert validate_graph([42, None]) == ["EVENT_MALFORMED", "EVENT_MALFORMED"]
+    # A truthy non-dict decision_ref does not crash (AttributeError) and the
+    # event fails closed.
+    bad_ref = evaluation_event("root", ref)
+    bad_ref["decision_ref"] = ["not", "a", "dict"]
+    assert validate_graph([bad_ref])
+    # Unknown but correctly typed event type returns the existing structured
+    # event-type failure, not a crash.
+    unknown_type = evaluation_event("root", ref)
+    unknown_type["event_type"] = "CHANGEGATE_NOT_A_REAL_TYPE"
+    assert "EVENT_MALFORMED" in validate_graph([unknown_type])
+    # Unknown but correctly typed predecessor id returns the existing
+    # missing-predecessor failure.
+    orphan = event(
+        "attempt",
+        "CHANGEGATE_MERGE_ATTEMPTED",
+        ref,
+        decision_ref=ref,
+        evaluation_event_ref="no-such-root",
+        outcome={"status": "SUCCESS", "detail_code": "OK"},
+    )
+    assert "PREDECESSOR_MISSING" in validate_graph([orphan])
+    # A malformed root identity is never registered as a key: a later valid
+    # root with a real evaluation_id is not falsely reported as a duplicate.
+    malformed_root = evaluation_event("root-bad", ref)
+    malformed_root["decision_ref"] = {**ref, "evaluation_id": {"bad": True}}
+    valid_root = evaluation_event("root-good", dref("two"))
+    combined = validate_graph([malformed_root, valid_root])
+    assert "EVALUATION_ID_MALFORMED" in combined
+    assert "EVALUATION_ID_DUPLICATE" not in combined
+    # An unhashable predecessor reference cannot corrupt cycle detection.
+    attempt_bad = event(
+        "attempt",
+        "CHANGEGATE_MERGE_ATTEMPTED",
+        ref,
+        decision_ref=ref,
+        evaluation_event_ref=["unhashable", "ref"],
+        outcome={"status": "SUCCESS", "detail_code": "OK"},
+    )
+    assert validate_graph([evaluation_event("root", ref), attempt_bad])
 
 
 # --- Owner decisions, manifest, fingerprint, and governance --------------------
