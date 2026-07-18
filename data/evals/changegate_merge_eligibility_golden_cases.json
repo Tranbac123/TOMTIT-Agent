@@ -1,7 +1,7 @@
 {
   "suite_id": "changegate_merge_eligibility_golden_cases",
   "schema_version": "changegate-merge-eligibility-golden.v8",
-  "status": "DRAFT_FOR_OWNER_REVIEW",
+  "status": "ACCEPTED_BY_OWNER",
   "description": "Golden evaluation cases for the ChangeGate Slice 1 merge-eligibility policy (R7, bounded structural closure of the Model B deterministic boundary per accepted OD-S1A-009). Slice 1A defines deterministic structural policy contracts only: the pure evaluator is the sole semantic producer of MergeEligibilityDecision and the PolicyEvaluationRecord payload; one replay key produces exactly one decision and one record; policy lineage is immutable; no replacement, override, exception, authorization, or active override/exception classification semantics exist in Slice 1A (all pending under OD-S1A-005 for a future governance slice). Slice 1A validation is structural: STRUCTURALLY_VALIDATED / IDENTITY_RECOMPUTED / SEMANTIC_REPLAY_NOT_PERFORMED; SEMANTICALLY_REPLAY_VERIFIED is Slice 1B protocol. Policy evaluation semantics (dispositions, reasons, precedence, golden outcomes) are byte-identical to v6. No production evaluator exists yet.",
   "policy_spec": "docs/strategy/CHANGEGATE_VERTICAL_MVP_SLICE_1_POLICY_SPEC.md",
   "policy_version_ref": "changegate-merge-eligibility-policy.v7-draft",
@@ -3736,6 +3736,23 @@
         "exact diagnostic code/path/keyword/message/order becomes externally normative",
         "direct admission of models, proxies, dataclasses, or custom mappings"
       ]
+    },
+    "accepted_candidate_sha": "01dd42fd2ec9546c7ebb31747ab6a0f192f46ac4",
+    "acceptance_record": {
+      "slice_1a_owner_acceptance": "ACCEPTED",
+      "accepted_candidate_sha": "01dd42fd2ec9546c7ebb31747ab6a0f192f46ac4",
+      "accepted_semantic_fingerprint": "sha256:4f3d73b4870ddc644bc55ec69bb7c77b0efc9cddf8f110a04f5522e25d2d7c0c",
+      "final_acceptance_status": "ACCEPTED_PENDING_EXACT_NO_SEMANTIC_CHANGE_VERIFY",
+      "verification_report_references": [
+        "REPORT_CHANGEGATE_SLICE_1A_R7_NC1_RUNTIME_AUTHORITY_CLARIFICATION.md",
+        "REPORT_SOL_HIGH_BOUNDED_SEMANTIC_VERIFY_CHANGEGATE_SLICE_1A_R7_NC1.md"
+      ],
+      "verifier_verdict": "SOL HIGH BOUNDED SEMANTIC VERIFY CHANGEGATE SLICE 1A R7-NC1: PASS_FOR_OWNER_ACCEPTANCE_RECORDING",
+      "functional_blockers_at_acceptance": 0,
+      "unresolved_functional_high_findings": 0,
+      "tracked_low_findings_at_acceptance": 1,
+      "merge_authorized": false,
+      "slice_1b_started": false
     }
   },
   "od_s1a_008_decision_record": {

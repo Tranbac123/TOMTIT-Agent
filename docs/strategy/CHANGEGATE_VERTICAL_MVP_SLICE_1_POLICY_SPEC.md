@@ -1,7 +1,7 @@
 # ChangeGate Vertical MVP Slice 1 — Merge Eligibility Policy
 
 Title: ChangeGate Vertical MVP Slice 1 — Merge Eligibility Policy
-Status: DRAFT_FOR_OWNER_REVIEW
+Status: ACCEPTED_BY_OWNER
 Owner: TranBac
 Technical Author: Claude Code Fable 5
 Independent Verification: PENDING
@@ -16,9 +16,10 @@ unchanged; supersedes R7 bounded structural-contract closure → R6 → R5 → R
 R1 → 07bc5b7be43a275c8484cdc633579ecfda657ffd)
 
 > This document is a specification-and-contract artifact only. It defines the deterministic
-> merge-eligibility policy contract for ChangeGate Slice 1. It implements nothing. It remains
-> `DRAFT_FOR_OWNER_REVIEW` until TranBac explicitly accepts it; no model is an acceptance
-> authority. Every semantic that the owner has not yet decided is marked
+> merge-eligibility policy contract for ChangeGate Slice 1. It implements nothing. TranBac
+> has accepted this spec as `ACCEPTED_BY_OWNER` per §27 (metadata-only acceptance patch,
+> pending exact no-semantic-change and merge-authorization verification); no model is an
+> acceptance authority. Every semantic that the owner has not yet decided is marked
 > `PENDING_OWNER_DECISION` in §25 and is NOT silently resolved here. Exactly one owner
 > decision is ACCEPTED: **OD-S1A-009** (§25.2), the Slice 1A deterministic-evaluation
 > boundary, which this revision implements.
