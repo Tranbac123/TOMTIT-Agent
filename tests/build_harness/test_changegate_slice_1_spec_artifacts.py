@@ -946,11 +946,14 @@ def chain_for(ref: dict, prefix: str) -> list[dict]:
     ]
 
 
-# --- Acceptance-governance state-transition oracle (R7-AG1 / OWNER_SCOPE_R7_04) -
+# --- Acceptance-governance state-transition oracle (R7-AG1C / OWNER_SCOPE_R7_04) -
 
 # Closed two-state acceptance-governance model: DRAFT_FOR_OWNER_REVIEW
 # (pre-acceptance) and ACCEPTED_BY_OWNER (post-owner-acceptance, still pending
-# exact no-semantic-change verify before merge). No third state is legal.
+# exact no-semantic-change verify before merge). No third state is legal. This
+# model, and every assertion derived from it, must never permanently require
+# the DRAFT_FOR_OWNER_REVIEW state: a legal metadata-only acceptance patch must
+# remain representable and acceptable to every committed test.
 DOCUMENT_STATUSES = ("DRAFT_FOR_OWNER_REVIEW", "ACCEPTED_BY_OWNER")
 
 # Exact closed field set for a final acceptance record (task §5.2). A record
@@ -973,6 +976,21 @@ ACCEPTED_SEMANTIC_CANDIDATE = "01dd42fd2ec9546c7ebb31747ab6a0f192f46ac4"
 ACCEPTED_SEMANTIC_FINGERPRINT_PENDING_STATUS = (
     "ACCEPTED_PENDING_EXACT_NO_SEMANTIC_CHANGE_VERIFY"
 )
+# Deterministic, exact required content for this specific accepted candidate.
+# A record for a different candidate/transition would need different exact
+# values; this oracle validates the one accepted transition, not a template.
+REQUIRED_VERIFICATION_REPORT_REFERENCES = (
+    "REPORT_CHANGEGATE_SLICE_1A_R7_NC1_RUNTIME_AUTHORITY_CLARIFICATION.md",
+    "REPORT_SOL_HIGH_BOUNDED_SEMANTIC_VERIFY_CHANGEGATE_SLICE_1A_R7_NC1.md",
+)
+REQUIRED_VERIFIER_VERDICT = (
+    "SOL HIGH BOUNDED SEMANTIC VERIFY CHANGEGATE SLICE 1A R7-NC1: "
+    "PASS_FOR_OWNER_ACCEPTANCE_RECORDING"
+)
+
+
+def _valid_nonnegative_int(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
 
 
 def acceptance_governance_state_errors(suite: dict) -> list[str]:
@@ -982,6 +1000,11 @@ def acceptance_governance_state_errors(suite: dict) -> list[str]:
     acceptance state; otherwise returns one or more structured contradiction
     codes. This is a governance-state consistency oracle only: it adds no new
     runtime or policy semantics.
+
+    Total over malformed JSON-compatible acceptance metadata: every field is
+    type-checked before being indexed, compared, or hashed, so a malformed
+    acceptance_record, owner-clarification entry, or field value fails closed
+    with a structured code instead of raising.
     """
     errors: list[str] = []
     status = suite.get("status")
@@ -1002,21 +1025,75 @@ def acceptance_governance_state_errors(suite: dict) -> list[str]:
             errors.append("ACCEPTED_WITHOUT_ACCEPTANCE_RECORD")
         if not has_sha:
             errors.append("ACCEPTED_WITHOUT_ACCEPTED_CANDIDATE_SHA")
-        if has_record and has_sha:
+        # The top-level accepted candidate must be the one accepted semantic
+        # candidate, not merely present: a wrong-but-synchronized SHA (any
+        # other real or arbitrary commit, including this oracle's own commit)
+        # must be rejected.
+        if has_sha and governance["accepted_candidate_sha"] != (
+            ACCEPTED_SEMANTIC_CANDIDATE
+        ):
+            errors.append("TOP_LEVEL_CANDIDATE_NOT_ACCEPTED_SEMANTIC_CANDIDATE")
+        if has_record:
             record = governance["acceptance_record"]
-            if set(record) != ACCEPTANCE_RECORD_FIELDS:
+            if not isinstance(record, dict):
+                errors.append("ACCEPTANCE_RECORD_NOT_AN_OBJECT")
+            elif set(record) != ACCEPTANCE_RECORD_FIELDS:
                 errors.append("ACCEPTANCE_RECORD_SHAPE_DRIFT")
             else:
                 if record["slice_1a_owner_acceptance"] != "ACCEPTED":
                     errors.append("ACCEPTANCE_RECORD_NOT_ACCEPTED")
-                if record["accepted_candidate_sha"] != governance[
+                if record["accepted_candidate_sha"] != ACCEPTED_SEMANTIC_CANDIDATE:
+                    errors.append(
+                        "RECORD_CANDIDATE_NOT_ACCEPTED_SEMANTIC_CANDIDATE"
+                    )
+                if has_sha and record["accepted_candidate_sha"] != governance[
                     "accepted_candidate_sha"
                 ]:
                     errors.append("ACCEPTED_CANDIDATE_MISMATCH")
-                if record["accepted_semantic_fingerprint"] != canonical_digest(
-                    suite["slice_1a_semantic_manifest"]
+                if (
+                    not isinstance(record["accepted_semantic_fingerprint"], str)
+                    or not record["accepted_semantic_fingerprint"]
+                    or record["accepted_semantic_fingerprint"]
+                    != canonical_digest(suite["slice_1a_semantic_manifest"])
                 ):
                     errors.append("ACCEPTED_FINGERPRINT_MISMATCH")
+                if record["final_acceptance_status"] != (
+                    ACCEPTED_SEMANTIC_FINGERPRINT_PENDING_STATUS
+                ):
+                    errors.append("FINAL_ACCEPTANCE_STATUS_INVALID")
+                if record["verification_report_references"] != list(
+                    REQUIRED_VERIFICATION_REPORT_REFERENCES
+                ):
+                    errors.append("VERIFICATION_REPORT_REFERENCES_INVALID")
+                if record["verifier_verdict"] != REQUIRED_VERIFIER_VERDICT:
+                    errors.append("VERIFIER_VERDICT_INVALID")
+                if (
+                    not _valid_nonnegative_int(
+                        record["functional_blockers_at_acceptance"]
+                    )
+                    or record["functional_blockers_at_acceptance"] != 0
+                ):
+                    errors.append("FUNCTIONAL_BLOCKERS_COUNT_INVALID")
+                if (
+                    not _valid_nonnegative_int(
+                        record["unresolved_functional_high_findings"]
+                    )
+                    or record["unresolved_functional_high_findings"] != 0
+                ):
+                    errors.append(
+                        "UNRESOLVED_FUNCTIONAL_HIGH_FINDINGS_COUNT_INVALID"
+                    )
+                if (
+                    not _valid_nonnegative_int(
+                        record["tracked_low_findings_at_acceptance"]
+                    )
+                    or record["tracked_low_findings_at_acceptance"] != 1
+                ):
+                    errors.append("TRACKED_LOW_FINDINGS_COUNT_INVALID")
+                if not isinstance(record["merge_authorized"], bool):
+                    errors.append("MERGE_AUTHORIZED_NOT_BOOLEAN")
+                if not isinstance(record["slice_1b_started"], bool):
+                    errors.append("SLICE_1B_STARTED_NOT_BOOLEAN")
                 if (
                     record["final_acceptance_status"]
                     == ACCEPTED_SEMANTIC_FINGERPRINT_PENDING_STATUS
@@ -1030,28 +1107,83 @@ def acceptance_governance_state_errors(suite: dict) -> list[str]:
                     errors.append("SLICE_1B_STARTED_BEFORE_MERGE_AUTHORIZATION")
 
     for entry in governance.get("owner_clarification_records", []):
+        if not isinstance(entry, dict):
+            errors.append("OWNER_CLARIFICATION_NOT_AN_OBJECT")
+            continue
         if entry.get("is_final_acceptance") is True:
             errors.append("OWNER_CLARIFICATION_MARKED_AS_FINAL_ACCEPTANCE")
-        if "accepted_candidate_sha" in entry:
+        # A clarification record must carry none of the final-acceptance
+        # record's fields: a final acceptance record must never be
+        # represented as (or hidden inside) an owner clarification record.
+        if ACCEPTANCE_RECORD_FIELDS & set(entry):
             errors.append("OWNER_CLARIFICATION_CONTAINS_ACCEPTANCE_RECORD_FIELDS")
     return errors
+
+
+def _valid_post_acceptance_suite(suite: dict) -> dict:
+    """Deep-copied suite transitioned in memory to the one legal accepted
+    state for the accepted semantic candidate. Never writes to the committed
+    fixture file. Shared by every test that needs a known-valid post-
+    acceptance baseline, so the required exact values are defined once.
+    """
+    accepted_fingerprint = canonical_digest(suite["slice_1a_semantic_manifest"])
+    accepted = copy.deepcopy(suite)
+    accepted["status"] = "ACCEPTED_BY_OWNER"
+    governance = accepted["acceptance_governance"]
+    governance["accepted_candidate_sha"] = ACCEPTED_SEMANTIC_CANDIDATE
+    governance["acceptance_record"] = {
+        "slice_1a_owner_acceptance": "ACCEPTED",
+        "accepted_candidate_sha": ACCEPTED_SEMANTIC_CANDIDATE,
+        "accepted_semantic_fingerprint": accepted_fingerprint,
+        "final_acceptance_status": ACCEPTED_SEMANTIC_FINGERPRINT_PENDING_STATUS,
+        "verification_report_references": list(
+            REQUIRED_VERIFICATION_REPORT_REFERENCES
+        ),
+        "verifier_verdict": REQUIRED_VERIFIER_VERDICT,
+        "functional_blockers_at_acceptance": 0,
+        "unresolved_functional_high_findings": 0,
+        "tracked_low_findings_at_acceptance": 1,
+        "merge_authorized": False,
+        "slice_1b_started": False,
+    }
+    return accepted
+
+
+def assert_fixture_version_status_and_case_shape(suite: dict) -> None:
+    """Full fixture-wide shape and acceptance-state invariants.
+
+    Legal for either governance state (DRAFT_FOR_OWNER_REVIEW or
+    ACCEPTED_BY_OWNER): every check here is validated through the closed
+    two-state oracle, never through a permanent pre-acceptance-only
+    assumption. A future legal metadata-only acceptance patch must continue
+    to satisfy this helper unchanged.
+    """
+    assert suite["schema_version"] == "changegate-merge-eligibility-golden.v8"
+    assert suite["status"] in DOCUMENT_STATUSES
+    assert acceptance_governance_state_errors(suite) == []
+    assert "slice_1a_semantic_manifest" in suite
+    cases = suite["cases"]
+    assert len(cases) == 41
+    assert len({item["case_id"] for item in cases}) == 41
+    for item in cases:
+        assert_case_shape(item)
 
 
 # --- Taxonomy, precedence, and oracle protections -----------------------------
 
 
 def test_fixture_version_status_and_case_shape_are_exact():
+    assert_fixture_version_status_and_case_shape(fixture())
+
+
+def test_pre_and_post_acceptance_fixtures_pass_full_shape_helper():
     suite = fixture()
-    assert suite["schema_version"] == "changegate-merge-eligibility-golden.v8"
-    assert suite["status"] in DOCUMENT_STATUSES
-    assert acceptance_governance_state_errors(suite) == []
-    # The currently committed candidate is pre-acceptance.
-    assert suite["status"] == "DRAFT_FOR_OWNER_REVIEW"
-    cases = suite["cases"]
-    assert len(cases) == 41
-    assert len({item["case_id"] for item in cases}) == 41
-    for item in cases:
-        assert_case_shape(item)
+    # Pre-acceptance: the currently committed fixture passes the full helper.
+    assert_fixture_version_status_and_case_shape(suite)
+    # Post-owner-acceptance: an in-memory constructed valid transition also
+    # passes the same full helper, unmodified — the helper never blocks the
+    # next legal metadata-only acceptance transition.
+    assert_fixture_version_status_and_case_shape(_valid_post_acceptance_suite(suite))
 
 
 def test_reason_taxonomy_is_closed_grammatical_and_classification_free():
@@ -2823,12 +2955,7 @@ def test_owner_clarification_and_final_acceptance_are_separate_governance_record
     assert record["clarification_status"] == (
         "OWNER_CLARIFICATION_IMPLEMENTED_PENDING_FRESH_VERIFICATION"
     )
-    # Pre-acceptance: final acceptance fields are absent from the committed
-    # candidate, and the state oracle accepts this as legal.
-    governance = suite["acceptance_governance"]
-    assert "accepted_candidate_sha" not in governance
-    assert "acceptance_record" not in governance
-    assert "final_acceptance_status" not in governance
+    # Whichever governance state the fixture is currently in, it is legal.
     assert acceptance_governance_state_errors(suite) == []
     # No owner-decision status was flipped to accepted beyond OD-S1A-009.
     accepted = [k for k, v in suite["owner_decision_statuses"].items()
@@ -2838,89 +2965,46 @@ def test_owner_clarification_and_final_acceptance_are_separate_governance_record
     # In-memory valid post-acceptance transition: the final acceptance record
     # exists and is internally consistent, separate from the owner
     # clarification record, without touching the semantic manifest.
-    accepted_suite = copy.deepcopy(suite)
-    accepted_fingerprint = canonical_digest(
-        accepted_suite["slice_1a_semantic_manifest"]
-    )
-    accepted_suite["status"] = "ACCEPTED_BY_OWNER"
+    accepted_suite = _valid_post_acceptance_suite(suite)
     accepted_governance = accepted_suite["acceptance_governance"]
-    accepted_governance["accepted_candidate_sha"] = ACCEPTED_SEMANTIC_CANDIDATE
-    accepted_governance["acceptance_record"] = {
-        "slice_1a_owner_acceptance": "ACCEPTED",
-        "accepted_candidate_sha": ACCEPTED_SEMANTIC_CANDIDATE,
-        "accepted_semantic_fingerprint": accepted_fingerprint,
-        "final_acceptance_status": ACCEPTED_SEMANTIC_FINGERPRINT_PENDING_STATUS,
-        "verification_report_references": [
-            "REPORT_CHANGEGATE_SLICE_1A_R7_NC1_RUNTIME_AUTHORITY_CLARIFICATION.md",
-            "REPORT_SOL_HIGH_BOUNDED_SEMANTIC_VERIFY_CHANGEGATE_SLICE_1A_R7_NC1.md",
-        ],
-        "verifier_verdict": (
-            "SOL HIGH BOUNDED SEMANTIC VERIFY CHANGEGATE SLICE 1A R7-NC1: "
-            "PASS_FOR_OWNER_ACCEPTANCE_RECORDING"
-        ),
-        "functional_blockers_at_acceptance": 0,
-        "unresolved_functional_high_findings": 0,
-        "tracked_low_findings_at_acceptance": 1,
-        "merge_authorized": False,
-        "slice_1b_started": False,
-    }
     assert acceptance_governance_state_errors(accepted_suite) == []
     # The owner clarification record is untouched and remains explicitly
     # non-final: it is a separate record type from the final acceptance record.
     still_clarification = accepted_governance["owner_clarification_records"][0]
     assert still_clarification == record
     assert still_clarification["is_final_acceptance"] is False
-    assert "accepted_candidate_sha" not in still_clarification
+    assert not (ACCEPTANCE_RECORD_FIELDS & set(still_clarification))
     # Candidate audit history remains a separate container from the final
     # acceptance record (neither absorbs the other).
     assert "verifier_history" in accepted_governance["audit_metadata"]
     assert "verifier_history" not in accepted_governance["acceptance_record"]
     assert "owner_decision" not in accepted_governance["acceptance_record"]
     # The metadata transition changes no semantic identity: manifest and
-    # fingerprint are byte-for-byte identical to the pre-acceptance suite.
+    # fingerprint are byte-for-byte identical to the pre-transition suite.
     assert (
         accepted_suite["slice_1a_semantic_manifest"]
         == suite["slice_1a_semantic_manifest"]
     )
-    assert accepted_fingerprint == canonical_digest(
-        suite["slice_1a_semantic_manifest"]
-    )
+    assert accepted_governance["acceptance_record"][
+        "accepted_semantic_fingerprint"
+    ] == canonical_digest(suite["slice_1a_semantic_manifest"])
 
 
 def test_contradictory_acceptance_states_fail_closed():
     suite = fixture()
-    accepted_fingerprint = canonical_digest(suite["slice_1a_semantic_manifest"])
 
-    def valid_post_acceptance() -> dict:
-        s = copy.deepcopy(suite)
-        s["status"] = "ACCEPTED_BY_OWNER"
-        gov = s["acceptance_governance"]
-        gov["accepted_candidate_sha"] = ACCEPTED_SEMANTIC_CANDIDATE
-        gov["acceptance_record"] = {
-            "slice_1a_owner_acceptance": "ACCEPTED",
-            "accepted_candidate_sha": ACCEPTED_SEMANTIC_CANDIDATE,
-            "accepted_semantic_fingerprint": accepted_fingerprint,
-            "final_acceptance_status": (
-                ACCEPTED_SEMANTIC_FINGERPRINT_PENDING_STATUS
-            ),
-            "verification_report_references": ["X.md"],
-            "verifier_verdict": "PASS",
-            "functional_blockers_at_acceptance": 0,
-            "unresolved_functional_high_findings": 0,
-            "tracked_low_findings_at_acceptance": 1,
-            "merge_authorized": False,
-            "slice_1b_started": False,
-        }
-        return s
-
-    # Sanity: the constructed valid baseline is accepted by the oracle.
-    assert acceptance_governance_state_errors(valid_post_acceptance()) == []
+    # Sanity: the shared constructed valid baseline is accepted by the oracle.
+    assert acceptance_governance_state_errors(
+        _valid_post_acceptance_suite(suite)
+    ) == []
 
     contradictions: dict[str, dict] = {}
 
     draft_with_record = copy.deepcopy(suite)
     draft_with_record["acceptance_governance"]["acceptance_record"] = (
-        valid_post_acceptance()["acceptance_governance"]["acceptance_record"]
+        _valid_post_acceptance_suite(suite)["acceptance_governance"][
+            "acceptance_record"
+        ]
     )
     contradictions["draft + acceptance_record present"] = draft_with_record
 
@@ -2930,29 +3014,29 @@ def test_contradictory_acceptance_states_fail_closed():
     )
     contradictions["draft + accepted_candidate_sha present"] = draft_with_sha
 
-    accepted_without_record = valid_post_acceptance()
+    accepted_without_record = _valid_post_acceptance_suite(suite)
     del accepted_without_record["acceptance_governance"]["acceptance_record"]
     contradictions["accepted + acceptance_record absent"] = accepted_without_record
 
-    accepted_without_sha = valid_post_acceptance()
+    accepted_without_sha = _valid_post_acceptance_suite(suite)
     del accepted_without_sha["acceptance_governance"]["accepted_candidate_sha"]
     contradictions["accepted + accepted_candidate_sha absent"] = (
         accepted_without_sha
     )
 
-    candidate_mismatch = valid_post_acceptance()
+    candidate_mismatch = _valid_post_acceptance_suite(suite)
     candidate_mismatch["acceptance_governance"]["acceptance_record"][
         "accepted_candidate_sha"
     ] = "0" * 40
     contradictions["accepted candidate mismatch"] = candidate_mismatch
 
-    fingerprint_mismatch = valid_post_acceptance()
+    fingerprint_mismatch = _valid_post_acceptance_suite(suite)
     fingerprint_mismatch["acceptance_governance"]["acceptance_record"][
         "accepted_semantic_fingerprint"
     ] = "sha256:" + "0" * 64
     contradictions["accepted fingerprint mismatch"] = fingerprint_mismatch
 
-    clarification_marked_final = valid_post_acceptance()
+    clarification_marked_final = _valid_post_acceptance_suite(suite)
     clarification_marked_final["acceptance_governance"][
         "owner_clarification_records"
     ][0]["is_final_acceptance"] = True
@@ -2960,7 +3044,7 @@ def test_contradictory_acceptance_states_fail_closed():
         clarification_marked_final
     )
 
-    final_as_clarification = valid_post_acceptance()
+    final_as_clarification = _valid_post_acceptance_suite(suite)
     final_as_clarification["acceptance_governance"][
         "owner_clarification_records"
     ].append(
@@ -2970,7 +3054,7 @@ def test_contradictory_acceptance_states_fail_closed():
         final_as_clarification
     )
 
-    merge_authorized_while_pending = valid_post_acceptance()
+    merge_authorized_while_pending = _valid_post_acceptance_suite(suite)
     merge_authorized_while_pending["acceptance_governance"]["acceptance_record"][
         "merge_authorized"
     ] = True
@@ -2978,7 +3062,7 @@ def test_contradictory_acceptance_states_fail_closed():
         merge_authorized_while_pending
     )
 
-    slice_1b_before_merge = valid_post_acceptance()
+    slice_1b_before_merge = _valid_post_acceptance_suite(suite)
     slice_1b_before_merge["acceptance_governance"]["acceptance_record"][
         "slice_1b_started"
     ] = True
@@ -2993,6 +3077,148 @@ def test_contradictory_acceptance_states_fail_closed():
     assert len(contradictions) == 11
     for label, mutated in contradictions.items():
         assert acceptance_governance_state_errors(mutated), label
+
+
+def test_acceptance_record_missing_and_extra_fields_fail_closed():
+    suite = fixture()
+    missing_cases = 0
+    for field in sorted(ACCEPTANCE_RECORD_FIELDS):
+        mutated = _valid_post_acceptance_suite(suite)
+        del mutated["acceptance_governance"]["acceptance_record"][field]
+        assert acceptance_governance_state_errors(mutated), field
+        missing_cases += 1
+    assert missing_cases == 11
+
+    extra = _valid_post_acceptance_suite(suite)
+    extra["acceptance_governance"]["acceptance_record"]["unexpected_field"] = "x"
+    assert acceptance_governance_state_errors(extra)
+
+
+def test_owner_clarification_records_reject_every_final_acceptance_field():
+    suite = fixture()
+    cases = 0
+    for field in sorted(ACCEPTANCE_RECORD_FIELDS):
+        mutated = _valid_post_acceptance_suite(suite)
+        value = mutated["acceptance_governance"]["acceptance_record"][field]
+        clarification = mutated["acceptance_governance"][
+            "owner_clarification_records"
+        ][0]
+        clarification[field] = value
+        assert acceptance_governance_state_errors(mutated), field
+        cases += 1
+    assert cases == 11
+
+
+def test_acceptance_record_malformed_values_fail_closed():
+    """Independently verified ≥64-case malformed-field/type matrix (H-R7AG1-V-02).
+
+    Every mutation must be rejected by acceptance_governance_state_errors
+    without raising: the oracle is total over malformed JSON-compatible
+    acceptance metadata.
+    """
+    suite = fixture()
+    total_cases = 0
+
+    def check(label: str, mutate) -> None:
+        nonlocal total_cases
+        total_cases += 1
+        mutated = _valid_post_acceptance_suite(suite)
+        mutate(mutated)
+        assert acceptance_governance_state_errors(mutated), label  # must not raise
+
+    # Non-object acceptance_record values (6 cases).
+    for bad_record in ([], "not-a-record", 42, 3.14, True, None):
+        check(
+            f"non-object acceptance_record: {bad_record!r}",
+            lambda s, v=bad_record: s["acceptance_governance"].__setitem__(
+                "acceptance_record", v
+            ),
+        )
+
+    # Synchronized wrong/non-string/empty candidate values (6 cases): rejected
+    # even though both locations agree with each other.
+    for bad_candidate in (12345, None, True, [], {}, ""):
+        def set_candidate(s, v=bad_candidate):
+            s["acceptance_governance"]["accepted_candidate_sha"] = v
+            s["acceptance_governance"]["acceptance_record"][
+                "accepted_candidate_sha"
+            ] = v
+
+        check(f"synchronized wrong candidate: {bad_candidate!r}", set_candidate)
+
+    # Non-boolean values for the two transition fields (12 cases).
+    for field in ("merge_authorized", "slice_1b_started"):
+        for bad_bool in (0, 1, "false", "true", [], {}):
+            check(
+                f"{field} non-boolean: {bad_bool!r}",
+                lambda s, f=field, v=bad_bool: s["acceptance_governance"][
+                    "acceptance_record"
+                ].__setitem__(f, v),
+            )
+
+    # Invalid count values across the three count fields (15 cases).
+    for field in (
+        "functional_blockers_at_acceptance",
+        "unresolved_functional_high_findings",
+        "tracked_low_findings_at_acceptance",
+    ):
+        for bad_count in (-1, True, "0", 3.14, None):
+            check(
+                f"{field} invalid count: {bad_count!r}",
+                lambda s, f=field, v=bad_count: s["acceptance_governance"][
+                    "acceptance_record"
+                ].__setitem__(f, v),
+            )
+
+    # Malformed verification_report_references shapes (6 cases).
+    bad_reference_shapes = (
+        "not-a-list",
+        [],
+        ["only-one.md"],
+        [*REQUIRED_VERIFICATION_REPORT_REFERENCES, "extra.md"],
+        list(reversed(REQUIRED_VERIFICATION_REPORT_REFERENCES)),
+        [REQUIRED_VERIFICATION_REPORT_REFERENCES[0]] * 2,
+    )
+    for bad_refs in bad_reference_shapes:
+        check(
+            f"malformed report references: {bad_refs!r}",
+            lambda s, v=bad_refs: s["acceptance_governance"]["acceptance_record"]
+            .__setitem__("verification_report_references", v),
+        )
+
+    # Malformed verifier_verdict values (5 cases).
+    for bad_verdict in ("", "WRONG", None, 42, []):
+        check(
+            f"malformed verifier_verdict: {bad_verdict!r}",
+            lambda s, v=bad_verdict: s["acceptance_governance"]["acceptance_record"]
+            .__setitem__("verifier_verdict", v),
+        )
+
+    # Malformed accepted_semantic_fingerprint values (5 cases).
+    for bad_fp in ("", "sha256:" + "0" * 64, None, 42, []):
+        check(
+            f"malformed fingerprint: {bad_fp!r}",
+            lambda s, v=bad_fp: s["acceptance_governance"]["acceptance_record"]
+            .__setitem__("accepted_semantic_fingerprint", v),
+        )
+
+    # Malformed slice_1a_owner_acceptance values (5 cases).
+    for bad_owner in ("", "PENDING", None, 42, []):
+        check(
+            f"malformed owner acceptance: {bad_owner!r}",
+            lambda s, v=bad_owner: s["acceptance_governance"]["acceptance_record"]
+            .__setitem__("slice_1a_owner_acceptance", v),
+        )
+
+    # Malformed final_acceptance_status values (5 cases).
+    for bad_status in ("", "SOMETHING_ELSE", None, 42, []):
+        check(
+            f"malformed final status: {bad_status!r}",
+            lambda s, v=bad_status: s["acceptance_governance"]["acceptance_record"]
+            .__setitem__("final_acceptance_status", v),
+        )
+
+    assert total_cases >= 64
 
 
 def test_boundary_re_review_rule_bound_and_triggers_neutral():
