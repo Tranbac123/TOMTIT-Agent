@@ -1110,8 +1110,13 @@ def acceptance_governance_state_errors(suite: dict) -> list[str]:
         if not isinstance(entry, dict):
             errors.append("OWNER_CLARIFICATION_NOT_AN_OBJECT")
             continue
-        if entry.get("is_final_acceptance") is True:
-            errors.append("OWNER_CLARIFICATION_MARKED_AS_FINAL_ACCEPTANCE")
+        # is_final_acceptance must be present and exactly the boolean False.
+        # `.get()` returns None for a missing key, so a missing marker also
+        # fails this check; `is not False` rejects every value that is not
+        # the literal bool False (True, None, 0, 1, "", "false", [], {}, ...)
+        # without relying on truthiness or `==` coercion.
+        if entry.get("is_final_acceptance") is not False:
+            errors.append("OWNER_CLARIFICATION_FINALITY_MARKER_INVALID")
         # A clarification record must carry none of the final-acceptance
         # record's fields: a final acceptance record must never be
         # represented as (or hidden inside) an owner clarification record.
@@ -3107,6 +3112,48 @@ def test_owner_clarification_records_reject_every_final_acceptance_field():
         assert acceptance_governance_state_errors(mutated), field
         cases += 1
     assert cases == 11
+
+
+def test_owner_clarification_finality_marker_must_be_exactly_false():
+    """is_final_acceptance must be present and exactly the boolean False
+    (H-R7AG1C-V-01). `.get()` returning None for a missing key must also
+    fail; no truthy/falsy substitute is accepted; only the literal False is.
+    """
+    suite = fixture()
+    invalid_markers = (
+        "missing",  # sentinel: delete the key entirely
+        True,
+        None,
+        0,
+        1,
+        "",
+        "false",
+        [],
+        {},
+    )
+    assert len(invalid_markers) == 9
+
+    invalid_cases = 0
+    for marker in invalid_markers:
+        mutated = _valid_post_acceptance_suite(suite)
+        clarification = mutated["acceptance_governance"][
+            "owner_clarification_records"
+        ][0]
+        if marker == "missing":
+            del clarification["is_final_acceptance"]
+        else:
+            clarification["is_final_acceptance"] = marker
+        errors = acceptance_governance_state_errors(mutated)  # must not raise
+        assert errors, marker
+        invalid_cases += 1
+    assert invalid_cases == 9
+
+    # Positive control: the exact literal False is accepted.
+    valid = _valid_post_acceptance_suite(suite)
+    valid["acceptance_governance"]["owner_clarification_records"][0][
+        "is_final_acceptance"
+    ] = False
+    assert acceptance_governance_state_errors(valid) == []
 
 
 def test_acceptance_record_malformed_values_fail_closed():
