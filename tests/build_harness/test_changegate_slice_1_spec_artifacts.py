@@ -2995,6 +2995,27 @@ def test_owner_clarification_and_final_acceptance_are_separate_governance_record
     ] == canonical_digest(suite["slice_1a_semantic_manifest"])
 
 
+def _draft_acceptance_baseline(suite: dict) -> dict:
+    """A state-independent DRAFT_FOR_OWNER_REVIEW baseline.
+
+    Forces status to draft AND strips both final-acceptance fields, so this
+    baseline is valid regardless of whether the source `suite` (e.g. the
+    result of `fixture()`) is itself currently pre- or post-acceptance. Using
+    only `mutated["status"] = "DRAFT_FOR_OWNER_REVIEW"` is insufficient: if
+    the source suite is already ACCEPTED_BY_OWNER, both
+    accepted_candidate_sha and acceptance_record would remain present,
+    silently turning a draft-state contradiction fixture into an internally
+    inconsistent (or, worse, accidentally-valid-looking) mutation instead of
+    the isolated single-field contradiction each case intends to construct.
+    """
+    mutated = copy.deepcopy(suite)
+    mutated["status"] = "DRAFT_FOR_OWNER_REVIEW"
+    governance = mutated["acceptance_governance"]
+    governance.pop("accepted_candidate_sha", None)
+    governance.pop("acceptance_record", None)
+    return mutated
+
+
 def test_contradictory_acceptance_states_fail_closed():
     suite = fixture()
 
@@ -3002,21 +3023,37 @@ def test_contradictory_acceptance_states_fail_closed():
     assert acceptance_governance_state_errors(
         _valid_post_acceptance_suite(suite)
     ) == []
+    # Sanity: the normalized draft baseline is itself legal (draft, both
+    # final-acceptance fields absent) regardless of the source suite's state.
+    assert acceptance_governance_state_errors(
+        _draft_acceptance_baseline(suite)
+    ) == []
 
     contradictions: dict[str, dict] = {}
 
-    draft_with_record = copy.deepcopy(suite)
+    # Isolated: draft status + ONLY acceptance_record present (no candidate
+    # SHA), built from the state-independent draft baseline so this case is
+    # identical whether `suite` itself is pre- or post-acceptance.
+    draft_with_record = _draft_acceptance_baseline(suite)
     draft_with_record["acceptance_governance"]["acceptance_record"] = (
         _valid_post_acceptance_suite(suite)["acceptance_governance"][
             "acceptance_record"
         ]
     )
+    assert acceptance_governance_state_errors(draft_with_record) == [
+        "DRAFT_WITH_ACCEPTANCE_RECORD_PRESENT"
+    ]
     contradictions["draft + acceptance_record present"] = draft_with_record
 
-    draft_with_sha = copy.deepcopy(suite)
+    # Isolated: draft status + ONLY accepted_candidate_sha present (no
+    # acceptance_record), from a fresh state-independent draft baseline.
+    draft_with_sha = _draft_acceptance_baseline(suite)
     draft_with_sha["acceptance_governance"]["accepted_candidate_sha"] = (
         ACCEPTED_SEMANTIC_CANDIDATE
     )
+    assert acceptance_governance_state_errors(draft_with_sha) == [
+        "DRAFT_WITH_ACCEPTED_CANDIDATE_SHA_PRESENT"
+    ]
     contradictions["draft + accepted_candidate_sha present"] = draft_with_sha
 
     accepted_without_record = _valid_post_acceptance_suite(suite)
