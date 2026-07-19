@@ -197,3 +197,121 @@ def test_identifier_universes_are_optional_and_enforced_when_supplied() -> None:
     assert validate_policy_evaluation_record(record, policy_input, universes)["errors"] == []
     rejected_universe = {**universes, "requirement_id_universe": ()}
     assert "IDENTIFIER_UNIVERSE_MISMATCH" in validate_policy_evaluation_record(record, identifier_universes=rejected_universe)["errors"]
+
+
+# CR1: adversarial matrices required by the fresh independent verification.
+_BINDING_FIELDS = (
+    "task_contract_digest", "candidate_digest", "repository_snapshot_digest",
+    "verification_bundle_digest", "approval_digest_or_sentinel",
+    "authority_binding_digest", "verifier_binding_digest", "policy_digest",
+)
+_SEMANTIC_FIELDS = (
+    "disposition", "decision_authority", "primary_reason_code",
+    "complete_reason_codes", "blocking_reason_codes", "review_reason_codes",
+    "required_requirement_ids", "satisfied_requirement_ids",
+    "invalid_requirement_ids", "missing_requirement_ids", "rejected_evidence_ids",
+    "invalid_provenance_evidence_ids", "unexpected_evidence_ids",
+)
+
+
+def _mutate_frozen(value: object, field: str, replacement: object) -> object:
+    object.__setattr__(value, field, replacement)
+    return value
+
+
+@pytest.mark.parametrize(
+    "field,replacement",
+    [
+        ("task_id", "other-task"),
+        *[(field, "sha256:" + "0" * 64) for field in _BINDING_FIELDS],
+        ("policy_version", "other-policy"),
+        ("evaluator_version", "other-evaluator"),
+        ("evaluation_mode", "SHADOW"),
+        ("input_digest", "sha256:" + "0" * 64),
+        ("primary_reason_code", "AUTHORITY_INVALID"),
+        ("complete_reason_codes", ("AUTHORITY_INVALID",)),
+        ("decision_digest", "sha256:" + "0" * 64),
+    ],
+)
+def test_builder_inconsistency_matrix(field: str, replacement: object) -> None:
+    policy_input, _core, decision, _record = _outputs(_CASES[0])
+    _mutate_frozen(decision, field, replacement)
+    with pytest.raises(RecordConstructionError):
+        build_policy_evaluation_record(policy_input, decision)
+
+
+def _tampered_record(case: dict, field: str, replacement: object):
+    _input_value, _core, _decision, record = _outputs(case)
+    return _mutate_frozen(record, field, replacement)
+
+
+_TAMPERS = [
+    ("shape-wrong-schema", "schema_version", "wrong-schema"),
+    ("shape-malformed-top", "task_id", 1),
+    *[(f"identity-{field}", field, "sha256:" + "f" * 64) for field in ("task_id", *_BINDING_FIELDS, "policy_version", "evaluator_version", "input_digest")],
+    ("identity-mode", "evaluation_mode", "SHADOW"),
+    *[(f"semantic-{field}", field, "AUTHORITY_INVALID") for field in _SEMANTIC_FIELDS],
+    ("canonical-list", "complete_reason_codes", []),
+    ("canonical-unsorted", "complete_reason_codes", ("SCOPE_UNCERTAIN", "AUTHORITY_INVALID")),
+    ("canonical-duplicate", "complete_reason_codes", ("AUTHORITY_INVALID", "AUTHORITY_INVALID")),
+    ("canonical-element", "complete_reason_codes", (1,)),
+    ("partition-overlap", "blocking_reason_codes", ("AUTHORITY_INVALID",)),
+    ("partition-incomplete", "review_reason_codes", ("SCOPE_UNCERTAIN",)),
+    ("primary-absent", "primary_reason_code", "AUTHORITY_INVALID"),
+    ("digest-decision", "decision_digest", "sha256:" + "0" * 64),
+    ("digest-record", "policy_record_digest", "sha256:" + "0" * 64),
+    ("digest-outer-rehash", "policy_record_digest", "sha256:" + "1" * 64),
+    ("digest-mixed-identity", "decision_digest", "sha256:" + "2" * 64),
+    ("shape-missing-emulation", "task_id", None),
+    ("shape-extra-emulation", "schema_version", "changegate.policy-evaluation-record.v1.extra"),
+    ("canonical-wrong-required-element", "required_requirement_ids", (1,)),
+    ("canonical-wrong-evidence-element", "unexpected_evidence_ids", (1,)),
+]
+
+
+@pytest.mark.parametrize("label,field,replacement", _TAMPERS)
+def test_complete_tamper_matrix(label: str, field: str, replacement: object) -> None:
+    policy_input, _core, _decision, _record = _outputs(_CASES[0])
+    candidate = _tampered_record(_CASES[0], field, replacement)
+    # Independent contract oracle: this is a changed stored field, so neither
+    # structural nor input-bound validation may classify it as clean.
+    assert candidate != _outputs(_CASES[0])[3], label
+    for result in (
+        validate_policy_evaluation_record(candidate),
+        validate_policy_evaluation_record(candidate, canonical_input=policy_input),
+    ):
+        assert result["errors"], label
+        assert result["classifications"] == [], label
+
+
+@pytest.mark.parametrize(
+    "malformed",
+    [None, True, 1, 1.0, "x", b"x", [], (), set(), {}, {1: "mixed"},
+     object(), type("RecordSubclass", (), {})(), {"nested": {}},
+     ["unhashable"], {"version": "bad"}, {"digest": "bad"},
+     {"items": ["z", "a"]}, {"items": ["a", "a"]}, {"items": [1]}],
+)
+def test_validator_totality_matrix(malformed: object) -> None:
+    try:
+        result = validate_policy_evaluation_record(malformed)
+    except (TypeError, KeyError, AttributeError, ValueError, AssertionError) as exc:
+        pytest.fail(f"raw validator exception: {type(exc).__name__}")
+    assert result["errors"]
+    assert result["classifications"] == []
+
+
+@pytest.mark.parametrize("case", _CASES, ids=lambda item: item["case_id"])
+def test_universe_and_determinism_matrices(case: dict) -> None:
+    policy_input, core, decision, record = _outputs(case)
+    universes = case["identifier_universes"]
+    before = json.dumps(universes, sort_keys=True)
+    assert validate_policy_evaluation_record(record, policy_input, universes)["errors"] == []
+    assert json.dumps(universes, sort_keys=True) == before
+    assert validate_policy_evaluation_record(record)["errors"] == []
+    assert finalize_decision(policy_input, core) == decision
+    assert build_policy_evaluation_record(policy_input, decision) == record
+    assert evaluate_merge_eligibility(policy_input) == (decision, record)
+    reversed_input = MergeEligibilityPolicyInput.from_json_dict(
+        dict(reversed(list({**case["policy_input_bindings"], "facts": case["policy_input_facts"], "policy_record_schema_version": POLICY_RECORD_SCHEMA_VERSION, "policy_record_schema_digest": POLICY_RECORD_SCHEMA_DIGEST, "canonicalization_version": CANONICALIZATION_VERSION, "canonicalization_contract_digest": CANONICALIZATION_CONTRACT_DIGEST}.items())))
+    )
+    assert evaluate_merge_eligibility(reversed_input) == (decision, record)
