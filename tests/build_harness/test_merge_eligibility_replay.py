@@ -9,6 +9,7 @@ from types import MappingProxyType
 
 import pytest
 
+from agent_core.build_harness.canonical import canonical_digest
 from agent_core.build_harness.merge_eligibility import (
     CANONICALIZATION_CONTRACT_DIGEST,
     CANONICALIZATION_VERSION,
@@ -76,6 +77,53 @@ def _registries():
 def _record(policy_input: MergeEligibilityPolicyInput, policy=MERGE_ELIGIBILITY_POLICY_V1):
     decision = finalize_decision(policy_input, evaluate_decision_core(policy_input, policy))
     return build_policy_evaluation_record(policy_input, decision)
+
+
+def _raw_record(policy_input: MergeEligibilityPolicyInput) -> dict:
+    record = _record(policy_input)
+    return {
+        **record.to_canonical_payload(),
+        "policy_record_digest": record.policy_record_digest,
+    }
+
+
+def _rehash_record(raw: dict) -> None:
+    raw["policy_record_digest"] = canonical_digest(
+        {key: value for key, value in raw.items() if key != "policy_record_digest"}
+    )
+
+
+def _multi_reason_input() -> MergeEligibilityPolicyInput:
+    return _input(
+        next(
+            case
+            for case in _CASES
+            if len(evaluate_decision_core(_input(case), MERGE_ELIGIBILITY_POLICY_V1).complete_reason_codes) >= 2
+        )
+    )
+
+
+class _LookupCounterPolicyRegistry:
+    def __init__(self) -> None:
+        self.resolve_calls = 0
+        self.version_checks = 0
+
+    def resolve(self, _identity: PolicyIdentity):
+        self.resolve_calls += 1
+        raise AssertionError("structurally invalid records must not resolve policy")
+
+    def has_version(self, _policy_version: str) -> bool:
+        self.version_checks += 1
+        raise AssertionError("structurally invalid records must not inspect policy versions")
+
+
+class _LookupCounterEvaluatorRegistry:
+    def __init__(self) -> None:
+        self.resolve_calls = 0
+
+    def resolve(self, _evaluator_version: str):
+        self.resolve_calls += 1
+        raise AssertionError("structurally invalid records must not resolve evaluators")
 
 
 def test_dual_policy_instances_are_distinct_and_semantically_equal() -> None:
@@ -159,23 +207,130 @@ def test_both_unknown_identities_use_policy_miss_precedence() -> None:
     assert not result.semantic_replay_performed
 
 
-def test_structural_invalidity_short_circuits_registry_lookup_and_evaluation() -> None:
-    policy_registry, evaluator_registry = _registries()
-    result = verify_semantic_replay(_input(_CASES[0]), {"invalid": "record"}, policy_registry, evaluator_registry)  # type: ignore[arg-type]
+@pytest.mark.parametrize(
+    "malformed",
+    [
+        pytest.param(lambda: (lambda raw: (raw.pop("task_id"), raw)[1])(_raw_record(_input(_CASES[0]))), id="field-set-drift"),
+        pytest.param(lambda: (lambda raw: (raw.__setitem__("policy_record_digest", "sha256:" + "z" * 64), raw)[1])(_raw_record(_input(_CASES[0]))), id="malformed-record-digest"),
+        pytest.param(
+            lambda: (lambda raw: (raw.__setitem__("decision_digest", "sha256:" + "0" * 64), _rehash_record(raw), raw)[2])(_raw_record(_input(_CASES[0]))),
+            id="decision-digest-not-derived",
+        ),
+        pytest.param(
+            lambda: (lambda raw: (raw.__setitem__("complete_reason_codes", list(reversed(raw["complete_reason_codes"]))), raw)[1])(_raw_record(_multi_reason_input())),
+            id="malformed-collection-ordering",
+        ),
+        pytest.param(lambda: [], id="malformed-top-level"),
+    ],
+)
+def test_structural_invalidity_short_circuits_all_registry_and_evaluator_work(malformed) -> None:
+    policy_registry = _LookupCounterPolicyRegistry()
+    evaluator_registry = _LookupCounterEvaluatorRegistry()
+    result = verify_semantic_replay(_input(_CASES[0]), malformed(), policy_registry, evaluator_registry)  # type: ignore[arg-type]
     assert result.classification is ReplayClassification.RECORD_STRUCTURALLY_INVALID
     assert not result.record_structurally_valid
     assert not result.policy_identity_resolved
     assert not result.semantic_replay_performed
+    assert policy_registry.resolve_calls == 0
+    assert policy_registry.version_checks == 0
+    assert evaluator_registry.resolve_calls == 0
 
 
 def test_input_binding_mismatch_short_circuits_replay() -> None:
     original = _input(_CASES[0])
     changed = dataclasses.replace(original, candidate_digest="sha256:" + "0" * 64)
-    policy_registry, evaluator_registry = _registries()
-    result = verify_semantic_replay(changed, _record(original), policy_registry, evaluator_registry)
+    policy_registry, _evaluator_registry = _registries()
+    calls = 0
+
+    def counted_evaluator(policy_input: MergeEligibilityPolicyInput, policy):
+        nonlocal calls
+        calls += 1
+        return evaluate_decision_core(policy_input, policy)
+
+    result = verify_semantic_replay(
+        changed,
+        _record(original),
+        policy_registry,
+        EvaluatorRegistry({_EVALUATOR_VERSION: counted_evaluator}),
+    )
     assert result.classification is ReplayClassification.INPUT_BINDING_MISMATCH
     assert result.record_structurally_valid
     assert not result.semantic_replay_performed
+    assert calls == 0
+
+
+def test_evaluator_disposition_drift_is_an_isolated_semantic_mismatch() -> None:
+    policy_input = _multi_reason_input()
+    policy_registry, _evaluator_registry = _registries()
+
+    def disposition_drift(policy_input: MergeEligibilityPolicyInput, policy):
+        core = evaluate_decision_core(policy_input, policy)
+        return dataclasses.replace(
+            core,
+            disposition=Disposition.ELIGIBLE_TO_MERGE_UNDER_POLICY,
+            primary_reason_code=None,
+            complete_reason_codes=(),
+            blocking_reason_codes=(),
+            review_reason_codes=(),
+        )
+
+    result = verify_semantic_replay(
+        policy_input,
+        _record(policy_input),
+        policy_registry,
+        EvaluatorRegistry({_EVALUATOR_VERSION: disposition_drift}),
+    )
+    assert result.classification is ReplayClassification.SEMANTIC_REPLAY_MISMATCH
+    assert "DISPOSITION_MISMATCH" in result.mismatch_codes
+    assert result.policy_identity_resolved and result.evaluator_identity_resolved
+    assert result.semantic_replay_performed
+
+
+def test_evaluator_reason_set_drift_is_an_isolated_semantic_mismatch() -> None:
+    policy_input = _multi_reason_input()
+    policy_registry, _evaluator_registry = _registries()
+
+    def reason_set_drift(policy_input: MergeEligibilityPolicyInput, policy):
+        core = evaluate_decision_core(policy_input, policy)
+        removed = next(code for code in core.complete_reason_codes if code != core.primary_reason_code)
+        return dataclasses.replace(
+            core,
+            complete_reason_codes=tuple(code for code in core.complete_reason_codes if code != removed),
+            blocking_reason_codes=tuple(code for code in core.blocking_reason_codes if code != removed),
+            review_reason_codes=tuple(code for code in core.review_reason_codes if code != removed),
+        )
+
+    result = verify_semantic_replay(
+        policy_input,
+        _record(policy_input),
+        policy_registry,
+        EvaluatorRegistry({_EVALUATOR_VERSION: reason_set_drift}),
+    )
+    assert result.classification is ReplayClassification.SEMANTIC_REPLAY_MISMATCH
+    assert "REASON_SET_MISMATCH" in result.mismatch_codes
+    assert result.policy_identity_resolved and result.evaluator_identity_resolved
+    assert result.semantic_replay_performed
+
+
+def test_evaluator_primary_reason_drift_is_an_isolated_semantic_mismatch() -> None:
+    policy_input = _multi_reason_input()
+    policy_registry, _evaluator_registry = _registries()
+
+    def primary_reason_drift(policy_input: MergeEligibilityPolicyInput, policy):
+        core = evaluate_decision_core(policy_input, policy)
+        replacement = next(code for code in core.complete_reason_codes if code != core.primary_reason_code)
+        return dataclasses.replace(core, primary_reason_code=replacement)
+
+    result = verify_semantic_replay(
+        policy_input,
+        _record(policy_input),
+        policy_registry,
+        EvaluatorRegistry({_EVALUATOR_VERSION: primary_reason_drift}),
+    )
+    assert result.classification is ReplayClassification.SEMANTIC_REPLAY_MISMATCH
+    assert "PRIMARY_REASON_MISMATCH" in result.mismatch_codes
+    assert result.policy_identity_resolved and result.evaluator_identity_resolved
+    assert result.semantic_replay_performed
 
 
 def test_wrapped_evaluator_semantic_drift_is_a_mismatch() -> None:
