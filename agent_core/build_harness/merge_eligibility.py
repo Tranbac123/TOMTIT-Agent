@@ -63,6 +63,9 @@ __all__ = [
     "CANONICALIZATION_VERSION",
     "CANONICALIZATION_CONTRACT_DIGEST",
     "INPUT_PAYLOAD_KIND",
+    "DecisionCore",
+    "MergeEligibilityEvaluationError",
+    "evaluate_decision_core",
 ]
 
 
@@ -1587,3 +1590,292 @@ MERGE_ELIGIBILITY_POLICY_V1 = MergeEligibilityPolicy(
     set_fact_triggers=_SET_FACT_TRIGGERS,
     verifier_rule=_VERIFIER_RULE,
 )
+
+
+# ---------------------------------------------------------------------------
+# Gate 1B-B — pure semantic evaluator (DecisionCore only)
+# ---------------------------------------------------------------------------
+#
+# This section produces ONLY the committed semantic decision result
+# (spec §7.2 semantic subset + §8 disposition/authority + §10/§16 precedence).
+# It attaches no identity, computes no digest, builds no record, and reads no
+# ambient state. Identity attachment, digests, the public decision model, and
+# the record are Gate 1B-C responsibilities.
+
+
+class MergeEligibilityEvaluationError(Exception):
+    """An impossible internal evaluator/policy state was reached (e.g. a
+    collected reason absent from the policy, a non-unique minimum precedence
+    rank, or an inconsistent partition). This is an internal fault — it is
+    never converted into a BLOCK/REVIEW_REQUIRED/ELIGIBLE policy outcome."""
+
+
+_ACCOUNTING_FIELDS: tuple[str, ...] = (
+    "required_requirement_ids",
+    "satisfied_requirement_ids",
+    "invalid_requirement_ids",
+    "missing_requirement_ids",
+    "rejected_evidence_ids",
+    "invalid_provenance_evidence_ids",
+    "unexpected_evidence_ids",
+)
+
+
+def _require_sorted_unique_code_tuple_core(
+    value: object, *, field: str
+) -> tuple[str, ...]:
+    """DecisionCore output-collection invariant: an exact tuple of non-empty
+    strings, lexicographically sorted and duplicate-free. A violation is an
+    internal fault, not malformed external input."""
+    if not is_exact_tuple(value):
+        raise MergeEligibilityEvaluationError(
+            f"DecisionCore.{field} must be a tuple, got {type(value).__name__}"
+        )
+    for index, item in enumerate(value):
+        if is_exact_bool(item) or not is_exact_str(item):
+            raise MergeEligibilityEvaluationError(
+                f"DecisionCore.{field}[{index}] must be a string, "
+                f"got {type(item).__name__}"
+            )
+        if not item:
+            raise MergeEligibilityEvaluationError(
+                f"DecisionCore.{field}[{index}] must be a non-empty string"
+            )
+    if list(value) != sorted(value):
+        raise MergeEligibilityEvaluationError(
+            f"DecisionCore.{field} must be lexicographically sorted"
+        )
+    if len(set(value)) != len(value):
+        raise MergeEligibilityEvaluationError(
+            f"DecisionCore.{field} must not contain duplicate entries"
+        )
+    return value
+
+
+@dataclass(frozen=True)
+class DecisionCore:
+    """The committed semantic decision result (spec §7.2 semantic subset).
+
+    Carries ONLY policy semantics: disposition, authority, the primary and
+    complete/partitioned reason codes, and the deterministic
+    requirement/evidence accounting echoes. It carries no task/source/policy/
+    evaluator identity, no ``input_digest``/``decision_digest``/record digest,
+    no timestamp, no trace id, and no Git SHA — those belong to Gate 1B-C."""
+
+    disposition: Disposition
+    decision_authority: DecisionAuthority
+    primary_reason_code: str | None
+    complete_reason_codes: tuple[str, ...]
+    blocking_reason_codes: tuple[str, ...]
+    review_reason_codes: tuple[str, ...]
+    required_requirement_ids: tuple[str, ...]
+    satisfied_requirement_ids: tuple[str, ...]
+    invalid_requirement_ids: tuple[str, ...]
+    missing_requirement_ids: tuple[str, ...]
+    rejected_evidence_ids: tuple[str, ...]
+    invalid_provenance_evidence_ids: tuple[str, ...]
+    unexpected_evidence_ids: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        if type(self.disposition) is not Disposition:  # noqa: E721
+            raise MergeEligibilityEvaluationError(
+                "DecisionCore.disposition must be a Disposition member"
+            )
+        if type(self.decision_authority) is not DecisionAuthority:  # noqa: E721
+            raise MergeEligibilityEvaluationError(
+                "DecisionCore.decision_authority must be a DecisionAuthority member"
+            )
+        if self.primary_reason_code is not None and (
+            is_exact_bool(self.primary_reason_code)
+            or not is_exact_str(self.primary_reason_code)
+        ):
+            raise MergeEligibilityEvaluationError(
+                "DecisionCore.primary_reason_code must be a string or None"
+            )
+
+        complete = _require_sorted_unique_code_tuple_core(
+            self.complete_reason_codes, field="complete_reason_codes"
+        )
+        blocking = _require_sorted_unique_code_tuple_core(
+            self.blocking_reason_codes, field="blocking_reason_codes"
+        )
+        review = _require_sorted_unique_code_tuple_core(
+            self.review_reason_codes, field="review_reason_codes"
+        )
+        for field_name in _ACCOUNTING_FIELDS:
+            _require_sorted_unique_code_tuple_core(
+                getattr(self, field_name), field=field_name
+            )
+
+        complete_set = set(complete)
+        blocking_set = set(blocking)
+        review_set = set(review)
+        if blocking_set & review_set:
+            raise MergeEligibilityEvaluationError(
+                "DecisionCore blocking and review partitions must be disjoint"
+            )
+        if not (blocking_set <= complete_set) or not (review_set <= complete_set):
+            raise MergeEligibilityEvaluationError(
+                "DecisionCore partitions must be subsets of the complete set"
+            )
+        if (blocking_set | review_set) != complete_set:
+            raise MergeEligibilityEvaluationError(
+                "DecisionCore blocking and review partitions must exactly "
+                "cover the complete reason set"
+            )
+
+        if self.primary_reason_code is None:
+            if complete:
+                raise MergeEligibilityEvaluationError(
+                    "DecisionCore.primary_reason_code may be None only when the "
+                    "complete reason set is empty"
+                )
+        else:
+            if not complete:
+                raise MergeEligibilityEvaluationError(
+                    "DecisionCore.primary_reason_code must be None when the "
+                    "complete reason set is empty"
+                )
+            if self.primary_reason_code not in complete_set:
+                raise MergeEligibilityEvaluationError(
+                    "DecisionCore.primary_reason_code must be a member of the "
+                    "complete reason set"
+                )
+
+        # Disposition is derived only from the partitions (spec §8).
+        if blocking:
+            expected = Disposition.BLOCK
+        elif review:
+            expected = Disposition.REVIEW_REQUIRED
+        else:
+            expected = Disposition.ELIGIBLE_TO_MERGE_UNDER_POLICY
+        if self.disposition is not expected:
+            raise MergeEligibilityEvaluationError(
+                "DecisionCore.disposition must be derived from the reason "
+                f"partitions (expected {expected.value}, got {self.disposition.value})"
+            )
+
+
+def evaluate_decision_core(
+    policy_input: MergeEligibilityPolicyInput,
+    policy: MergeEligibilityPolicy,
+) -> DecisionCore:
+    """Pure semantic evaluator: committed input facts + explicit policy →
+    :class:`DecisionCore`. Deterministic, side-effect free, and generic over
+    the supplied policy data (no implicit production-policy lookup, no default
+    policy, no ambient state). Reason semantics are read from the policy's own
+    mappings, never a duplicated evaluator table."""
+    if type(policy_input) is not MergeEligibilityPolicyInput:  # noqa: E721
+        raise MergeEligibilityEvaluationError(
+            "evaluate_decision_core requires a MergeEligibilityPolicyInput"
+        )
+    if type(policy) is not MergeEligibilityPolicy:  # noqa: E721
+        raise MergeEligibilityEvaluationError(
+            "evaluate_decision_core requires a MergeEligibilityPolicy"
+        )
+
+    facts = policy_input.facts
+    known_codes = {rd.code for rd in policy.reason_definitions}
+    rank_by_code = {rd.code: rd.precedence_rank for rd in policy.reason_definitions}
+    disposition_by_code = {
+        rd.code: rd.default_disposition for rd in policy.reason_definitions
+    }
+
+    reasons: set[str] = set()
+
+    # 1. Nine committed enum-fact mappings (policy-driven).
+    for fact_name, value_mapping in policy.enum_fact_reasons.items():
+        fact_value = getattr(facts, fact_name)
+        code = value_mapping[fact_value.value]
+        if code is not None:
+            reasons.add(code)
+
+    # 2. Evidence-context violation-tag mappings (policy-driven).
+    for tag in facts.evidence_context_violations:
+        code = policy.violation_tag_reasons[tag.value]
+        reasons.add(code)
+
+    # 3. Set-fact triggers: fire when the corresponding set is non-empty and
+    #    the policy assigns a code (policy-driven).
+    for fact_name, code in policy.set_fact_triggers.items():
+        if code is not None and len(getattr(facts, fact_name)) > 0:
+            reasons.add(code)
+
+    # 4. Ordered verifier identity × independence first-match rule (policy-driven).
+    verifier_code = policy.resolve_verifier_reason(
+        facts.verifier_identity_status.value,
+        facts.verifier_independence_status.value,
+    )
+    if verifier_code is not None:
+        reasons.add(verifier_code)
+
+    # Reason normalization + fail-closed on any code the policy does not define.
+    for code in reasons:
+        if code not in known_codes:
+            raise MergeEligibilityEvaluationError(
+                f"evaluator collected reason {code!r} absent from policy definitions"
+            )
+    complete = tuple(sorted(reasons))
+
+    blocking = tuple(
+        code for code in complete if disposition_by_code[code] is Disposition.BLOCK
+    )
+    review = tuple(
+        code
+        for code in complete
+        if disposition_by_code[code] is Disposition.REVIEW_REQUIRED
+    )
+    # Every reason must fall into exactly one partition; a reason whose policy
+    # default disposition is neither BLOCK nor REVIEW_REQUIRED is an impossible
+    # state (a "reason" that neither blocks nor reviews) → internal fault.
+    if len(blocking) + len(review) != len(complete):
+        raise MergeEligibilityEvaluationError(
+            "collected reason has a default disposition that is neither BLOCK "
+            "nor REVIEW_REQUIRED"
+        )
+
+    if blocking:
+        disposition = Disposition.BLOCK
+    elif review:
+        disposition = Disposition.REVIEW_REQUIRED
+    else:
+        disposition = Disposition.ELIGIBLE_TO_MERGE_UNDER_POLICY
+
+    if complete:
+        minimum_rank = min(rank_by_code[code] for code in complete)
+        primary_candidates = [
+            code for code in complete if rank_by_code[code] == minimum_rank
+        ]
+        if len(primary_candidates) != 1:
+            raise MergeEligibilityEvaluationError(
+                "primary reason selection is ambiguous: a non-unique minimum "
+                "precedence rank was reached"
+            )
+        primary_reason_code: str | None = primary_candidates[0]
+    else:
+        primary_reason_code = None
+
+    if policy_input.evaluation_mode is EvaluationMode.ENFORCE:
+        decision_authority = DecisionAuthority.AUTHORITATIVE
+    elif policy_input.evaluation_mode is EvaluationMode.SHADOW:
+        decision_authority = DecisionAuthority.ADVISORY_ONLY
+    else:  # pragma: no cover — evaluation_mode is a closed EvaluationMode enum
+        raise MergeEligibilityEvaluationError(
+            f"unsupported evaluation mode {policy_input.evaluation_mode!r}"
+        )
+
+    return DecisionCore(
+        disposition=disposition,
+        decision_authority=decision_authority,
+        primary_reason_code=primary_reason_code,
+        complete_reason_codes=complete,
+        blocking_reason_codes=blocking,
+        review_reason_codes=review,
+        required_requirement_ids=facts.required_requirement_ids,
+        satisfied_requirement_ids=facts.satisfied_requirement_ids,
+        invalid_requirement_ids=facts.invalid_requirement_ids,
+        missing_requirement_ids=facts.missing_requirement_ids,
+        rejected_evidence_ids=facts.rejected_evidence_ids,
+        invalid_provenance_evidence_ids=facts.invalid_provenance_evidence_ids,
+        unexpected_evidence_ids=facts.unexpected_evidence_ids,
+    )

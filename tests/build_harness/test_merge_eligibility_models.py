@@ -718,10 +718,12 @@ def test_no_forbidden_runtime_symbols_referenced() -> None:
 
 
 def test_module_source_defines_no_evaluator_or_record_symbols() -> None:
+    # "def evaluate_decision_core" and "class DecisionCore" were removed from
+    # this guard under OWNER_SCOPE_1BB_OS1: Gate 1B-B legitimately owns both
+    # symbols (pure semantic evaluator only). Every Gate 1B-C-or-later guard
+    # below is unchanged and still enforced.
     source = MODULE_PATH.read_text()
     prohibited_symbols = (
-        "def evaluate_decision_core",
-        "class DecisionCore",
         "class MergeEligibilityDecisionCore",
         "class MergeEligibilityDecision",
         "def finalize_decision",
