@@ -19,7 +19,7 @@ import re
 from dataclasses import dataclass
 from enum import StrEnum
 from types import MappingProxyType
-from typing import Any, Mapping
+from typing import Any, Mapping, TypeGuard
 
 from agent_core.build_harness.canonical import (
     P09BValidationError,
@@ -28,6 +28,7 @@ from agent_core.build_harness.canonical import (
     is_exact_dict,
     is_exact_list,
     is_exact_str,
+    is_exact_tuple,
     reject_control_characters,
 )
 
@@ -429,6 +430,90 @@ def _require_sorted_unique_enum_tuple(
     return tuple(_require_enum(item, enum_cls, field=f"{field}[]") for item in raw)
 
 
+# --- Strict direct-constructor validators ------------------------------------
+# Unlike the JSON-boundary helpers above (which accept a JSON list and
+# convert it), these validate an ALREADY-TYPED value for a direct/public
+# dataclass constructor (including ``dataclasses.replace``). They perform a
+# type check BEFORE any ``len``/iteration/membership operation, and they
+# never silently convert a list to a tuple: a caller-owned mutable
+# collection is rejected, not coerced, so no dataclass field can retain a
+# caller-owned alias.
+
+
+def _require_exact_enum_strict(value: object, enum_cls: type[StrEnum], *, field: str) -> Any:
+    if type(value) is not enum_cls:  # noqa: E721 — exact member only, no str coercion
+        raise MergeEligibilityInputError(
+            f"{field} must be a {enum_cls.__name__} instance, got {type(value).__name__}"
+        )
+    return value
+
+
+def _require_exact_sorted_unique_str_tuple_strict(
+    value: object, *, field: str
+) -> tuple[str, ...]:
+    if not is_exact_tuple(value):
+        raise MergeEligibilityInputError(
+            f"{field} must be a tuple, got {type(value).__name__}"
+        )
+    for index, item in enumerate(value):
+        if is_exact_bool(item) or not is_exact_str(item):
+            raise MergeEligibilityInputError(
+                f"{field}[{index}] must be a string, got {type(item).__name__}"
+            )
+        if not item:
+            raise MergeEligibilityInputError(
+                f"{field}[{index}] must be a non-empty string"
+            )
+        reject_control_characters(item, field=f"{field}[{index}]")
+    if list(value) != sorted(value):
+        raise MergeEligibilityInputError(f"{field} must be lexicographically sorted")
+    if len(set(value)) != len(value):
+        raise MergeEligibilityInputError(f"{field} must not contain duplicate entries")
+    return value
+
+
+def _require_exact_sorted_unique_enum_tuple_strict(
+    value: object, enum_cls: type[StrEnum], *, field: str
+) -> tuple[Any, ...]:
+    if not is_exact_tuple(value):
+        raise MergeEligibilityInputError(
+            f"{field} must be a tuple, got {type(value).__name__}"
+        )
+    for index, item in enumerate(value):
+        _require_exact_enum_strict(item, enum_cls, field=f"{field}[{index}]")
+    values = [item.value for item in value]
+    if values != sorted(values):
+        raise MergeEligibilityInputError(f"{field} must be lexicographically sorted")
+    if len(set(values)) != len(values):
+        raise MergeEligibilityInputError(f"{field} must not contain duplicate entries")
+    return value
+
+
+def _is_exact_mapping(value: object) -> TypeGuard[Mapping[Any, Any]]:
+    return is_exact_dict(value) or type(value) is MappingProxyType
+
+
+def _require_mapping_like(value: object, *, field: str) -> Mapping[Any, Any]:
+    if not _is_exact_mapping(value):
+        raise MergeEligibilityInputError(
+            f"{field} must be a mapping, got {type(value).__name__}"
+        )
+    return value
+
+
+def _require_tuple_or_list(value: object, *, field: str) -> tuple[Any, ...]:
+    """Accept an exact tuple (returned as-is, already immutable) or an exact
+    list (copied into a FRESH tuple so a caller-owned list can never alias
+    the stored field). Rejects everything else (notably ``None``)."""
+    if is_exact_tuple(value):
+        return value
+    if is_exact_list(value):
+        return tuple(value)
+    raise MergeEligibilityInputError(
+        f"{field} must be a tuple or list, got {type(value).__name__}"
+    )
+
+
 # ---------------------------------------------------------------------------
 # EligibilityFacts
 # ---------------------------------------------------------------------------
@@ -491,6 +576,77 @@ class EligibilityFacts:
     unexpected_evidence_ids: tuple[str, ...]
 
     def __post_init__(self) -> None:
+        # Strict per-field type validation FIRST: every field must be
+        # confirmed to be its exact declared type before any len/set/
+        # iteration/membership operation runs on it. This is what makes
+        # direct construction (and dataclasses.replace) total, not just
+        # from_json_dict. Collections must already be tuples — a caller-
+        # owned list/set/dict is rejected outright, never coerced, so no
+        # constructed EligibilityFacts can retain a mutable caller alias.
+        _require_exact_enum_strict(
+            self.task_context_current, TaskContextCurrency, field="facts.task_context_current"
+        )
+        _require_exact_enum_strict(
+            self.candidate_binding_current,
+            CandidateBindingCurrency,
+            field="facts.candidate_binding_current",
+        )
+        _require_exact_enum_strict(
+            self.repository_snapshot_current,
+            RepositorySnapshotCurrency,
+            field="facts.repository_snapshot_current",
+        )
+        _require_exact_enum_strict(
+            self.repository_release_clean,
+            ReleaseCleanliness,
+            field="facts.repository_release_clean",
+        )
+        _require_exact_enum_strict(
+            self.policy_context_current, PolicyContextCurrency, field="facts.policy_context_current"
+        )
+        _require_exact_enum_strict(
+            self.evidence_context_status, EvidenceContextStatus, field="facts.evidence_context_status"
+        )
+        _require_exact_sorted_unique_enum_tuple_strict(
+            self.evidence_context_violations,
+            EvidenceContextViolation,
+            field="facts.evidence_context_violations",
+        )
+        _require_exact_enum_strict(self.scope_status, ScopeStatus, field="facts.scope_status")
+        _require_exact_enum_strict(self.approval_status, ApprovalStatus, field="facts.approval_status")
+        _require_exact_enum_strict(self.authority_status, AuthorityStatus, field="facts.authority_status")
+        _require_exact_enum_strict(
+            self.verifier_identity_status,
+            VerifierIdentityStatus,
+            field="facts.verifier_identity_status",
+        )
+        _require_exact_enum_strict(
+            self.verifier_independence_status,
+            VerifierIndependenceStatus,
+            field="facts.verifier_independence_status",
+        )
+        _require_exact_sorted_unique_str_tuple_strict(
+            self.required_requirement_ids, field="facts.required_requirement_ids"
+        )
+        _require_exact_sorted_unique_str_tuple_strict(
+            self.satisfied_requirement_ids, field="facts.satisfied_requirement_ids"
+        )
+        _require_exact_sorted_unique_str_tuple_strict(
+            self.invalid_requirement_ids, field="facts.invalid_requirement_ids"
+        )
+        _require_exact_sorted_unique_str_tuple_strict(
+            self.missing_requirement_ids, field="facts.missing_requirement_ids"
+        )
+        _require_exact_sorted_unique_str_tuple_strict(
+            self.rejected_evidence_ids, field="facts.rejected_evidence_ids"
+        )
+        _require_exact_sorted_unique_str_tuple_strict(
+            self.invalid_provenance_evidence_ids, field="facts.invalid_provenance_evidence_ids"
+        )
+        _require_exact_sorted_unique_str_tuple_strict(
+            self.unexpected_evidence_ids, field="facts.unexpected_evidence_ids"
+        )
+
         # Violation coherence: non-empty exactly when INCOHERENT.
         is_incoherent = self.evidence_context_status is EvidenceContextStatus.INCOHERENT
         has_violations = len(self.evidence_context_violations) > 0
@@ -707,6 +863,47 @@ class MergeEligibilityPolicyInput:
     facts: EligibilityFacts
 
     def __post_init__(self) -> None:
+        # Strict validation of all 17 committed fields — not only the four
+        # binding constants — so direct construction and
+        # dataclasses.replace() are as total as from_json_dict().
+        _require_task_id(self.task_id, field="task_id")
+        _require_digest(self.task_contract_digest, field="task_contract_digest")
+        _require_digest(self.candidate_digest, field="candidate_digest")
+        _require_digest(
+            self.repository_snapshot_digest, field="repository_snapshot_digest"
+        )
+        _require_digest(
+            self.verification_bundle_digest, field="verification_bundle_digest"
+        )
+        _require_digest_or_sentinel(
+            self.approval_digest_or_sentinel, field="approval_digest_or_sentinel"
+        )
+        _require_digest(
+            self.authority_binding_digest, field="authority_binding_digest"
+        )
+        _require_digest(self.verifier_binding_digest, field="verifier_binding_digest")
+        _require_digest(self.policy_digest, field="policy_digest")
+        _require_version(self.policy_version, field="policy_version")
+        _require_version(self.evaluator_version, field="evaluator_version")
+        _require_exact_enum_strict(
+            self.evaluation_mode, EvaluationMode, field="evaluation_mode"
+        )
+        _require_str(
+            self.policy_record_schema_version, field="policy_record_schema_version"
+        )
+        _require_digest(
+            self.policy_record_schema_digest, field="policy_record_schema_digest"
+        )
+        _require_str(self.canonicalization_version, field="canonicalization_version")
+        _require_digest(
+            self.canonicalization_contract_digest,
+            field="canonicalization_contract_digest",
+        )
+        if type(self.facts) is not EligibilityFacts:  # noqa: E721
+            raise MergeEligibilityInputError(
+                f"facts must be an EligibilityFacts instance, got {type(self.facts).__name__}"
+            )
+
         if self.policy_record_schema_version != POLICY_RECORD_SCHEMA_VERSION:
             raise MergeEligibilityInputError(
                 "policy_record_schema_version must equal the committed constant "
@@ -895,11 +1092,11 @@ class ReasonDefinition:
             raise MergeEligibilityInputError(
                 "ReasonDefinition.precedence_rank must be positive"
             )
-        if self.category not in _REASON_CATEGORIES:
+        if not is_exact_str(self.category) or self.category not in _REASON_CATEGORIES:
             raise MergeEligibilityInputError(
                 f"ReasonDefinition.category {self.category!r} is not a committed category"
             )
-        if self.kind not in _REASON_KINDS:
+        if not is_exact_str(self.kind) or self.kind not in _REASON_KINDS:
             raise MergeEligibilityInputError(
                 f"ReasonDefinition.kind {self.kind!r} is not a committed kind"
             )
@@ -927,14 +1124,37 @@ class VerifierRuleRow:
     reason: str | None
 
     def __post_init__(self) -> None:
+        # Type-check BEFORE iterating: an unchecked ``for value in
+        # self.identity`` raises a raw TypeError on any non-iterable
+        # (e.g. an int) and silently accepts/retains any caller-owned
+        # mutable list. Wildcard (``None``) is the only accepted non-tuple.
         if self.identity is not None:
-            for value in self.identity:
-                _require_enum(value, VerifierIdentityStatus, field="verifier_rule.identity[]")
-        if self.independence is not None:
-            for value in self.independence:
-                _require_enum(
-                    value, VerifierIndependenceStatus, field="verifier_rule.independence[]"
+            if not is_exact_tuple(self.identity):
+                raise MergeEligibilityInputError(
+                    f"verifier_rule.identity must be a tuple or None, got "
+                    f"{type(self.identity).__name__}"
                 )
+            for index, value in enumerate(self.identity):
+                _require_enum(
+                    value, VerifierIdentityStatus, field=f"verifier_rule.identity[{index}]"
+                )
+        if self.independence is not None:
+            if not is_exact_tuple(self.independence):
+                raise MergeEligibilityInputError(
+                    f"verifier_rule.independence must be a tuple or None, got "
+                    f"{type(self.independence).__name__}"
+                )
+            for index, value in enumerate(self.independence):
+                _require_enum(
+                    value,
+                    VerifierIndependenceStatus,
+                    field=f"verifier_rule.independence[{index}]",
+                )
+        if self.reason is not None and not is_exact_str(self.reason):
+            raise MergeEligibilityInputError(
+                f"verifier_rule.reason must be a string or None, got "
+                f"{type(self.reason).__name__}"
+            )
 
     def matches(self, identity: str, independence: str) -> bool:
         identity_ok = self.identity is None or identity in self.identity
@@ -958,6 +1178,154 @@ _ENUM_FACT_FIELDS: Mapping[str, type[StrEnum]] = MappingProxyType(
 _SET_FACT_FIELDS = frozenset({*_REQUIREMENT_SET_FIELDS, *_EVIDENCE_SET_FIELDS})
 
 
+# --- MergeEligibilityPolicy deep validation / defensive-copy helpers --------
+# Each function: (1) validates the caller-supplied value's type before any
+# len/iteration/membership operation; (2) builds a brand-new immutable
+# structure from it; (3) never returns or retains the caller's own mutable
+# object. __post_init__ stores only what these functions return.
+
+
+def _validate_reason_definitions(value: object) -> tuple["ReasonDefinition", ...]:
+    items = _require_tuple_or_list(
+        value, field="MergeEligibilityPolicy.reason_definitions"
+    )
+    for index, item in enumerate(items):
+        if type(item) is not ReasonDefinition:  # noqa: E721
+            raise MergeEligibilityInputError(
+                f"MergeEligibilityPolicy.reason_definitions[{index}] must be a "
+                f"ReasonDefinition, got {type(item).__name__}"
+            )
+    return tuple(items)
+
+
+def _validate_verifier_rule(value: object) -> tuple["VerifierRuleRow", ...]:
+    items = _require_tuple_or_list(value, field="MergeEligibilityPolicy.verifier_rule")
+    for index, item in enumerate(items):
+        if type(item) is not VerifierRuleRow:  # noqa: E721
+            raise MergeEligibilityInputError(
+                f"MergeEligibilityPolicy.verifier_rule[{index}] must be a "
+                f"VerifierRuleRow, got {type(item).__name__}"
+            )
+    return tuple(items)
+
+
+def _validate_enum_fact_reasons(
+    value: object, known_codes: frozenset[str]
+) -> Mapping[str, Mapping[str, str | None]]:
+    top = _require_mapping_like(value, field="MergeEligibilityPolicy.enum_fact_reasons")
+    if set(top.keys()) != set(_ENUM_FACT_FIELDS):
+        raise MergeEligibilityInputError(
+            "MergeEligibilityPolicy.enum_fact_reasons must have exactly the "
+            "committed 9 enum-fact keys (missing or extra row)"
+        )
+    frozen_rows: dict[str, Mapping[str, str | None]] = {}
+    for fact_name, enum_cls in _ENUM_FACT_FIELDS.items():
+        row = _require_mapping_like(
+            top[fact_name], field=f"MergeEligibilityPolicy.enum_fact_reasons[{fact_name!r}]"
+        )
+        expected_values = {member.value for member in enum_cls}
+        if set(row.keys()) != expected_values:
+            raise MergeEligibilityInputError(
+                f"MergeEligibilityPolicy.enum_fact_reasons[{fact_name!r}] must "
+                "be total over the closed enum domain (missing or extra value)"
+            )
+        fresh_row: dict[str, str | None] = {}
+        for key, reason_code in row.items():
+            if not is_exact_str(key):
+                raise MergeEligibilityInputError(
+                    f"MergeEligibilityPolicy.enum_fact_reasons[{fact_name!r}] key "
+                    f"must be a string, got {type(key).__name__}"
+                )
+            if reason_code is not None:
+                if not is_exact_str(reason_code):
+                    raise MergeEligibilityInputError(
+                        f"MergeEligibilityPolicy.enum_fact_reasons[{fact_name!r}]"
+                        f"[{key!r}] must be a string or None"
+                    )
+                if reason_code not in known_codes:
+                    raise MergeEligibilityInputError(
+                        f"MergeEligibilityPolicy.enum_fact_reasons[{fact_name!r}] "
+                        f"references unknown reason code {reason_code!r}"
+                    )
+            fresh_row[key] = reason_code
+        frozen_rows[fact_name] = MappingProxyType(fresh_row)
+    return MappingProxyType(frozen_rows)
+
+
+def _validate_violation_tag_reasons(
+    value: object, known_codes: frozenset[str]
+) -> Mapping[str, str]:
+    top = _require_mapping_like(
+        value, field="MergeEligibilityPolicy.violation_tag_reasons"
+    )
+    expected_keys = {member.value for member in EvidenceContextViolation}
+    if set(top.keys()) != expected_keys:
+        raise MergeEligibilityInputError(
+            "MergeEligibilityPolicy.violation_tag_reasons must be total over "
+            "the closed violation-tag domain (missing or extra row)"
+        )
+    fresh: dict[str, str] = {}
+    for key, reason_code in top.items():
+        if not is_exact_str(key):
+            raise MergeEligibilityInputError(
+                f"MergeEligibilityPolicy.violation_tag_reasons key must be a "
+                f"string, got {type(key).__name__}"
+            )
+        if not is_exact_str(reason_code):
+            raise MergeEligibilityInputError(
+                f"MergeEligibilityPolicy.violation_tag_reasons[{key!r}] must be "
+                f"a string, got {type(reason_code).__name__}"
+            )
+        if reason_code not in known_codes:
+            raise MergeEligibilityInputError(
+                "MergeEligibilityPolicy.violation_tag_reasons references "
+                f"unknown reason code {reason_code!r}"
+            )
+        fresh[key] = reason_code
+    return MappingProxyType(fresh)
+
+
+def _validate_set_fact_triggers(
+    value: object, known_codes: frozenset[str]
+) -> Mapping[str, str | None]:
+    top = _require_mapping_like(value, field="MergeEligibilityPolicy.set_fact_triggers")
+    if set(top.keys()) != _SET_FACT_FIELDS:
+        raise MergeEligibilityInputError(
+            "MergeEligibilityPolicy.set_fact_triggers must have exactly the "
+            "committed 7 set-fact keys (missing or extra row)"
+        )
+    fresh: dict[str, str | None] = {}
+    for key, reason_code in top.items():
+        if not is_exact_str(key):
+            raise MergeEligibilityInputError(
+                f"MergeEligibilityPolicy.set_fact_triggers key must be a "
+                f"string, got {type(key).__name__}"
+            )
+        if reason_code is not None:
+            if not is_exact_str(reason_code):
+                raise MergeEligibilityInputError(
+                    f"MergeEligibilityPolicy.set_fact_triggers[{key!r}] must be "
+                    f"a string or None, got {type(reason_code).__name__}"
+                )
+            if reason_code not in known_codes:
+                raise MergeEligibilityInputError(
+                    "MergeEligibilityPolicy.set_fact_triggers references "
+                    f"unknown reason code {reason_code!r}"
+                )
+        fresh[key] = reason_code
+    return MappingProxyType(fresh)
+
+
+def _verifier_rule_covers_all_combinations(rule: tuple["VerifierRuleRow", ...]) -> bool:
+    for identity in VerifierIdentityStatus:
+        for independence in VerifierIndependenceStatus:
+            if not any(
+                row.matches(identity.value, independence.value) for row in rule
+            ):
+                return False
+    return True
+
+
 @dataclass(frozen=True)
 class MergeEligibilityPolicy:
     """Frozen, fingerprint-bound policy-semantic data. Carries its own
@@ -978,84 +1346,51 @@ class MergeEligibilityPolicy:
                 "MergeEligibilityPolicy.declared_identity must be a PolicyIdentity"
             )
 
-        codes = [r.code for r in self.reason_definitions]
+        # Every collection field is independently validated, then a FRESH
+        # immutable structure is built from it (never the caller's own
+        # object). This closes both the raw-exception gap (type-checked
+        # before any len/set/iteration) and the aliasing gap (the stored
+        # field can never be the same mutable object the caller still
+        # holds a reference to) in one pass.
+        reason_definitions = _validate_reason_definitions(self.reason_definitions)
+        codes = [r.code for r in reason_definitions]
         if len(set(codes)) != len(codes):
             raise MergeEligibilityInputError(
                 "MergeEligibilityPolicy: duplicate reason code in reason_definitions"
             )
-        ranks = [r.precedence_rank for r in self.reason_definitions]
+        ranks = [r.precedence_rank for r in reason_definitions]
         if len(set(ranks)) != len(ranks):
             raise MergeEligibilityInputError(
                 "MergeEligibilityPolicy: duplicate precedence_rank in reason_definitions"
             )
         known_codes = frozenset(codes)
 
-        if set(self.enum_fact_reasons) != set(_ENUM_FACT_FIELDS):
-            raise MergeEligibilityInputError(
-                "MergeEligibilityPolicy.enum_fact_reasons must have exactly the "
-                "committed 9 enum-fact keys (missing or extra row)"
-            )
-        for fact_name, enum_cls in _ENUM_FACT_FIELDS.items():
-            mapping = self.enum_fact_reasons[fact_name]
-            expected_values = {member.value for member in enum_cls}
-            if set(mapping) != expected_values:
-                raise MergeEligibilityInputError(
-                    f"MergeEligibilityPolicy.enum_fact_reasons[{fact_name!r}] must "
-                    "be total over the closed enum domain (missing or extra value)"
-                )
-            for reason_code in mapping.values():
-                if reason_code is not None and reason_code not in known_codes:
-                    raise MergeEligibilityInputError(
-                        f"MergeEligibilityPolicy.enum_fact_reasons[{fact_name!r}] "
-                        f"references unknown reason code {reason_code!r}"
-                    )
-
-        expected_violation_tags = {member.value for member in EvidenceContextViolation}
-        if set(self.violation_tag_reasons) != expected_violation_tags:
-            raise MergeEligibilityInputError(
-                "MergeEligibilityPolicy.violation_tag_reasons must be total over "
-                "the closed violation-tag domain (missing or extra row)"
-            )
-        for reason_code in self.violation_tag_reasons.values():
-            if reason_code not in known_codes:
-                raise MergeEligibilityInputError(
-                    "MergeEligibilityPolicy.violation_tag_reasons references "
-                    f"unknown reason code {reason_code!r}"
-                )
-
-        if set(self.set_fact_triggers) != _SET_FACT_FIELDS:
-            raise MergeEligibilityInputError(
-                "MergeEligibilityPolicy.set_fact_triggers must have exactly the "
-                "committed 7 set-fact keys (missing or extra row)"
-            )
-        for reason_code in self.set_fact_triggers.values():
-            if reason_code is not None and reason_code not in known_codes:
-                raise MergeEligibilityInputError(
-                    "MergeEligibilityPolicy.set_fact_triggers references unknown "
-                    f"reason code {reason_code!r}"
-                )
-
-        if not self._verifier_rule_is_total():
-            raise MergeEligibilityInputError(
-                "MergeEligibilityPolicy.verifier_rule must resolve all 12 "
-                "identity x independence combinations via first match"
-            )
-        for row in self.verifier_rule:
+        enum_fact_reasons = _validate_enum_fact_reasons(self.enum_fact_reasons, known_codes)
+        violation_tag_reasons = _validate_violation_tag_reasons(
+            self.violation_tag_reasons, known_codes
+        )
+        set_fact_triggers = _validate_set_fact_triggers(self.set_fact_triggers, known_codes)
+        verifier_rule = _validate_verifier_rule(self.verifier_rule)
+        for row in verifier_rule:
             if row.reason is not None and row.reason not in known_codes:
                 raise MergeEligibilityInputError(
                     f"MergeEligibilityPolicy.verifier_rule references unknown "
                     f"reason code {row.reason!r}"
                 )
+        if not _verifier_rule_covers_all_combinations(verifier_rule):
+            raise MergeEligibilityInputError(
+                "MergeEligibilityPolicy.verifier_rule must resolve all 12 "
+                "identity x independence combinations via first match"
+            )
 
-    def _verifier_rule_is_total(self) -> bool:
-        for identity in VerifierIdentityStatus:
-            for independence in VerifierIndependenceStatus:
-                if not any(
-                    row.matches(identity.value, independence.value)
-                    for row in self.verifier_rule
-                ):
-                    return False
-        return True
+        # Replace every caller-supplied collection with the freshly built,
+        # deeply immutable equivalent — the only structures reachable from
+        # ``self`` after construction.
+        object.__setattr__(self, "reason_definitions", reason_definitions)
+        object.__setattr__(self, "enum_fact_reasons", enum_fact_reasons)
+        object.__setattr__(self, "violation_tag_reasons", violation_tag_reasons)
+        object.__setattr__(self, "set_fact_triggers", set_fact_triggers)
+        object.__setattr__(self, "verifier_rule", verifier_rule)
 
     def resolve_verifier_reason(self, identity: str, independence: str) -> str | None:
         """First-match resolution over the ordered rule table (structural

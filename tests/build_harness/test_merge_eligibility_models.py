@@ -24,6 +24,7 @@ from agent_core.build_harness.merge_eligibility import (
     CandidateBindingCurrency,
     EligibilityFacts,
     EvidenceContextStatus,
+    EvidenceContextViolation,
     EvaluatorIdentity,
     INPUT_PAYLOAD_KIND,
     MERGE_ELIGIBILITY_POLICY_V1,
@@ -626,7 +627,7 @@ def test_extra_policy_mapping_row_rejected() -> None:
 
 
 def test_malformed_declared_identity_missing() -> None:
-    with pytest.raises((MergeEligibilityInputError, TypeError)):
+    with pytest.raises(MergeEligibilityInputError):
         dataclasses.replace(MERGE_ELIGIBILITY_POLICY_V1, declared_identity=None)
 
 
@@ -758,3 +759,348 @@ def test_construction_produces_no_mutable_collection_exposure() -> None:
     )
     assert isinstance(inp.facts.required_requirement_ids, tuple)
     assert isinstance(inp.facts.evidence_context_violations, tuple)
+
+
+# =============================================================================
+# CR1 — public constructor totality and deep immutability correction
+# (H-1BA-01, H-1BA-02)
+# =============================================================================
+
+
+def _valid_facts() -> EligibilityFacts:
+    item = case("GC-S1-001")
+    return EligibilityFacts.from_json_dict(item["policy_input_facts"])
+
+
+def _valid_input() -> MergeEligibilityPolicyInput:
+    item = case("GC-S1-001")
+    return MergeEligibilityPolicyInput.from_json_dict(
+        input_data(item["policy_input_bindings"], item["policy_input_facts"])
+    )
+
+
+# --- H-1BA-01: the four exact raw-TypeError reproductions --------------------
+
+
+def test_cr1_facts_evidence_context_violations_none_raises_typed_error() -> None:
+    valid_facts = _valid_facts()
+    with pytest.raises(MergeEligibilityInputError):
+        dataclasses.replace(valid_facts, evidence_context_violations=None)  # type: ignore[arg-type]
+
+
+def test_cr1_facts_required_requirement_ids_none_raises_typed_error() -> None:
+    valid_facts = _valid_facts()
+    with pytest.raises(MergeEligibilityInputError):
+        dataclasses.replace(valid_facts, required_requirement_ids=None)  # type: ignore[arg-type]
+
+
+def test_cr1_verifier_rule_row_non_iterable_identity_raises_typed_error() -> None:
+    with pytest.raises(MergeEligibilityInputError):
+        VerifierRuleRow(identity=1, independence=None, reason=None)  # type: ignore[arg-type]
+
+
+def test_cr1_policy_reason_definitions_none_raises_typed_error() -> None:
+    with pytest.raises(MergeEligibilityInputError):
+        dataclasses.replace(MERGE_ELIGIBILITY_POLICY_V1, reason_definitions=None)  # type: ignore[arg-type]
+
+
+def test_cr1_all_four_raw_typeerror_probes_now_typed() -> None:
+    """Aggregate re-statement of the four exact verifier reproductions:
+    every one must raise MergeEligibilityInputError, and none may leak a
+    raw TypeError."""
+    valid_facts = _valid_facts()
+    probes = [
+        lambda: dataclasses.replace(valid_facts, evidence_context_violations=None),
+        lambda: dataclasses.replace(valid_facts, required_requirement_ids=None),
+        lambda: VerifierRuleRow(identity=1, independence=None, reason=None),
+        lambda: dataclasses.replace(MERGE_ELIGIBILITY_POLICY_V1, reason_definitions=None),
+    ]
+    typed = 0
+    for probe in probes:
+        with pytest.raises(MergeEligibilityInputError):
+            probe()
+        typed += 1
+    assert typed == 4
+
+
+# --- H-1BA-01: the four exact previously-accepted-malformed-state probes ----
+
+
+def test_cr1_facts_approval_status_invalid_enum_string_rejected() -> None:
+    valid_facts = _valid_facts()
+    with pytest.raises(MergeEligibilityInputError):
+        dataclasses.replace(valid_facts, approval_status="INVALID_ENUM")  # type: ignore[arg-type]
+
+
+def test_cr1_input_task_id_none_rejected() -> None:
+    valid_input = _valid_input()
+    with pytest.raises(MergeEligibilityInputError):
+        dataclasses.replace(valid_input, task_id=None)  # type: ignore[arg-type]
+
+
+def test_cr1_input_evaluation_mode_invalid_enum_string_rejected() -> None:
+    valid_input = _valid_input()
+    with pytest.raises(MergeEligibilityInputError):
+        dataclasses.replace(valid_input, evaluation_mode="INVALID_ENUM")  # type: ignore[arg-type]
+
+
+def test_cr1_input_facts_none_rejected() -> None:
+    valid_input = _valid_input()
+    with pytest.raises(MergeEligibilityInputError):
+        dataclasses.replace(valid_input, facts=None)  # type: ignore[arg-type]
+
+
+def test_cr1_all_four_accepted_malformed_states_now_rejected() -> None:
+    valid_facts = _valid_facts()
+    valid_input = _valid_input()
+    probes = [
+        lambda: dataclasses.replace(valid_facts, approval_status="INVALID_ENUM"),
+        lambda: dataclasses.replace(valid_input, task_id=None),
+        lambda: dataclasses.replace(valid_input, evaluation_mode="INVALID_ENUM"),
+        lambda: dataclasses.replace(valid_input, facts=None),
+    ]
+    rejected = 0
+    for probe in probes:
+        with pytest.raises(MergeEligibilityInputError):
+            probe()
+        rejected += 1
+    assert rejected == 4
+
+
+# --- H-1BA-01: direct-constructor negative matrix (beyond the 8 probes) -----
+
+
+def test_cr1_facts_enum_field_rejects_plain_string_directly() -> None:
+    valid_facts = _valid_facts()
+    with pytest.raises(MergeEligibilityInputError):
+        dataclasses.replace(valid_facts, scope_status="COMPLIANT")  # type: ignore[arg-type]
+
+
+def test_cr1_facts_id_tuple_rejects_caller_list_directly() -> None:
+    valid_facts = _valid_facts()
+    with pytest.raises(MergeEligibilityInputError):
+        dataclasses.replace(valid_facts, satisfied_requirement_ids=["req-a"])  # type: ignore[arg-type]
+
+
+def test_cr1_facts_id_tuple_rejects_set_directly() -> None:
+    valid_facts = _valid_facts()
+    with pytest.raises(MergeEligibilityInputError):
+        dataclasses.replace(valid_facts, rejected_evidence_ids={"ev-1"})  # type: ignore[arg-type]
+
+
+def test_cr1_facts_violation_tuple_rejects_caller_list_directly() -> None:
+    valid_facts = _valid_facts()
+    with pytest.raises(MergeEligibilityInputError):
+        dataclasses.replace(
+            valid_facts,
+            evidence_context_status=EvidenceContextStatus.INCOHERENT,
+            evidence_context_violations=[EvidenceContextViolation.TASK_MISMATCH],  # type: ignore[arg-type]
+        )
+
+
+def test_cr1_input_direct_construction_rejects_malformed_digest() -> None:
+    valid_input = _valid_input()
+    with pytest.raises(MergeEligibilityInputError):
+        dataclasses.replace(valid_input, candidate_digest="not-a-digest")
+
+
+def test_cr1_input_direct_construction_rejects_malformed_task_id_grammar() -> None:
+    valid_input = _valid_input()
+    with pytest.raises(MergeEligibilityInputError):
+        dataclasses.replace(valid_input, task_id="has spaces")
+
+
+def test_cr1_input_direct_construction_rejects_invalid_sentinel() -> None:
+    valid_input = _valid_input()
+    with pytest.raises(MergeEligibilityInputError):
+        dataclasses.replace(valid_input, approval_digest_or_sentinel="BOGUS")
+
+
+def test_cr1_reason_definition_rejects_unhashable_category_without_raw_exception() -> None:
+    valid = MERGE_ELIGIBILITY_POLICY_V1.reason_definitions[0]
+    with pytest.raises(MergeEligibilityInputError):
+        dataclasses.replace(valid, category=["not", "hashable"])  # type: ignore[arg-type]
+
+
+def test_cr1_reason_definition_rejects_unhashable_kind_without_raw_exception() -> None:
+    valid = MERGE_ELIGIBILITY_POLICY_V1.reason_definitions[0]
+    with pytest.raises(MergeEligibilityInputError):
+        dataclasses.replace(valid, kind=["not", "hashable"])  # type: ignore[arg-type]
+
+
+def test_cr1_policy_verifier_rule_rejects_none() -> None:
+    with pytest.raises(MergeEligibilityInputError):
+        dataclasses.replace(MERGE_ELIGIBILITY_POLICY_V1, verifier_rule=None)  # type: ignore[arg-type]
+
+
+def test_cr1_policy_enum_fact_reasons_rejects_none() -> None:
+    with pytest.raises(MergeEligibilityInputError):
+        dataclasses.replace(MERGE_ELIGIBILITY_POLICY_V1, enum_fact_reasons=None)  # type: ignore[arg-type]
+
+
+def test_cr1_policy_violation_tag_reasons_rejects_non_mapping() -> None:
+    with pytest.raises(MergeEligibilityInputError):
+        dataclasses.replace(MERGE_ELIGIBILITY_POLICY_V1, violation_tag_reasons=["not", "a", "mapping"])  # type: ignore[arg-type]
+
+
+def test_cr1_policy_set_fact_triggers_rejects_non_mapping() -> None:
+    with pytest.raises(MergeEligibilityInputError):
+        dataclasses.replace(MERGE_ELIGIBILITY_POLICY_V1, set_fact_triggers=42)  # type: ignore[arg-type]
+
+
+def test_cr1_direct_constructor_raw_exception_count_is_zero() -> None:
+    """Every direct-constructor negative probe in this module must raise
+    MergeEligibilityInputError, never a raw TypeError/ValueError/KeyError/
+    AttributeError/AssertionError."""
+    valid_facts = _valid_facts()
+    valid_input = _valid_input()
+    probes = [
+        lambda: dataclasses.replace(valid_facts, evidence_context_violations=None),
+        lambda: dataclasses.replace(valid_facts, required_requirement_ids=None),
+        lambda: dataclasses.replace(valid_facts, approval_status="INVALID_ENUM"),
+        lambda: dataclasses.replace(valid_facts, scope_status="COMPLIANT"),
+        lambda: dataclasses.replace(valid_facts, satisfied_requirement_ids=["req-a"]),
+        lambda: dataclasses.replace(valid_facts, rejected_evidence_ids={"ev-1"}),
+        lambda: dataclasses.replace(valid_input, task_id=None),
+        lambda: dataclasses.replace(valid_input, evaluation_mode="INVALID_ENUM"),
+        lambda: dataclasses.replace(valid_input, facts=None),
+        lambda: dataclasses.replace(valid_input, candidate_digest="not-a-digest"),
+        lambda: VerifierRuleRow(identity=1, independence=None, reason=None),
+        lambda: VerifierRuleRow(identity=["ATTESTED"], independence=None, reason=None),
+        lambda: dataclasses.replace(MERGE_ELIGIBILITY_POLICY_V1, reason_definitions=None),
+        lambda: dataclasses.replace(MERGE_ELIGIBILITY_POLICY_V1, verifier_rule=None),
+        lambda: dataclasses.replace(MERGE_ELIGIBILITY_POLICY_V1, enum_fact_reasons=None),
+    ]
+    raw_exception_count = 0
+    for probe in probes:
+        try:
+            probe()
+        except MergeEligibilityInputError:
+            continue
+        except Exception:
+            raw_exception_count += 1
+    assert raw_exception_count == 0
+
+
+# --- H-1BA-02: alias-mutation matrix ------------------------------------------
+
+
+def test_cr1_policy_nested_mapping_alias_probe() -> None:
+    """Mandatory alias probe (task §9): mutating a caller-owned nested dict
+    after construction must not affect the constructed policy."""
+    owned = {
+        key: dict(value)
+        for key, value in MERGE_ELIGIBILITY_POLICY_V1.enum_fact_reasons.items()
+    }
+    policy = dataclasses.replace(MERGE_ELIGIBILITY_POLICY_V1, enum_fact_reasons=owned)
+
+    before = policy.enum_fact_reasons["approval_status"]["UNKNOWN"]
+    owned["approval_status"]["UNKNOWN"] = "REQUIRED_CONTEXT_INCOMPLETE"
+
+    assert policy.enum_fact_reasons["approval_status"]["UNKNOWN"] == before
+    assert before == "APPROVAL_MISSING"
+
+
+def test_cr1_policy_violation_tag_reasons_alias_probe() -> None:
+    owned = dict(MERGE_ELIGIBILITY_POLICY_V1.violation_tag_reasons)
+    policy = dataclasses.replace(MERGE_ELIGIBILITY_POLICY_V1, violation_tag_reasons=owned)
+    before = policy.violation_tag_reasons["TASK_MISMATCH"]
+    owned["TASK_MISMATCH"] = "AUTHORITY_INVALID"
+    assert policy.violation_tag_reasons["TASK_MISMATCH"] == before
+
+
+def test_cr1_policy_set_fact_triggers_alias_probe() -> None:
+    owned = dict(MERGE_ELIGIBILITY_POLICY_V1.set_fact_triggers)
+    policy = dataclasses.replace(MERGE_ELIGIBILITY_POLICY_V1, set_fact_triggers=owned)
+    before = policy.set_fact_triggers["missing_requirement_ids"]
+    owned["missing_requirement_ids"] = "AUTHORITY_INVALID"
+    assert policy.set_fact_triggers["missing_requirement_ids"] == before
+
+
+def test_cr1_facts_alias_probe_rejects_mutable_collection() -> None:
+    """Supplying a caller-owned mutable collection to a direct facts
+    constructor must be rejected; no successful object may retain it."""
+    owned = ["req-a", "req-b"]
+    with pytest.raises(MergeEligibilityInputError):
+        dataclasses.replace(_valid_facts(), required_requirement_ids=owned)  # type: ignore[arg-type]
+    # The caller's list is unaffected and no facts object was constructed.
+    assert owned == ["req-a", "req-b"]
+
+
+def test_cr1_verifier_rule_alias_probe_rejects_mutable_collection() -> None:
+    owned = ["ATTESTED", "PRESENT_UNATTESTED"]
+    with pytest.raises(MergeEligibilityInputError):
+        VerifierRuleRow(identity=owned, independence=None, reason=None)  # type: ignore[arg-type]
+    assert owned == ["ATTESTED", "PRESENT_UNATTESTED"]
+
+
+def test_cr1_top_level_policy_collection_alias_probe() -> None:
+    """Construct using a caller-owned reason/rule sequence; mutating the
+    caller sequence afterward must not alter the policy."""
+    owned_reasons = list(MERGE_ELIGIBILITY_POLICY_V1.reason_definitions)
+    policy = dataclasses.replace(MERGE_ELIGIBILITY_POLICY_V1, reason_definitions=owned_reasons)
+    before = policy.reason_definitions
+    owned_reasons.clear()
+    assert policy.reason_definitions == before
+    assert len(policy.reason_definitions) == 20
+
+    owned_rule = list(MERGE_ELIGIBILITY_POLICY_V1.verifier_rule)
+    policy2 = dataclasses.replace(MERGE_ELIGIBILITY_POLICY_V1, verifier_rule=owned_rule)
+    before_rule = policy2.verifier_rule
+    owned_rule.clear()
+    assert policy2.verifier_rule == before_rule
+    assert len(policy2.verifier_rule) == 6
+
+
+def test_cr1_policy_nested_mapping_is_deeply_frozen() -> None:
+    with pytest.raises(TypeError):
+        MERGE_ELIGIBILITY_POLICY_V1.enum_fact_reasons["approval_status"]["UNKNOWN"] = "X"  # type: ignore[index]
+    with pytest.raises(TypeError):
+        MERGE_ELIGIBILITY_POLICY_V1.violation_tag_reasons["TASK_MISMATCH"] = "X"  # type: ignore[index]
+    with pytest.raises(TypeError):
+        MERGE_ELIGIBILITY_POLICY_V1.set_fact_triggers["missing_requirement_ids"] = "X"  # type: ignore[index]
+
+
+def test_cr1_stale_snapshot_construction_still_works_after_correction() -> None:
+    """Preservation: the R1-NC1 dual-instance construction must continue to
+    work exactly as before this correction."""
+    stale_snapshot = dataclasses.replace(
+        MERGE_ELIGIBILITY_POLICY_V1,
+        declared_identity=PolicyIdentity(
+            policy_version=GC_S1_018_POLICY_VERSION,
+            policy_digest=GC_S1_018_POLICY_DIGEST,
+        ),
+    )
+    assert stale_snapshot is not MERGE_ELIGIBILITY_POLICY_V1
+    assert stale_snapshot.declared_identity != MERGE_ELIGIBILITY_POLICY_V1.declared_identity
+    assert stale_snapshot.reason_definitions == MERGE_ELIGIBILITY_POLICY_V1.reason_definitions
+    assert dict(stale_snapshot.enum_fact_reasons) == dict(
+        MERGE_ELIGIBILITY_POLICY_V1.enum_fact_reasons
+    )
+
+
+# --- Preservation: all 41 cases still construct/digest/payload-agree --------
+
+
+def test_cr1_all_41_golden_cases_still_construct_and_digest_agree() -> None:
+    ok = 0
+    for item in cases():
+        bindings, facts = item["policy_input_bindings"], item["policy_input_facts"]
+        data = input_data(bindings, facts)
+        inp = MergeEligibilityPolicyInput.from_json_dict(data)
+        expected_payload = oracle_payload(bindings, facts)
+        assert inp.to_canonical_payload() == expected_payload
+        assert inp.input_digest() == canonical_digest(expected_payload)
+        ok += 1
+    assert ok == 41
+
+
+def test_cr1_policy_data_still_equals_fixture_after_correction() -> None:
+    fixture_reasons = {r["code"]: r for r in fixture()["reason_codes"]}
+    prod_reasons = {r.code: r for r in MERGE_ELIGIBILITY_POLICY_V1.reason_definitions}
+    assert set(fixture_reasons) == set(prod_reasons)
+    fsm = fixture()["fact_state_mapping"]
+    for fact, mapping in fsm["enum_facts"].items():
+        assert dict(MERGE_ELIGIBILITY_POLICY_V1.enum_fact_reasons[fact]) == mapping
+    assert dict(MERGE_ELIGIBILITY_POLICY_V1.violation_tag_reasons) == fsm["violation_tag_reasons"]
+    assert dict(MERGE_ELIGIBILITY_POLICY_V1.set_fact_triggers) == fsm["set_facts"]
