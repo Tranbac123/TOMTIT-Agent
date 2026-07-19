@@ -1104,3 +1104,339 @@ def test_cr1_policy_data_still_equals_fixture_after_correction() -> None:
         assert dict(MERGE_ELIGIBILITY_POLICY_V1.enum_fact_reasons[fact]) == mapping
     assert dict(MERGE_ELIGIBILITY_POLICY_V1.violation_tag_reasons) == fsm["violation_tag_reasons"]
     assert dict(MERGE_ELIGIBILITY_POLICY_V1.set_fact_triggers) == fsm["set_facts"]
+
+
+# =============================================================================
+# OS1 — owner-scoped exception normalization patch (H-1BA-01 remainder)
+# =============================================================================
+
+
+# --- Fix A: control-character exception normalization -----------------------
+
+
+def test_os1_facts_id_tuple_control_character_direct_typed() -> None:
+    valid_facts = _valid_facts()
+    with pytest.raises(MergeEligibilityInputError):
+        dataclasses.replace(valid_facts, required_requirement_ids=("bad\nvalue",))
+
+
+def test_os1_input_task_id_control_character_direct_typed() -> None:
+    valid_input = _valid_input()
+    with pytest.raises(MergeEligibilityInputError):
+        dataclasses.replace(valid_input, task_id="bad\nvalue")
+
+
+def test_os1_input_source_binding_field_control_character_direct_typed() -> None:
+    valid_input = _valid_input()
+    with pytest.raises(MergeEligibilityInputError):
+        dataclasses.replace(valid_input, task_contract_digest="bad\ndigest")
+
+
+def test_os1_input_approval_sentinel_field_control_character_direct_typed() -> None:
+    valid_input = _valid_input()
+    with pytest.raises(MergeEligibilityInputError):
+        dataclasses.replace(valid_input, approval_digest_or_sentinel="bad\nsentinel")
+
+
+def test_os1_policy_identity_version_control_character_typed() -> None:
+    with pytest.raises(MergeEligibilityInputError):
+        PolicyIdentity(
+            policy_version="bad\nversion",
+            policy_digest="sha256:" + "a" * 64,
+        )
+
+
+def test_os1_evaluator_identity_version_control_character_typed() -> None:
+    with pytest.raises(MergeEligibilityInputError):
+        EvaluatorIdentity(evaluator_version="bad\nversion")
+
+
+def test_os1_input_from_json_dict_task_id_control_character_typed() -> None:
+    item = case("GC-S1-001")
+    data = input_data(item["policy_input_bindings"], item["policy_input_facts"])
+    data["task_id"] = "bad\nvalue"
+    with pytest.raises(MergeEligibilityInputError):
+        MergeEligibilityPolicyInput.from_json_dict(data)
+
+
+def test_os1_control_character_all_direct_paths_typed() -> None:
+    """CONTROL_CHARACTER_DIRECT_PATHS_TYPED=4/4 — the four exact direct
+    reproductions from the fresh verification report."""
+    valid_facts = _valid_facts()
+    valid_input = _valid_input()
+    probes = [
+        lambda: dataclasses.replace(valid_facts, required_requirement_ids=("bad\nvalue",)),
+        lambda: dataclasses.replace(valid_input, task_id="bad\nvalue"),
+        lambda: PolicyIdentity(policy_version="bad\nversion", policy_digest="sha256:" + "a" * 64),
+        lambda: EvaluatorIdentity(evaluator_version="bad\nversion"),
+    ]
+    typed = 0
+    for probe in probes:
+        with pytest.raises(MergeEligibilityInputError):
+            probe()
+        typed += 1
+    assert typed == 4
+
+
+def test_os1_control_character_json_path_typed() -> None:
+    """CONTROL_CHARACTER_JSON_PATHS_TYPED=1/1."""
+    item = case("GC-S1-001")
+    data = input_data(item["policy_input_bindings"], item["policy_input_facts"])
+    data["task_id"] = "bad\nvalue"
+    with pytest.raises(MergeEligibilityInputError):
+        MergeEligibilityPolicyInput.from_json_dict(data)
+
+
+def test_os1_no_p09b_validation_error_escapes_control_character_paths() -> None:
+    """CONTROL_CHARACTER_P09B_ESCAPES=0 — every control-character rejection
+    must be exactly MergeEligibilityInputError, never the base
+    P09BValidationError (which MergeEligibilityInputError subclasses)."""
+    valid_facts = _valid_facts()
+    valid_input = _valid_input()
+    probes = [
+        lambda: dataclasses.replace(valid_facts, required_requirement_ids=("bad\nvalue",)),
+        lambda: dataclasses.replace(valid_input, task_id="bad\nvalue"),
+        lambda: dataclasses.replace(valid_input, task_contract_digest="bad\ndigest"),
+        lambda: PolicyIdentity(policy_version="bad\nversion", policy_digest="sha256:" + "a" * 64),
+        lambda: EvaluatorIdentity(evaluator_version="bad\nversion"),
+    ]
+    for probe in probes:
+        try:
+            probe()
+            raise AssertionError("expected MergeEligibilityInputError")
+        except MergeEligibilityInputError as exc:
+            assert type(exc) is MergeEligibilityInputError, type(exc)
+
+
+# --- Fix B: mixed-type extra-key totality ------------------------------------
+
+
+def _mixed_key_input_data() -> dict:
+    item = case("GC-S1-001")
+    return input_data(item["policy_input_bindings"], item["policy_input_facts"])
+
+
+def test_os1_top_level_mixed_int_and_str_extra_keys_typed() -> None:
+    data = _mixed_key_input_data()
+    data[1] = "x"
+    data["extra"] = "y"
+    with pytest.raises(MergeEligibilityInputError):
+        MergeEligibilityPolicyInput.from_json_dict(data)
+
+
+def test_os1_top_level_only_integer_extra_key_typed() -> None:
+    data = _mixed_key_input_data()
+    data[1] = "x"
+    with pytest.raises(MergeEligibilityInputError):
+        MergeEligibilityPolicyInput.from_json_dict(data)
+
+
+def test_os1_top_level_bool_key_typed() -> None:
+    """bool is a subclass of int in Python; it must still be rejected as a
+    non-string key, not silently accepted or misclassified."""
+    data = _mixed_key_input_data()
+    data[True] = "x"
+    with pytest.raises(MergeEligibilityInputError):
+        MergeEligibilityPolicyInput.from_json_dict(data)
+
+
+def test_os1_top_level_none_key_typed() -> None:
+    data = _mixed_key_input_data()
+    data[None] = "x"
+    with pytest.raises(MergeEligibilityInputError):
+        MergeEligibilityPolicyInput.from_json_dict(data)
+
+
+def test_os1_top_level_tuple_key_typed() -> None:
+    data = _mixed_key_input_data()
+    data[(1, 2)] = "x"
+    with pytest.raises(MergeEligibilityInputError):
+        MergeEligibilityPolicyInput.from_json_dict(data)
+
+
+def test_os1_mixed_valid_and_invalid_keys_typed() -> None:
+    data = _mixed_key_input_data()
+    data["also_valid_shape_but_extra"] = "x"
+    data[7] = "y"
+    with pytest.raises(MergeEligibilityInputError):
+        MergeEligibilityPolicyInput.from_json_dict(data)
+
+
+def test_os1_nested_facts_mixed_type_extra_keys_typed() -> None:
+    data = _mixed_key_input_data()
+    data["facts"] = {**data["facts"], 1: "x", "extra": "y"}
+    with pytest.raises(MergeEligibilityInputError):
+        MergeEligibilityPolicyInput.from_json_dict(data)
+
+
+def test_os1_valid_string_only_extra_key_still_deterministic() -> None:
+    data = _mixed_key_input_data()
+    data["totally_extra"] = "x"
+    with pytest.raises(MergeEligibilityInputError, match="unknown field"):
+        MergeEligibilityPolicyInput.from_json_dict(data)
+
+
+def test_os1_valid_string_only_missing_key_still_deterministic() -> None:
+    data = _mixed_key_input_data()
+    del data["task_id"]
+    with pytest.raises(MergeEligibilityInputError, match="missing field"):
+        MergeEligibilityPolicyInput.from_json_dict(data)
+
+
+def test_os1_no_typeerror_on_heterogeneous_key_sort() -> None:
+    """MIXED_KEY_SORT_TYPEERROR_ESCAPES=0 — the historical
+    ``'<' not supported between instances of 'str' and 'int'`` must never
+    occur; sorted() must never see an unvalidated heterogeneous key set."""
+    data = _mixed_key_input_data()
+    data[1] = "x"
+    data["extra"] = "y"
+    try:
+        MergeEligibilityPolicyInput.from_json_dict(data)
+        raise AssertionError("expected MergeEligibilityInputError")
+    except MergeEligibilityInputError:
+        pass
+    except TypeError as exc:  # pragma: no cover — must never happen
+        raise AssertionError(f"raw TypeError leaked: {exc}") from exc
+
+
+# --- OS1 aggregate exception matrix -------------------------------------------
+
+
+def test_os1_exception_matrix_all_typed_zero_raw() -> None:
+    """OS1_EXCEPTION_MATRIX=PASS / OS1_RAW_EXCEPTION_COUNT=0."""
+    valid_facts = _valid_facts()
+    valid_input = _valid_input()
+
+    def mixed_top() -> dict:
+        d = _mixed_key_input_data()
+        d[1] = "x"
+        d["extra"] = "y"
+        return d
+
+    def bool_top() -> dict:
+        d = _mixed_key_input_data()
+        d[True] = "x"
+        return d
+
+    def none_top() -> dict:
+        d = _mixed_key_input_data()
+        d[None] = "x"
+        return d
+
+    def nested_mixed() -> dict:
+        d = _mixed_key_input_data()
+        d["facts"] = {**d["facts"], 1: "x", "extra": "y"}
+        return d
+
+    probes = [
+        lambda: dataclasses.replace(valid_facts, required_requirement_ids=("bad\nvalue",)),
+        lambda: dataclasses.replace(valid_input, task_id="bad\nvalue"),
+        lambda: dataclasses.replace(valid_input, task_contract_digest="bad\ndigest"),
+        lambda: dataclasses.replace(valid_input, approval_digest_or_sentinel="bad\nsentinel"),
+        lambda: PolicyIdentity(policy_version="bad\nversion", policy_digest="sha256:" + "a" * 64),
+        lambda: EvaluatorIdentity(evaluator_version="bad\nversion"),
+        lambda: MergeEligibilityPolicyInput.from_json_dict(mixed_top()),
+        lambda: MergeEligibilityPolicyInput.from_json_dict(bool_top()),
+        lambda: MergeEligibilityPolicyInput.from_json_dict(none_top()),
+        lambda: MergeEligibilityPolicyInput.from_json_dict(nested_mixed()),
+    ]
+    raw_or_nonexact = 0
+    typed = 0
+    for probe in probes:
+        try:
+            probe()
+        except MergeEligibilityInputError:
+            typed += 1
+        except Exception:
+            raw_or_nonexact += 1
+    assert typed == len(probes)
+    assert raw_or_nonexact == 0
+
+
+# --- Preserve the exact eight CR1 probes and DIRECT_CONSTRUCTOR_RAW_EXCEPTION_COUNT=0 ---
+
+
+def test_os1_previous_eight_cr1_probes_still_typed() -> None:
+    valid_facts = _valid_facts()
+    valid_input = _valid_input()
+    probes = [
+        lambda: dataclasses.replace(valid_facts, evidence_context_violations=None),
+        lambda: dataclasses.replace(valid_facts, required_requirement_ids=None),
+        lambda: VerifierRuleRow(identity=1, independence=None, reason=None),
+        lambda: dataclasses.replace(MERGE_ELIGIBILITY_POLICY_V1, reason_definitions=None),
+        lambda: dataclasses.replace(valid_facts, approval_status="INVALID_ENUM"),
+        lambda: dataclasses.replace(valid_input, task_id=None),
+        lambda: dataclasses.replace(valid_input, evaluation_mode="INVALID_ENUM"),
+        lambda: dataclasses.replace(valid_input, facts=None),
+    ]
+    typed = 0
+    for probe in probes:
+        with pytest.raises(MergeEligibilityInputError):
+            probe()
+        typed += 1
+    assert typed == 8
+
+
+def test_os1_direct_constructor_raw_exception_count_including_new_cases() -> None:
+    """DIRECT_CONSTRUCTOR_RAW_EXCEPTION_COUNT=0 after adding the newly
+    discovered control-character and mixed-key cases to the matrix."""
+    valid_facts = _valid_facts()
+    valid_input = _valid_input()
+    probes = [
+        # CR1 matrix (unchanged)
+        lambda: dataclasses.replace(valid_facts, evidence_context_violations=None),
+        lambda: dataclasses.replace(valid_facts, required_requirement_ids=None),
+        lambda: dataclasses.replace(valid_facts, approval_status="INVALID_ENUM"),
+        lambda: dataclasses.replace(valid_facts, scope_status="COMPLIANT"),
+        lambda: dataclasses.replace(valid_facts, satisfied_requirement_ids=["req-a"]),
+        lambda: dataclasses.replace(valid_facts, rejected_evidence_ids={"ev-1"}),
+        lambda: dataclasses.replace(valid_input, task_id=None),
+        lambda: dataclasses.replace(valid_input, evaluation_mode="INVALID_ENUM"),
+        lambda: dataclasses.replace(valid_input, facts=None),
+        lambda: dataclasses.replace(valid_input, candidate_digest="not-a-digest"),
+        lambda: VerifierRuleRow(identity=1, independence=None, reason=None),
+        lambda: VerifierRuleRow(identity=["ATTESTED"], independence=None, reason=None),
+        lambda: dataclasses.replace(MERGE_ELIGIBILITY_POLICY_V1, reason_definitions=None),
+        lambda: dataclasses.replace(MERGE_ELIGIBILITY_POLICY_V1, verifier_rule=None),
+        lambda: dataclasses.replace(MERGE_ELIGIBILITY_POLICY_V1, enum_fact_reasons=None),
+        # OS1 newly discovered cases
+        lambda: dataclasses.replace(valid_facts, required_requirement_ids=("bad\nvalue",)),
+        lambda: dataclasses.replace(valid_input, task_id="bad\nvalue"),
+        lambda: PolicyIdentity(policy_version="bad\nversion", policy_digest="sha256:" + "a" * 64),
+        lambda: EvaluatorIdentity(evaluator_version="bad\nversion"),
+        lambda: MergeEligibilityPolicyInput.from_json_dict(
+            {**_mixed_key_input_data(), 1: "x", "extra": "y"}
+        ),
+    ]
+    raw_exception_count = 0
+    for probe in probes:
+        try:
+            probe()
+        except MergeEligibilityInputError:
+            continue
+        except Exception:
+            raw_exception_count += 1
+    assert raw_exception_count == 0
+
+
+# --- OS1 preservation: CR1 alias/deep-immutability results unchanged --------
+
+
+def test_os1_cr1_alias_and_deep_immutability_still_hold() -> None:
+    owned = {
+        key: dict(value)
+        for key, value in MERGE_ELIGIBILITY_POLICY_V1.enum_fact_reasons.items()
+    }
+    policy = dataclasses.replace(MERGE_ELIGIBILITY_POLICY_V1, enum_fact_reasons=owned)
+    before = policy.enum_fact_reasons["approval_status"]["UNKNOWN"]
+    owned["approval_status"]["UNKNOWN"] = "REQUIRED_CONTEXT_INCOMPLETE"
+    assert policy.enum_fact_reasons["approval_status"]["UNKNOWN"] == before
+
+    with pytest.raises(TypeError):
+        MERGE_ELIGIBILITY_POLICY_V1.enum_fact_reasons["approval_status"]["UNKNOWN"] = "X"  # type: ignore[index]
+
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        _valid_facts().approval_status = ApprovalStatus.MISSING  # type: ignore[misc]
+
+    with pytest.raises(MergeEligibilityInputError):
+        VerifierRuleRow(identity=["ATTESTED"], independence=None, reason=None)  # type: ignore[arg-type]

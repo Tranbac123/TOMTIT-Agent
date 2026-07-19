@@ -311,6 +311,15 @@ def _require_mapping(data: object, *, model: str) -> dict:
 
 
 def _require_exact_keys(data: dict, required: frozenset[str], *, model: str) -> None:
+    # Validate the COMPLETE key domain (every key is an exact str) BEFORE any
+    # set arithmetic or sorted() call: a heterogeneous key set (e.g. an int
+    # key alongside a str key) cannot be sorted in Python 3 and must never
+    # reach sorted() unvalidated — that raised a raw TypeError previously.
+    for key in data:
+        if not is_exact_str(key):
+            raise MergeEligibilityInputError(
+                f"{model}: keys must be strings, found {type(key).__name__} key {key!r}"
+            )
     keys = set(data)
     missing = sorted(required - keys)
     unknown = sorted(keys - required)
@@ -318,6 +327,18 @@ def _require_exact_keys(data: dict, required: frozenset[str], *, model: str) -> 
         raise MergeEligibilityInputError(f"{model}: missing field(s) {missing}")
     if unknown:
         raise MergeEligibilityInputError(f"{model}: unknown field(s) {unknown}")
+
+
+def _reject_control_characters(value: str, *, field: str) -> None:
+    """Translate ``canonical.reject_control_characters``'s base
+    ``P09BValidationError`` into the exact ``MergeEligibilityInputError``
+    required at this boundary, preserving the original deterministic
+    message via exception chaining. The single point every merge-eligibility
+    string-validation path routes through, so behavior stays consistent."""
+    try:
+        reject_control_characters(value, field=field)
+    except P09BValidationError as exc:
+        raise MergeEligibilityInputError(str(exc)) from exc
 
 
 def _require_str(value: object, *, field: str) -> str:
@@ -329,7 +350,7 @@ def _require_str(value: object, *, field: str) -> str:
         raise MergeEligibilityInputError(f"{field} must be a non-empty string")
     if not value.strip():
         raise MergeEligibilityInputError(f"{field} must not be whitespace-only")
-    reject_control_characters(value, field=field)
+    _reject_control_characters(value, field=field)
     return value
 
 
@@ -409,7 +430,7 @@ def _require_sorted_unique_str_tuple(
             raise MergeEligibilityInputError(
                 f"{field}[{index}] must be a non-empty string"
             )
-        reject_control_characters(item, field=f"{field}[{index}]")
+        _reject_control_characters(item, field=f"{field}[{index}]")
         items.append(item)
     result = tuple(items)
     if list(result) != sorted(result):
@@ -464,7 +485,7 @@ def _require_exact_sorted_unique_str_tuple_strict(
             raise MergeEligibilityInputError(
                 f"{field}[{index}] must be a non-empty string"
             )
-        reject_control_characters(item, field=f"{field}[{index}]")
+        _reject_control_characters(item, field=f"{field}[{index}]")
     if list(value) != sorted(value):
         raise MergeEligibilityInputError(f"{field} must be lexicographically sorted")
     if len(set(value)) != len(value):
