@@ -4,11 +4,12 @@ from __future__ import annotations
 import dataclasses
 import inspect
 import json
+from collections.abc import Iterator, Mapping
 from pathlib import Path
 
 import pytest
 
-from agent_core.build_harness.canonical import canonical_digest
+from agent_core.build_harness.canonical import canonical_digest, canonical_json_bytes
 from agent_core.build_harness.merge_eligibility import (
     CANONICALIZATION_CONTRACT_DIGEST,
     CANONICALIZATION_VERSION,
@@ -199,7 +200,7 @@ def test_identifier_universes_are_optional_and_enforced_when_supplied() -> None:
     assert "IDENTIFIER_UNIVERSE_MISMATCH" in validate_policy_evaluation_record(record, identifier_universes=rejected_universe)["errors"]
 
 
-# CR1: adversarial matrices required by the fresh independent verification.
+# OS3: adversarial matrices for the typed and raw JSON record representations.
 _BINDING_FIELDS = (
     "task_contract_digest", "candidate_digest", "repository_snapshot_digest",
     "verification_bundle_digest", "approval_digest_or_sentinel",
@@ -219,77 +220,469 @@ def _mutate_frozen(value: object, field: str, replacement: object) -> object:
     return value
 
 
-@pytest.mark.parametrize(
-    "field,replacement",
-    [
-        ("task_id", "other-task"),
-        *[(field, "sha256:" + "0" * 64) for field in _BINDING_FIELDS],
-        ("policy_version", "other-policy"),
-        ("evaluator_version", "other-evaluator"),
-        ("evaluation_mode", "SHADOW"),
-        ("input_digest", "sha256:" + "0" * 64),
-        ("primary_reason_code", "AUTHORITY_INVALID"),
-        ("complete_reason_codes", ("AUTHORITY_INVALID",)),
-        ("decision_digest", "sha256:" + "0" * 64),
-    ],
+def _raw_record(case: dict) -> tuple[MergeEligibilityPolicyInput, dict]:
+    policy_input, _core, _decision, record = _outputs(case)
+    raw = record.to_canonical_payload()
+    raw["policy_record_digest"] = record.policy_record_digest
+    assert len(raw) == 29
+    return policy_input, raw
+
+
+def _independent_decision_digest(raw: dict) -> str:
+    return canonical_digest(
+        {
+            "kind": "changegate.merge-eligibility-decision.test-oracle.v1",
+            **{field: raw[field] for field in _IDENTITY_FIELDS},
+        }
+    )
+
+
+def _independent_record_digest(raw: dict) -> str:
+    return canonical_digest(
+        {key: value for key, value in raw.items() if key != "policy_record_digest"}
+    )
+
+
+def _independent_rehash(raw: dict, *, decision: bool = True) -> dict:
+    if decision:
+        raw["decision_digest"] = _independent_decision_digest(raw)
+    raw["policy_record_digest"] = _independent_record_digest(raw)
+    return raw
+
+
+_RAW_RECORD_FIELDS = frozenset(
+    {"schema_version", *_IDENTITY_FIELDS, "decision_digest", "policy_record_digest"}
 )
-def test_builder_inconsistency_matrix(field: str, replacement: object) -> None:
+_RAW_INPUT_FIELDS = frozenset(
+    {
+        "kind", "task_id", *_BINDING_FIELDS, "policy_version", "evaluator_version",
+        "evaluation_mode", "policy_record_schema_version",
+        "policy_record_schema_digest", "canonicalization_version",
+        "canonicalization_contract_digest", "facts",
+    }
+)
+_ORACLE_REASON_CODES = frozenset(item["code"] for item in _FIXTURE["reason_codes"])
+_HEX = frozenset("0123456789abcdef")
+_TOKEN_HEAD = frozenset(
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
+)
+
+
+def _is_exact(value: object, expected: type) -> bool:
+    return type(value) is expected  # noqa: E721 - exact boundary type is normative
+
+
+def _oracle_digest(value: object) -> bool:
+    return (
+        _is_exact(value, str)
+        and len(value) == 71
+        and value.startswith("sha256:")
+        and set(value[7:]) <= _HEX
+    )
+
+
+def _oracle_token(value: object) -> bool:
+    return (
+        _is_exact(value, str)
+        and 1 <= len(value) <= 128
+        and value[0] in _TOKEN_HEAD
+        and all(character in _TOKEN_HEAD or character in "._-" for character in value)
+    )
+
+
+def _independent_validate_raw(
+    candidate: object,
+    canonical_input: object = None,
+    universes: object = None,
+) -> dict[str, list[str]]:
+    """Spec/manifest oracle; production validation helpers are never called."""
+    if not _is_exact(candidate, dict) or not all(_is_exact(key, str) for key in candidate):
+        return {"errors": ["RECORD_NOT_AN_OBJECT"], "classifications": []}
+    raw = candidate
+    if set(raw) != _RAW_RECORD_FIELDS:
+        return {"errors": ["RECORD_FIELD_SET_DRIFT"], "classifications": []}
+
+    errors: list[str] = []
+    if raw["schema_version"] != POLICY_RECORD_SCHEMA_VERSION:
+        errors.append("RECORD_TYPE_INVALID")
+    if not _oracle_token(raw["task_id"]):
+        errors.append("RECORD_TYPE_INVALID")
+    if not _oracle_token(raw["policy_version"]) or not _oracle_token(raw["evaluator_version"]):
+        errors.append("RECORD_TYPE_INVALID")
+    for field in (*_BINDING_FIELDS, "input_digest", "decision_digest", "policy_record_digest"):
+        value = raw[field]
+        if field == "approval_digest_or_sentinel" and value == "NO_APPROVAL_SUPPLIED":
+            continue
+        if not _oracle_digest(value):
+            errors.append("RECORD_TYPE_INVALID")
+    enums = {
+        "evaluation_mode": {"ENFORCE", "SHADOW"},
+        "disposition": {"ELIGIBLE_TO_MERGE_UNDER_POLICY", "REVIEW_REQUIRED", "BLOCK"},
+        "decision_authority": {"AUTHORITATIVE", "ADVISORY_ONLY"},
+    }
+    if any(not _is_exact(raw[field], str) or raw[field] not in allowed for field, allowed in enums.items()):
+        errors.append("RECORD_TYPE_INVALID")
+    collection_fields = _SEMANTIC_FIELDS[3:]
+    for field in collection_fields:
+        value = raw[field]
+        if not _is_exact(value, list) or any(not _is_exact(item, str) for item in value):
+            errors.append("RECORD_TYPE_INVALID")
+        elif value != sorted(value) or len(value) != len(set(value)):
+            errors.append("RECORD_NOT_NORMALIZED")
+    primary = raw["primary_reason_code"]
+    if primary is not None and (not _is_exact(primary, str) or primary not in _ORACLE_REASON_CODES):
+        errors.append("RECORD_TYPE_INVALID")
+    for field in ("complete_reason_codes", "blocking_reason_codes", "review_reason_codes"):
+        value = raw[field]
+        if _is_exact(value, list) and all(_is_exact(item, str) for item in value):
+            if any(item not in _ORACLE_REASON_CODES for item in value):
+                errors.append("RECORD_TYPE_INVALID")
+    if all(_is_exact(raw[field], list) and all(_is_exact(item, str) for item in raw[field]) for field in _SEMANTIC_FIELDS[3:6]):
+        complete = set(raw["complete_reason_codes"])
+        blocking = set(raw["blocking_reason_codes"])
+        review = set(raw["review_reason_codes"])
+        if blocking & review or blocking | review != complete:
+            errors.append("RECORD_NOT_NORMALIZED")
+        if (primary is None) != (not complete) or primary is not None and primary not in complete:
+            errors.append("RECORD_NOT_NORMALIZED")
+        expected = "BLOCK" if blocking else "REVIEW_REQUIRED" if review else "ELIGIBLE_TO_MERGE_UNDER_POLICY"
+        if raw["disposition"] != expected:
+            errors.append("RECORD_NOT_NORMALIZED")
+    requirement_fields = _SEMANTIC_FIELDS[6:10]
+    if all(_is_exact(raw[field], list) and all(_is_exact(item, str) for item in raw[field]) for field in requirement_fields):
+        parts = [set(raw[field]) for field in requirement_fields[1:]]
+        if set().union(*parts) != set(raw[requirement_fields[0]]) or any(
+            left & right for index, left in enumerate(parts) for right in parts[index + 1:]
+        ):
+            errors.append("RECORD_NOT_NORMALIZED")
+    if errors:
+        return {"errors": sorted(set(errors)), "classifications": []}
+    if raw["decision_digest"] != _independent_decision_digest(raw):
+        return {"errors": ["DECISION_DIGEST_NOT_DERIVED"], "classifications": []}
+    if raw["policy_record_digest"] != _independent_record_digest(raw):
+        return {"errors": ["RECORD_DIGEST_MISMATCH"], "classifications": []}
+
+    errors = []
+    if canonical_input is not None:
+        if not _is_exact(canonical_input, dict) or not all(_is_exact(key, str) for key in canonical_input):
+            errors.append("INPUT_NOT_AN_OBJECT")
+        else:
+            input_fields = ("task_id", *_BINDING_FIELDS, "policy_version", "evaluator_version", "evaluation_mode")
+            if any(raw[field] != canonical_input.get(field) for field in input_fields):
+                errors.append("SOURCE_BINDING_MISMATCH")
+            if canonical_input.get("policy_record_schema_version") != raw["schema_version"] or canonical_input.get("policy_record_schema_digest") != POLICY_RECORD_SCHEMA_DIGEST:
+                errors.append("SCHEMA_BINDING_MISMATCH")
+            if canonical_input.get("canonicalization_version") != CANONICALIZATION_VERSION or canonical_input.get("canonicalization_contract_digest") != CANONICALIZATION_CONTRACT_DIGEST:
+                errors.append("CANONICALIZATION_BINDING_MISMATCH")
+            try:
+                input_digest = canonical_digest(canonical_input)
+            except (TypeError, ValueError):
+                errors.append("INPUT_NOT_CANONICALIZABLE")
+            else:
+                if set(canonical_input) != _RAW_INPUT_FIELDS or input_digest != raw["input_digest"]:
+                    errors.append("INPUT_DIGEST_MISMATCH")
+    if universes is not None:
+        if not _is_exact(universes, dict):
+            errors.append("IDENTIFIER_UNIVERSES_INVALID")
+        else:
+            for fields, key in (
+                (_SEMANTIC_FIELDS[6:10], "requirement_id_universe"),
+                (_SEMANTIC_FIELDS[10:13], "evidence_record_id_universe"),
+            ):
+                universe = universes.get(key)
+                if not (_is_exact(universe, list) or _is_exact(universe, tuple)) or any(not _is_exact(item, str) for item in universe):
+                    errors.append("IDENTIFIER_UNIVERSES_INVALID")
+                elif any(item not in universe for field in fields for item in raw[field]):
+                    errors.append("IDENTIFIER_UNIVERSE_MISMATCH")
+    return {
+        "errors": sorted(set(errors)),
+        "classifications": [] if errors else [
+            "STRUCTURALLY_VALIDATED", "IDENTITY_RECOMPUTED",
+            "SEMANTIC_REPLAY_NOT_PERFORMED",
+        ],
+    }
+
+
+_BUILDER_CASES = [
+    ("task", "field", "task_id", "other-task"),
+    *[
+        (f"binding-{field}", "field", field, "sha256:" + "0" * 64)
+        for field in _BINDING_FIELDS
+    ],
+    ("policy", "field", "policy_version", "other-policy"),
+    ("evaluator", "field", "evaluator_version", "other-evaluator"),
+    ("mode", "field", "evaluation_mode", "SHADOW"),
+    ("input-digest", "field", "input_digest", "sha256:" + "0" * 64),
+    ("semantic-stale-digest", "field", "primary_reason_code", "AUTHORITY_INVALID"),
+    ("input-echo-rehashed", "rehashed", "task_id", "other-task"),
+    ("malformed-decision", "malformed", "", None),
+]
+assert len(_BUILDER_CASES) == 16
+
+
+@pytest.mark.parametrize(
+    "label,kind,field,replacement",
+    _BUILDER_CASES,
+    ids=[item[0] for item in _BUILDER_CASES],
+)
+def test_builder_inconsistency_matrix(
+    label: str, kind: str, field: str, replacement: object
+) -> None:
     policy_input, _core, decision, _record = _outputs(_CASES[0])
-    _mutate_frozen(decision, field, replacement)
-    with pytest.raises(RecordConstructionError):
-        build_policy_evaluation_record(policy_input, decision)
-
-
-def _tampered_record(case: dict, field: str, replacement: object):
-    _input_value, _core, _decision, record = _outputs(case)
-    return _mutate_frozen(record, field, replacement)
+    candidate: object = decision
+    if kind == "malformed":
+        candidate = object()
+    else:
+        _mutate_frozen(decision, field, replacement)
+        if kind == "rehashed":
+            identity = {
+                name: (
+                    getattr(decision, name).value
+                    if hasattr(getattr(decision, name), "value")
+                    else getattr(decision, name)
+                )
+                for name in _IDENTITY_FIELDS
+            }
+            object.__setattr__(decision, "decision_digest", _independent_decision_digest(identity))
+    with pytest.raises(RecordConstructionError) as caught:
+        build_policy_evaluation_record(policy_input, candidate)  # type: ignore[arg-type]
+    assert _is_exact(caught.value, RecordConstructionError)
 
 
 _TAMPERS = [
     ("shape-wrong-schema", "schema_version", "wrong-schema"),
     ("shape-malformed-top", "task_id", 1),
-    *[(f"identity-{field}", field, "sha256:" + "f" * 64) for field in ("task_id", *_BINDING_FIELDS, "policy_version", "evaluator_version", "input_digest")],
+    *[
+        (f"identity-{field}", field, "sha256:" + "f" * 64)
+        for field in (
+            "task_id", *_BINDING_FIELDS, "policy_version", "evaluator_version",
+            "input_digest",
+        )
+    ],
     ("identity-mode", "evaluation_mode", "SHADOW"),
-    *[(f"semantic-{field}", field, "AUTHORITY_INVALID") for field in _SEMANTIC_FIELDS],
-    ("canonical-list", "complete_reason_codes", []),
-    ("canonical-unsorted", "complete_reason_codes", ("SCOPE_UNCERTAIN", "AUTHORITY_INVALID")),
-    ("canonical-duplicate", "complete_reason_codes", ("AUTHORITY_INVALID", "AUTHORITY_INVALID")),
-    ("canonical-element", "complete_reason_codes", (1,)),
-    ("partition-overlap", "blocking_reason_codes", ("AUTHORITY_INVALID",)),
-    ("partition-incomplete", "review_reason_codes", ("SCOPE_UNCERTAIN",)),
+    ("semantic-disposition", "disposition", "REVIEW_REQUIRED"),
+    ("semantic-authority", "decision_authority", "ADVISORY_ONLY"),
+    ("semantic-primary", "primary_reason_code", "AUTHORITY_INVALID"),
+    *[
+        (f"semantic-{field}", field, ["AUTHORITY_INVALID"])
+        for field in _SEMANTIC_FIELDS[3:]
+    ],
+    ("canonical-wrong-container", "complete_reason_codes", ()),
+    ("canonical-unsorted", "complete_reason_codes", ["SCOPE_UNCERTAIN", "AUTHORITY_INVALID"]),
+    ("canonical-duplicate", "complete_reason_codes", ["AUTHORITY_INVALID", "AUTHORITY_INVALID"]),
+    ("canonical-element", "complete_reason_codes", [1]),
+    ("partition-overlap", "blocking_reason_codes", ["AUTHORITY_INVALID"]),
+    ("partition-incomplete", "review_reason_codes", ["SCOPE_UNCERTAIN"]),
     ("primary-absent", "primary_reason_code", "AUTHORITY_INVALID"),
     ("digest-decision", "decision_digest", "sha256:" + "0" * 64),
     ("digest-record", "policy_record_digest", "sha256:" + "0" * 64),
-    ("digest-outer-rehash", "policy_record_digest", "sha256:" + "1" * 64),
-    ("digest-mixed-identity", "decision_digest", "sha256:" + "2" * 64),
-    ("shape-missing-emulation", "task_id", None),
-    ("shape-extra-emulation", "schema_version", "changegate.policy-evaluation-record.v1.extra"),
-    ("canonical-wrong-required-element", "required_requirement_ids", (1,)),
-    ("canonical-wrong-evidence-element", "unexpected_evidence_ids", (1,)),
+    ("canonical-wrong-required-element", "required_requirement_ids", [1]),
+    ("canonical-wrong-evidence-element", "unexpected_evidence_ids", [1]),
 ]
 
 
 @pytest.mark.parametrize("label,field,replacement", _TAMPERS)
 def test_complete_tamper_matrix(label: str, field: str, replacement: object) -> None:
-    policy_input, _core, _decision, _record = _outputs(_CASES[0])
-    candidate = _tampered_record(_CASES[0], field, replacement)
-    # Independent contract oracle: this is a changed stored field, so neither
-    # structural nor input-bound validation may classify it as clean.
-    assert candidate != _outputs(_CASES[0])[3], label
-    for result in (
-        validate_policy_evaluation_record(candidate),
-        validate_policy_evaluation_record(candidate, canonical_input=policy_input),
+    policy_input, candidate = _raw_record(_CASES[0])
+    candidate[field] = replacement
+    canonical_input = policy_input.to_canonical_payload()
+    for result, expected in (
+        (
+            validate_policy_evaluation_record(candidate),
+            _independent_validate_raw(candidate),
+        ),
+        (
+            validate_policy_evaluation_record(candidate, canonical_input=canonical_input),
+            _independent_validate_raw(candidate, canonical_input),
+        ),
     ):
+        assert result == expected, label
         assert result["errors"], label
         assert result["classifications"] == [], label
 
 
+class _DictSubclass(dict):
+    pass
+
+
+class _CustomMapping(Mapping[str, object]):
+    def __getitem__(self, key: str) -> object:
+        raise KeyError(key)
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(())
+
+    def __len__(self) -> int:
+        return 0
+
+
+class _RecordLike:
+    pass
+
+
+@pytest.mark.parametrize(
+    "kind,expected",
+    [
+        ("missing", "RECORD_FIELD_SET_DRIFT"),
+        ("extra", "RECORD_FIELD_SET_DRIFT"),
+        ("non-string-key", "RECORD_NOT_AN_OBJECT"),
+        ("wrong-schema", "RECORD_TYPE_INVALID"),
+    ],
+)
+def test_raw_shape_errors_are_real_dictionary_mutations(kind: str, expected: str) -> None:
+    _policy_input, raw = _raw_record(_CASES[0])
+    if kind == "missing":
+        raw.pop("task_id")
+    elif kind == "extra":
+        raw["extra"] = "field"
+    elif kind == "non-string-key":
+        raw[1] = "mixed"
+    else:
+        raw["schema_version"] = "wrong-schema"
+    result = validate_policy_evaluation_record(raw)
+    assert result == _independent_validate_raw(raw)
+    assert result["errors"] == [expected]
+    assert result["classifications"] == []
+
+
+@pytest.mark.parametrize(
+    "candidate",
+    [
+        [],
+        _DictSubclass(),
+        _CustomMapping(),
+        _RecordLike(),
+        dataclasses.make_dataclass("RecordDataclass", [])(),
+    ],
+    ids=["list", "dict-subclass", "custom-mapping", "record-like", "dataclass"],
+)
+def test_only_exact_builtin_dict_is_the_raw_record_representation(candidate: object) -> None:
+    result = validate_policy_evaluation_record(candidate)
+    assert result == _independent_validate_raw(candidate)
+    assert result["errors"] == ["RECORD_NOT_AN_OBJECT"]
+    assert result["classifications"] == []
+
+
+def test_raw_record_and_typed_record_share_the_same_validation_result() -> None:
+    policy_input, _core, _decision, record = _outputs(_CASES[0])
+    _ignored, raw = _raw_record(_CASES[0])
+    universes = _CASES[0]["identifier_universes"]
+    typed = validate_policy_evaluation_record(record, policy_input, universes)
+    untyped = validate_policy_evaluation_record(raw, policy_input, universes)
+    assert typed == untyped
+    assert typed["errors"] == []
+    assert validate_policy_evaluation_record(
+        raw, policy_input.to_canonical_payload(), universes
+    ) == _independent_validate_raw(raw, policy_input.to_canonical_payload(), universes)
+
+
+def test_inner_tamper_with_only_outer_rehash_still_fails_inner_digest() -> None:
+    _policy_input, raw = _raw_record(_CASES[0])
+    raw["task_id"] = "other-task"
+    raw["policy_record_digest"] = _independent_record_digest(raw)
+    result = validate_policy_evaluation_record(raw)
+    assert result["errors"] == ["DECISION_DIGEST_NOT_DERIVED"]
+    assert result == _independent_validate_raw(raw)
+
+
+def test_structurally_valid_double_rehash_fails_original_input_binding() -> None:
+    policy_input, raw = _raw_record(_CASES[0])
+    raw["task_id"] = "other-task"
+    _independent_rehash(raw)
+    assert validate_policy_evaluation_record(raw) == _independent_validate_raw(raw)
+    canonical_input = policy_input.to_canonical_payload()
+    result = validate_policy_evaluation_record(raw, canonical_input)
+    assert result == _independent_validate_raw(raw, canonical_input)
+    assert result["errors"] == ["SOURCE_BINDING_MISMATCH"]
+
+
+def test_mixed_identity_and_digest_material_is_rejected() -> None:
+    _first_input, first = _raw_record(_CASES[0])
+    _second_input, second = _raw_record(_CASES[1])
+    first["decision_digest"] = second["decision_digest"]
+    first["policy_record_digest"] = second["policy_record_digest"]
+    result = validate_policy_evaluation_record(first)
+    assert result == _independent_validate_raw(first)
+    assert result["errors"]
+    assert result["classifications"] == []
+
+
+def test_schema_mutation_with_actual_outer_rehash_remains_invalid() -> None:
+    _policy_input, raw = _raw_record(_CASES[0])
+    raw["schema_version"] = "changegate.policy-evaluation-record.v2"
+    raw["policy_record_digest"] = _independent_record_digest(raw)
+    result = validate_policy_evaluation_record(raw)
+    assert result == _independent_validate_raw(raw)
+    assert result["errors"] == ["RECORD_TYPE_INVALID"]
+
+
+def test_raw_canonical_input_checks_all_contract_bindings() -> None:
+    policy_input, raw = _raw_record(_CASES[0])
+    canonical_input = policy_input.to_canonical_payload()
+    assert validate_policy_evaluation_record(raw, canonical_input)["errors"] == []
+
+    schema_drift = dict(canonical_input)
+    schema_drift["policy_record_schema_digest"] = "sha256:" + "0" * 64
+    assert "SCHEMA_BINDING_MISMATCH" in validate_policy_evaluation_record(
+        raw, schema_drift
+    )["errors"]
+
+    canonicalization_drift = dict(canonical_input)
+    canonicalization_drift["canonicalization_version"] = "wrong-version"
+    assert "CANONICALIZATION_BINDING_MISMATCH" in validate_policy_evaluation_record(
+        raw, canonicalization_drift
+    )["errors"]
+
+    extra_field = {**canonical_input, "extra": "field"}
+    assert "INPUT_DIGEST_MISMATCH" in validate_policy_evaluation_record(
+        raw, extra_field
+    )["errors"]
+
+    non_string_key = {**canonical_input, 1: "field"}
+    assert validate_policy_evaluation_record(raw, non_string_key)["errors"] == [
+        "INPUT_NOT_AN_OBJECT"
+    ]
+
+
+def _malformed_raw(kind: str) -> object:
+    _policy_input, raw = _raw_record(_CASES[0])
+    if kind == "enum":
+        raw["disposition"] = "UNKNOWN"
+    elif kind == "version":
+        raw["schema_version"] = 1
+    elif kind == "digest":
+        raw["decision_digest"] = "SHA256:" + "0" * 64
+    elif kind == "tuple":
+        raw["complete_reason_codes"] = ()
+    elif kind == "unsorted":
+        raw["complete_reason_codes"] = ["SCOPE_UNCERTAIN", "AUTHORITY_INVALID"]
+    elif kind == "duplicate":
+        raw["complete_reason_codes"] = ["AUTHORITY_INVALID", "AUTHORITY_INVALID"]
+    elif kind == "element":
+        raw["complete_reason_codes"] = [1]
+    elif kind == "unhashable-dict":
+        raw["complete_reason_codes"] = [{}]
+    elif kind == "unhashable-list":
+        raw["complete_reason_codes"] = [[]]
+    elif kind == "identity":
+        raw["task_id"] = ""
+    else:
+        raise AssertionError(kind)
+    return raw
+
+
+_TOTALITY_TOP_LEVEL = [
+    None, True, 1, 1.0, "x", b"x", [], (), set(), {}, {1: "mixed"}, object(),
+]
+_TOTALITY_RAW_KINDS = [
+    "enum", "version", "digest", "tuple", "unsorted", "duplicate", "element",
+    "unhashable-dict", "unhashable-list", "identity",
+]
+
+
 @pytest.mark.parametrize(
     "malformed",
-    [None, True, 1, 1.0, "x", b"x", [], (), set(), {}, {1: "mixed"},
-     object(), type("RecordSubclass", (), {})(), {"nested": {}},
-     ["unhashable"], {"version": "bad"}, {"digest": "bad"},
-     {"items": ["z", "a"]}, {"items": ["a", "a"]}, {"items": [1]}],
+    [*_TOTALITY_TOP_LEVEL, *[_malformed_raw(kind) for kind in _TOTALITY_RAW_KINDS]],
 )
 def test_validator_totality_matrix(malformed: object) -> None:
     try:
@@ -298,6 +691,47 @@ def test_validator_totality_matrix(malformed: object) -> None:
         pytest.fail(f"raw validator exception: {type(exc).__name__}")
     assert result["errors"]
     assert result["classifications"] == []
+
+
+@pytest.mark.parametrize(
+    "field,universe_key,partition",
+    [
+        ("required_requirement_ids", "requirement_id_universe", "satisfied_requirement_ids"),
+        ("satisfied_requirement_ids", "requirement_id_universe", "satisfied_requirement_ids"),
+        ("invalid_requirement_ids", "requirement_id_universe", "invalid_requirement_ids"),
+        ("missing_requirement_ids", "requirement_id_universe", "missing_requirement_ids"),
+        ("rejected_evidence_ids", "evidence_record_id_universe", None),
+        ("invalid_provenance_evidence_ids", "evidence_record_id_universe", None),
+        ("unexpected_evidence_ids", "evidence_record_id_universe", None),
+    ],
+)
+def test_each_accounting_category_has_an_independent_universe_negative(
+    field: str, universe_key: str, partition: str | None
+) -> None:
+    policy_input, raw = _raw_record(_CASES[0])
+    if field in _SEMANTIC_FIELDS[6:10]:
+        raw["required_requirement_ids"] = ["unknown-id"]
+        for name in (
+            "satisfied_requirement_ids", "invalid_requirement_ids", "missing_requirement_ids"
+        ):
+            raw[name] = ["unknown-id"] if name == partition else []
+    else:
+        raw[field] = ["unknown-id"]
+    canonical_input = policy_input.to_canonical_payload()
+    for accounting_field in _SEMANTIC_FIELDS[6:13]:
+        canonical_input["facts"][accounting_field] = list(raw[accounting_field])
+    raw["input_digest"] = canonical_digest(canonical_input)
+    _independent_rehash(raw)
+    universes = {
+        "requirement_id_universe": [],
+        "evidence_record_id_universe": [],
+    }
+    result = validate_policy_evaluation_record(
+        raw, canonical_input=canonical_input, identifier_universes=universes
+    )
+    assert result == _independent_validate_raw(raw, canonical_input, universes)
+    assert result["errors"] == ["IDENTIFIER_UNIVERSE_MISMATCH"]
+    assert universe_key in universes
 
 
 @pytest.mark.parametrize("case", _CASES, ids=lambda item: item["case_id"])
@@ -315,3 +749,39 @@ def test_universe_and_determinism_matrices(case: dict) -> None:
         dict(reversed(list({**case["policy_input_bindings"], "facts": case["policy_input_facts"], "policy_record_schema_version": POLICY_RECORD_SCHEMA_VERSION, "policy_record_schema_digest": POLICY_RECORD_SCHEMA_DIGEST, "canonicalization_version": CANONICALIZATION_VERSION, "canonicalization_contract_digest": CANONICALIZATION_CONTRACT_DIGEST}.items())))
     )
     assert evaluate_merge_eligibility(reversed_input) == (decision, record)
+
+
+@pytest.mark.parametrize("case", _CASES, ids=lambda item: item["case_id"])
+def test_equivalent_distinct_core_reconstruction_is_byte_identical(case: dict) -> None:
+    policy_input, core, decision, record = _outputs(case)
+    rebuilt_core = type(core)(
+        **{field.name: getattr(core, field.name) for field in dataclasses.fields(core)}
+    )
+    assert rebuilt_core is not core
+    assert rebuilt_core == core
+    rebuilt_decision = finalize_decision(policy_input, rebuilt_core)
+    rebuilt_record = build_policy_evaluation_record(policy_input, rebuilt_decision)
+    assert rebuilt_decision == decision
+    assert rebuilt_record == record
+    original_identity = {
+        field: (
+            list(value) if type(value) is tuple else value.value if hasattr(value, "value") else value
+        )
+        for field in _IDENTITY_FIELDS
+        for value in (getattr(decision, field),)
+    }
+    rebuilt_identity = {
+        field: (
+            list(value) if type(value) is tuple else value.value if hasattr(value, "value") else value
+        )
+        for field in _IDENTITY_FIELDS
+        for value in (getattr(rebuilt_decision, field),)
+    }
+    assert canonical_json_bytes(
+        {"kind": "changegate.merge-eligibility-decision.test-oracle.v1", **original_identity}
+    ) == canonical_json_bytes(
+        {"kind": "changegate.merge-eligibility-decision.test-oracle.v1", **rebuilt_identity}
+    )
+    assert canonical_json_bytes(rebuilt_record.to_canonical_payload()) == canonical_json_bytes(
+        record.to_canonical_payload()
+    )

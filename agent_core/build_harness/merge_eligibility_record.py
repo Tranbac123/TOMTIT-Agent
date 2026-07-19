@@ -18,6 +18,9 @@ from agent_core.build_harness.canonical import (
 )
 from agent_core.build_harness.merge_eligibility import (
     APPROVAL_SENTINEL,
+    CANONICALIZATION_CONTRACT_DIGEST,
+    CANONICALIZATION_VERSION,
+    POLICY_RECORD_SCHEMA_DIGEST,
     POLICY_RECORD_SCHEMA_VERSION,
     DecisionAuthority,
     DecisionCore,
@@ -319,60 +322,155 @@ def _result(errors: list[str]) -> dict[str, list[str]]:
     return {"errors": sorted(set(errors)), "classifications": [] if errors else ["STRUCTURALLY_VALIDATED", "IDENTITY_RECOMPUTED", "SEMANTIC_REPLAY_NOT_PERFORMED"]}
 
 
-def _validation_identity(record: object) -> dict[str, Any]:
-    return _identity_payload(record)
+_RAW_RECORD_FIELD_ORDER = (
+    "schema_version", *_IDENTITY_FIELDS, "decision_digest", "policy_record_digest",
+)
+_RAW_RECORD_FIELDS = frozenset(_RAW_RECORD_FIELD_ORDER)
+_RAW_INPUT_FIELDS = frozenset(
+    {
+        "kind", "task_id", *_SOURCE_BINDING_FIELDS, "policy_version",
+        "evaluator_version", "evaluation_mode", "policy_record_schema_version",
+        "policy_record_schema_digest", "canonicalization_version",
+        "canonicalization_contract_digest", "facts",
+    }
+)
 
 
-def _validate_input_binding(record: PolicyEvaluationRecord, candidate: object) -> list[str]:
+def _raw_record_payload(record: object) -> dict[str, Any] | None:
+    """Normalize only the two committed representations to a JSON payload."""
+    if is_exact_dict(record):
+        return record
+    if type(record) is PolicyEvaluationRecord:
+        return {
+            field: (
+                list(value) if is_exact_tuple(value) else _value(value)
+            )
+            for field, value in (
+                (name, getattr(record, name)) for name in _RAW_RECORD_FIELD_ORDER
+            )
+        }
+    return None
+
+
+def _raw_string_list(value: object) -> bool:
+    return is_exact_list(value) and all(is_exact_str(item) for item in value)
+
+
+def _validate_raw_fields(record: dict[str, Any]) -> list[str]:
+    errors: list[str] = []
+    if record["schema_version"] != POLICY_RECORD_SCHEMA_VERSION:
+        errors.append("RECORD_TYPE_INVALID")
+    if not is_exact_str(record["task_id"]) or not _RE_TOKEN.fullmatch(record["task_id"]):
+        errors.append("RECORD_TYPE_INVALID")
+    for field in ("policy_version", "evaluator_version"):
+        if not is_exact_str(record[field]) or not _RE_TOKEN.fullmatch(record[field]):
+            errors.append("RECORD_TYPE_INVALID")
+    for field in (*_SOURCE_BINDING_FIELDS, "input_digest", "decision_digest", "policy_record_digest"):
+        value = record[field]
+        if field == "approval_digest_or_sentinel" and value == APPROVAL_SENTINEL:
+            continue
+        if not is_exact_str(value) or not _RE_DIGEST.fullmatch(value):
+            errors.append("RECORD_TYPE_INVALID")
+    enum_values = {
+        "evaluation_mode": {item.value for item in EvaluationMode},
+        "disposition": {item.value for item in Disposition},
+        "decision_authority": {item.value for item in DecisionAuthority},
+    }
+    for field, allowed in enum_values.items():
+        if not is_exact_str(record[field]) or record[field] not in allowed:
+            errors.append("RECORD_TYPE_INVALID")
+    for field in _CORE_FIELDS[3:]:
+        value = record[field]
+        if not _raw_string_list(value):
+            errors.append("RECORD_TYPE_INVALID")
+        elif value != sorted(value) or len(value) != len(set(value)):
+            errors.append("RECORD_NOT_NORMALIZED")
+    primary = record["primary_reason_code"]
+    if primary is not None and (not is_exact_str(primary) or primary not in _REASON_CODES):
+        errors.append("RECORD_TYPE_INVALID")
+    for field in _CORE_FIELDS[3:6]:
+        value = record[field]
+        if _raw_string_list(value) and any(item not in _REASON_CODES for item in value):
+            errors.append("RECORD_TYPE_INVALID")
+    if all(_raw_string_list(record[field]) for field in _CORE_FIELDS[3:6]):
+        complete = set(record["complete_reason_codes"])
+        blocking = set(record["blocking_reason_codes"])
+        review = set(record["review_reason_codes"])
+        if blocking & review or blocking | review != complete:
+            errors.append("RECORD_NOT_NORMALIZED")
+        if (primary is None) != (not complete) or primary is not None and primary not in complete:
+            errors.append("RECORD_NOT_NORMALIZED")
+        expected = "BLOCK" if blocking else "REVIEW_REQUIRED" if review else "ELIGIBLE_TO_MERGE_UNDER_POLICY"
+        if record["disposition"] != expected:
+            errors.append("RECORD_NOT_NORMALIZED")
+    requirement_fields = _ACCOUNTING_FIELDS[:4]
+    if all(_raw_string_list(record[field]) for field in requirement_fields):
+        parts = [set(record[field]) for field in requirement_fields[1:]]
+        if set().union(*parts) != set(record[requirement_fields[0]]) or any(
+            left & right for index, left in enumerate(parts) for right in parts[index + 1:]
+        ):
+            errors.append("RECORD_NOT_NORMALIZED")
+    return errors
+
+
+def _validate_input_binding(record: dict[str, Any], candidate: object) -> list[str]:
     if type(candidate) is MergeEligibilityPolicyInput:
-        if not _input_echoes_match(candidate, record):
+        keys = ("task_id", *_SOURCE_BINDING_FIELDS, "policy_version", "evaluator_version", "evaluation_mode")
+        if any(_value(getattr(candidate, key)) != record[key] for key in keys):
             return ["SOURCE_BINDING_MISMATCH"]
-        return [] if candidate.input_digest() == record.input_digest else ["INPUT_DIGEST_MISMATCH"]
-    if not is_exact_dict(candidate):
+        return [] if candidate.input_digest() == record["input_digest"] else ["INPUT_DIGEST_MISMATCH"]
+    if not is_exact_dict(candidate) or not all(is_exact_str(key) for key in candidate):
         return ["INPUT_NOT_AN_OBJECT"]
     keys = ("task_id", *_SOURCE_BINDING_FIELDS, "policy_version", "evaluator_version", "evaluation_mode")
-    errors = ["SOURCE_BINDING_MISMATCH"] if any(candidate.get(key) != _value(getattr(record, key)) for key in keys) else []
+    errors = ["SOURCE_BINDING_MISMATCH"] if any(candidate.get(key) != record[key] for key in keys) else []
+    if candidate.get("policy_record_schema_version") != record["schema_version"] or candidate.get(
+        "policy_record_schema_digest"
+    ) != POLICY_RECORD_SCHEMA_DIGEST:
+        errors.append("SCHEMA_BINDING_MISMATCH")
+    if candidate.get("canonicalization_version") != CANONICALIZATION_VERSION or candidate.get(
+        "canonicalization_contract_digest"
+    ) != CANONICALIZATION_CONTRACT_DIGEST:
+        errors.append("CANONICALIZATION_BINDING_MISMATCH")
+    field_set_matches = set(candidate) == _RAW_INPUT_FIELDS
     try:
         input_digest = canonical_digest(candidate)
     except (TypeError, ValueError):
         return [*errors, "INPUT_NOT_CANONICALIZABLE"]
-    if input_digest != record.input_digest:
+    if not field_set_matches or input_digest != record["input_digest"]:
         errors.append("INPUT_DIGEST_MISMATCH")
-    return errors
-
-
-def _validate_universes(record: PolicyEvaluationRecord, universes: object) -> list[str]:
-    if universes is None:
-        return []
-    if not is_exact_dict(universes):
-        return ["IDENTIFIER_UNIVERSES_INVALID"]
-    errors: list[str] = []
-    for fields, key in (( _ACCOUNTING_FIELDS[:4], "requirement_id_universe"), (_ACCOUNTING_FIELDS[4:], "evidence_record_id_universe")):
-        universe = universes.get(key)
-        if (not is_exact_tuple(universe) and not is_exact_list(universe)) or any(
-            not is_exact_str(item) for item in universe
-        ):
-            errors.append("IDENTIFIER_UNIVERSES_INVALID")
-        elif any(item not in universe for field in fields for item in getattr(record, field)):
-            errors.append("IDENTIFIER_UNIVERSE_MISMATCH")
     return errors
 
 
 def validate_policy_evaluation_record(record: object, canonical_input: object = None, identifier_universes: object = None) -> dict[str, list[str]]:
     """Total, fail-closed structural validation; it never performs semantic replay."""
-    if type(record) is not PolicyEvaluationRecord:
+    raw = _raw_record_payload(record)
+    if raw is None or not all(is_exact_str(key) for key in raw):
         return _result(["RECORD_NOT_AN_OBJECT"])
+    if set(raw) != _RAW_RECORD_FIELDS:
+        return _result(["RECORD_FIELD_SET_DRIFT"])
     try:
-        _validate_identity_fields(record, include_digest=True)
-        if record.schema_version != POLICY_RECORD_SCHEMA_VERSION:
-            return _result(["RECORD_TYPE_INVALID"])
-        if record.decision_digest != decision_digest_for(_validation_identity(record)):
+        structural_errors = _validate_raw_fields(raw)
+        if structural_errors:
+            return _result(structural_errors)
+        identity = {field: raw[field] for field in _IDENTITY_FIELDS}
+        if raw["decision_digest"] != decision_digest_for(identity):
             return _result(["DECISION_DIGEST_NOT_DERIVED"])
-        if record.policy_record_digest != canonical_digest(_record_payload(record)):
+        payload = {field: raw[field] for field in raw if field != "policy_record_digest"}
+        if raw["policy_record_digest"] != canonical_digest(payload):
             return _result(["RECORD_DIGEST_MISMATCH"])
-    except (AttributeError, TypeError, ValueError, RecordConstructionError):
+    except (KeyError, TypeError, ValueError, RecordConstructionError):
         return _result(["RECORD_TYPE_INVALID"])
-    errors = _validate_universes(record, identifier_universes)
+    errors: list[str] = []
+    if identifier_universes is not None:
+        if not is_exact_dict(identifier_universes):
+            errors.append("IDENTIFIER_UNIVERSES_INVALID")
+        else:
+            for fields, key in ((_ACCOUNTING_FIELDS[:4], "requirement_id_universe"), (_ACCOUNTING_FIELDS[4:], "evidence_record_id_universe")):
+                universe = identifier_universes.get(key)
+                if (not is_exact_tuple(universe) and not is_exact_list(universe)) or any(not is_exact_str(item) for item in universe):
+                    errors.append("IDENTIFIER_UNIVERSES_INVALID")
+                elif any(item not in universe for field in fields for item in raw[field]):
+                    errors.append("IDENTIFIER_UNIVERSE_MISMATCH")
     if canonical_input is not None:
-        errors.extend(_validate_input_binding(record, canonical_input))
+        errors.extend(_validate_input_binding(raw, canonical_input))
     return _result(errors)
