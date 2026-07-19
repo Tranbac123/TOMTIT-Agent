@@ -808,8 +808,7 @@ def test_production_module_defines_no_gate_1b_c_or_later_symbols() -> None:
 
 def test_no_additional_production_module_created() -> None:
     build_harness = ROOT / "agent_core/build_harness"
-    assert not (build_harness / "merge_eligibility_record.py").exists()
-    assert not (build_harness / "merge_eligibility_facade.py").exists()
+    # OWNER_SCOPE_1BC_OS1: Gate 1B-C now owns these two leaf modules.
     assert not (build_harness / "merge_eligibility_replay.py").exists()
 
 
